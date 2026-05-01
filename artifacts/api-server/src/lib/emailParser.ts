@@ -564,6 +564,42 @@ const BANK_PATTERNS: BankPattern[] = [
   },
 ];
 
+/**
+ * Try to extract the original sender address from a forwarded email body.
+ *
+ * Gmail plain-text forwarding inserts a header like:
+ *   ---------- Forwarded message ---------
+ *   From: TD Alerts <alerts@td.com>
+ *   Date: ...
+ *
+ * Outlook / Apple Mail use slightly different wording but the "From:" line is always present.
+ */
+function extractForwardedFrom(text: string): string {
+  // Match the first "From:" line that appears after a forwarding header marker
+  const fwdMarkers = [
+    /(?:Forwarded message|Begin forwarded message|Original Message|Mensaje reenviado|Message transféré)[^\n]*\n.*?From:\s*([^\n]+)/is,
+    // Simpler fallback: any "From:" line in the body that contains an @ symbol
+    /\bFrom:\s*([^\n]*@[^\n]+)/i,
+  ];
+  for (const pat of fwdMarkers) {
+    const m = text.match(pat);
+    if (m) {
+      // Extract just the email address from something like "TD Alerts <alerts@td.com>"
+      const emailMatch = m[1].match(/<([^>]+)>/) || m[1].match(/([^\s,]+@[^\s,]+)/);
+      if (emailMatch) return emailMatch[1].trim();
+    }
+  }
+  return "";
+}
+
+/**
+ * Strip common forwarding/reply prefixes from a subject line so pattern matching
+ * still works on "Fwd: TD Card Alert" → "TD Card Alert".
+ */
+function stripSubjectPrefixes(subject: string): string {
+  return subject.replace(/^(Fwd?:|Re:|TR:|Réf?:|AW:|\[Fwd\])\s*/gi, "").trim();
+}
+
 export function parseEmailContent(
   fromAddress: string,
   subject: string,
@@ -574,16 +610,42 @@ export function parseEmailContent(
   const text = (textContent || htmlContent.replace(/<[^>]+>/g, " ")).replace(/\s+/g, " ").trim();
   const combined = subject + " " + text;
 
+  // --- Forwarding support ------------------------------------------------
+  // If the email was forwarded the envelope From is the forwarder's address,
+  // not the bank's.  We try to recover the original sender from the body.
+  const isForwarded = /fwd:|forwarded message|begin forwarded|original message/i.test(subject + " " + text.slice(0, 300));
+  const originalFrom = isForwarded ? extractForwardedFrom(text) : "";
+
+  // Also scan the body for bank domain strings as an additional signal,
+  // e.g. the forwarded body will mention "chase.com" or "rbc.com" even when
+  // the envelope From is a personal Gmail address.
+  const bodyDomainHints = text.slice(0, 2000); // only scan the first portion for speed
+
+  // Normalised subject without "Fwd:" prefix for pattern matching
+  const cleanSubject = stripSubjectPrefixes(subject);
+  // -----------------------------------------------------------------------
+
   for (const bankPattern of BANK_PATTERNS) {
-    const fromMatch = bankPattern.fromPatterns.some((p) => p.test(fromAddress));
-    const subjectMatch = bankPattern.subjectPatterns.some((p) => p.test(subject));
+    const fromMatch =
+      bankPattern.fromPatterns.some((p) => p.test(fromAddress)) ||
+      // Check the recovered original sender
+      (originalFrom && bankPattern.fromPatterns.some((p) => p.test(originalFrom))) ||
+      // Check if the bank's domain appears anywhere in the first 2 KB of the body
+      bankPattern.fromPatterns.some((p) => p.test(bodyDomainHints));
+
+    const subjectMatch = bankPattern.subjectPatterns.some(
+      (p) => p.test(cleanSubject) || p.test(subject)
+    );
+
     if (!fromMatch && !subjectMatch) continue;
 
     for (const parser of bankPattern.parsers) {
-      const result = parser(combined, subject);
+      const result = parser(combined, cleanSubject);
       if (result) {
         result.date = emailDate.toISOString();
         result.bank = bankPattern.bankName !== "Bank" ? bankPattern.bankName : result.bank;
+        // Tag forwarded transactions so the UI can show it if needed
+        if (isForwarded) (result as any).forwarded = true;
         return result;
       }
     }
