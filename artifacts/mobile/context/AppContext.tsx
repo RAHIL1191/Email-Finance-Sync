@@ -44,8 +44,11 @@ export interface Bill {
 
 export interface EmailSync {
   email: string;
+  appPassword: string;
   isConnected: boolean;
   lastSynced?: string;
+  lastEmailsScanned?: number;
+  lastImported?: number;
 }
 
 interface AppContextType {
@@ -63,8 +66,9 @@ interface AppContextType {
   updateBill: (id: string, b: Partial<Bill>) => void;
   deleteBill: (id: string) => void;
   markBillPaid: (id: string) => void;
-  connectEmail: (email: string) => Promise<void>;
-  syncEmailTransactions: () => Promise<void>;
+  connectEmail: (email: string, appPassword: string) => Promise<{ success: boolean; error?: string }>;
+  disconnectEmail: () => void;
+  syncEmailTransactions: () => Promise<{ imported: number; error?: string }>;
   isSyncing: boolean;
   totalBalance: number;
   monthlyIncome: number;
@@ -119,8 +123,6 @@ const SAMPLE_TRANSACTIONS: Transaction[] = [
     category: "Shopping",
     accountId: "acc1",
     date: new Date(Date.now() - 86400000).toISOString(),
-    fromEmail: true,
-    bank: "Chase Bank",
   },
   {
     id: "t2",
@@ -130,8 +132,6 @@ const SAMPLE_TRANSACTIONS: Transaction[] = [
     category: "Income",
     accountId: "acc1",
     date: new Date(Date.now() - 2 * 86400000).toISOString(),
-    fromEmail: true,
-    bank: "Chase Bank",
   },
   {
     id: "t3",
@@ -141,8 +141,6 @@ const SAMPLE_TRANSACTIONS: Transaction[] = [
     category: "Entertainment",
     accountId: "acc3",
     date: new Date(Date.now() - 3 * 86400000).toISOString(),
-    fromEmail: true,
-    bank: "Amex",
   },
   {
     id: "t4",
@@ -155,43 +153,12 @@ const SAMPLE_TRANSACTIONS: Transaction[] = [
   },
   {
     id: "t5",
-    title: "Freelance Payment",
-    amount: 750.0,
-    type: "income",
-    category: "Income",
-    accountId: "acc2",
-    date: new Date(Date.now() - 5 * 86400000).toISOString(),
-  },
-  {
-    id: "t6",
-    title: "Uber Eats",
-    amount: 32.5,
-    type: "expense",
-    category: "Food",
-    accountId: "acc3",
-    date: new Date(Date.now() - 6 * 86400000).toISOString(),
-    fromEmail: true,
-    bank: "Amex",
-  },
-  {
-    id: "t7",
-    title: "Spotify Premium",
-    amount: 9.99,
-    type: "expense",
-    category: "Entertainment",
-    accountId: "acc3",
-    date: new Date(Date.now() - 7 * 86400000).toISOString(),
-  },
-  {
-    id: "t8",
     title: "Gas Station",
     amount: 55.0,
     type: "expense",
     category: "Transport",
     accountId: "acc1",
     date: new Date(Date.now() - 8 * 86400000).toISOString(),
-    fromEmail: true,
-    bank: "Chase Bank",
   },
 ];
 
@@ -255,12 +222,19 @@ function genId() {
   return Date.now().toString() + Math.random().toString(36).substr(2, 9);
 }
 
+function getApiBase(): string {
+  const domain = process.env.EXPO_PUBLIC_DOMAIN;
+  if (domain) return `https://${domain}`;
+  return "http://localhost:80";
+}
+
 export function AppProvider({ children }: { children: React.ReactNode }) {
   const [transactions, setTransactions] = useState<Transaction[]>([]);
   const [accounts, setAccounts] = useState<Account[]>([]);
   const [bills, setBills] = useState<Bill[]>([]);
   const [emailSync, setEmailSync] = useState<EmailSync>({
     email: "",
+    appPassword: "",
     isConnected: false,
   });
   const [isSyncing, setIsSyncing] = useState(false);
@@ -286,10 +260,7 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
 
   useEffect(() => {
     if (!initialized) return;
-    AsyncStorage.setItem(
-      STORAGE_KEYS.transactions,
-      JSON.stringify(transactions)
-    );
+    AsyncStorage.setItem(STORAGE_KEYS.transactions, JSON.stringify(transactions));
   }, [transactions, initialized]);
 
   useEffect(() => {
@@ -312,14 +283,9 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
     setTransactions((prev) => [newT, ...prev]);
   }, []);
 
-  const updateTransaction = useCallback(
-    (id: string, updates: Partial<Transaction>) => {
-      setTransactions((prev) =>
-        prev.map((t) => (t.id === id ? { ...t, ...updates } : t))
-      );
-    },
-    []
-  );
+  const updateTransaction = useCallback((id: string, updates: Partial<Transaction>) => {
+    setTransactions((prev) => prev.map((t) => (t.id === id ? { ...t, ...updates } : t)));
+  }, []);
 
   const deleteTransaction = useCallback((id: string) => {
     setTransactions((prev) => prev.filter((t) => t.id !== id));
@@ -329,14 +295,9 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
     setAccounts((prev) => [...prev, { ...a, id: genId() }]);
   }, []);
 
-  const updateAccount = useCallback(
-    (id: string, updates: Partial<Account>) => {
-      setAccounts((prev) =>
-        prev.map((a) => (a.id === id ? { ...a, ...updates } : a))
-      );
-    },
-    []
-  );
+  const updateAccount = useCallback((id: string, updates: Partial<Account>) => {
+    setAccounts((prev) => prev.map((a) => (a.id === id ? { ...a, ...updates } : a)));
+  }, []);
 
   const deleteAccount = useCallback((id: string) => {
     setAccounts((prev) => prev.filter((a) => a.id !== id));
@@ -347,9 +308,7 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
   }, []);
 
   const updateBill = useCallback((id: string, updates: Partial<Bill>) => {
-    setBills((prev) =>
-      prev.map((b) => (b.id === id ? { ...b, ...updates } : b))
-    );
+    setBills((prev) => prev.map((b) => (b.id === id ? { ...b, ...updates } : b)));
   }, []);
 
   const deleteBill = useCallback((id: string) => {
@@ -360,9 +319,7 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
     (id: string) => {
       const bill = bills.find((b) => b.id === id);
       if (!bill) return;
-      setBills((prev) =>
-        prev.map((b) => (b.id === id ? { ...b, isPaid: true } : b))
-      );
+      setBills((prev) => prev.map((b) => (b.id === id ? { ...b, isPaid: true } : b)));
       addTransaction({
         title: bill.title,
         amount: bill.amount,
@@ -376,52 +333,105 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
     [bills, accounts, addTransaction]
   );
 
-  const connectEmail = useCallback(async (email: string) => {
-    await new Promise((r) => setTimeout(r, 1500));
-    setEmailSync({ email, isConnected: true, lastSynced: new Date().toISOString() });
+  const connectEmail = useCallback(async (email: string, appPassword: string): Promise<{ success: boolean; error?: string }> => {
+    try {
+      const res = await fetch(`${getApiBase()}/api/email/test`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ email, appPassword }),
+      });
+      const data = await res.json();
+      if (!res.ok) {
+        return { success: false, error: data.error || "Connection failed" };
+      }
+      setEmailSync({
+        email,
+        appPassword,
+        isConnected: true,
+        lastSynced: undefined,
+      });
+      return { success: true };
+    } catch (e: any) {
+      return { success: false, error: "Network error. Make sure the app is connected." };
+    }
   }, []);
 
-  const syncEmailTransactions = useCallback(async () => {
-    setIsSyncing(true);
-    await new Promise((r) => setTimeout(r, 2000));
-    const emailAlerts: Omit<Transaction, "id">[] = [
-      {
-        title: "Starbucks",
-        amount: 6.75,
-        type: "expense",
-        category: "Food",
-        accountId: "acc3",
-        date: new Date().toISOString(),
-        fromEmail: true,
-        bank: "Amex",
-      },
-      {
-        title: "Target Purchase",
-        amount: 43.2,
-        type: "expense",
-        category: "Shopping",
-        accountId: "acc1",
-        date: new Date().toISOString(),
-        fromEmail: true,
-        bank: "Chase Bank",
-      },
-    ];
-    emailAlerts.forEach((t) => {
-      setTransactions((prev) => [{ ...t, id: genId() }, ...prev]);
-    });
-    setEmailSync((prev) => ({ ...prev, lastSynced: new Date().toISOString() }));
-    setIsSyncing(false);
+  const disconnectEmail = useCallback(() => {
+    setEmailSync({ email: "", appPassword: "", isConnected: false });
   }, []);
+
+  const syncEmailTransactions = useCallback(async (): Promise<{ imported: number; error?: string }> => {
+    if (!emailSync.isConnected || !emailSync.email || !emailSync.appPassword) {
+      return { imported: 0, error: "Email not connected" };
+    }
+
+    setIsSyncing(true);
+    try {
+      const res = await fetch(`${getApiBase()}/api/email/sync`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          email: emailSync.email,
+          appPassword: emailSync.appPassword,
+          daysBack: 30,
+        }),
+      });
+      const data = await res.json();
+
+      if (!res.ok) {
+        setIsSyncing(false);
+        return { imported: 0, error: data.error || "Sync failed" };
+      }
+
+      const defaultAccountId = accounts[0]?.id || "acc1";
+      let imported = 0;
+
+      if (data.transactions && Array.isArray(data.transactions)) {
+        const newTxs: Transaction[] = data.transactions.map((t: any) => ({
+          id: genId(),
+          title: t.title || "Transaction",
+          amount: t.amount,
+          type: t.type,
+          category: t.category || "Other",
+          accountId: defaultAccountId,
+          date: t.date || new Date().toISOString(),
+          fromEmail: true,
+          bank: t.bank || "Bank",
+        }));
+
+        // Deduplicate against existing transactions
+        setTransactions((prev) => {
+          const existingKeys = new Set(
+            prev.filter((t) => t.fromEmail).map((t) => `${t.amount}-${t.title}-${t.date.slice(0, 10)}`)
+          );
+          const fresh = newTxs.filter(
+            (t) => !existingKeys.has(`${t.amount}-${t.title}-${t.date.slice(0, 10)}`)
+          );
+          imported = fresh.length;
+          return [...fresh, ...prev];
+        });
+      }
+
+      setEmailSync((prev) => ({
+        ...prev,
+        lastSynced: new Date().toISOString(),
+        lastEmailsScanned: data.emailsScanned,
+        lastImported: data.transactionsFound,
+      }));
+
+      setIsSyncing(false);
+      return { imported };
+    } catch (e: any) {
+      setIsSyncing(false);
+      return { imported: 0, error: "Network error during sync" };
+    }
+  }, [emailSync, accounts]);
 
   const now = new Date();
   const monthStart = new Date(now.getFullYear(), now.getMonth(), 1).toISOString();
   const thisMonthTx = transactions.filter((t) => t.date >= monthStart);
-  const monthlyIncome = thisMonthTx
-    .filter((t) => t.type === "income")
-    .reduce((s, t) => s + t.amount, 0);
-  const monthlyExpense = thisMonthTx
-    .filter((t) => t.type === "expense")
-    .reduce((s, t) => s + t.amount, 0);
+  const monthlyIncome = thisMonthTx.filter((t) => t.type === "income").reduce((s, t) => s + t.amount, 0);
+  const monthlyExpense = thisMonthTx.filter((t) => t.type === "expense").reduce((s, t) => s + t.amount, 0);
   const totalBalance = accounts.reduce((s, a) => s + a.balance, 0);
 
   return (
@@ -442,6 +452,7 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
         deleteBill,
         markBillPaid,
         connectEmail,
+        disconnectEmail,
         syncEmailTransactions,
         isSyncing,
         totalBalance,
