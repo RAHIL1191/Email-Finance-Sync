@@ -71,9 +71,10 @@ function AccountRow({ account, onDelete }: { account: Account; onDelete: () => v
 function EmailConnectModal({ onClose }: { onClose: () => void }) {
   const colors = useColors();
   const insets = useSafeAreaInsets();
-  const { connectEmail } = useApp();
+  const { connectEmail, emailSync } = useApp();
+  const wasConnected = emailSync.isConnected;
   const [step, setStep] = useState<"form" | "loading" | "success" | "error">("form");
-  const [email, setEmail] = useState("");
+  const [email, setEmail] = useState(emailSync.email || "");
   const [appPassword, setAppPassword] = useState("");
   const [errorMsg, setErrorMsg] = useState("");
   const [showPassword, setShowPassword] = useState(false);
@@ -112,7 +113,7 @@ function EmailConnectModal({ onClose }: { onClose: () => void }) {
           <TouchableOpacity onPress={onClose}>
             <Feather name="x" size={22} color={colors.foreground} />
           </TouchableOpacity>
-          <Text style={[styles.modalTitle, { color: colors.foreground }]}>Connect Email</Text>
+          <Text style={[styles.modalTitle, { color: colors.foreground }]}>{wasConnected ? "Update Email" : "Connect Email"}</Text>
           <View style={{ width: 22 }} />
         </View>
 
@@ -127,10 +128,12 @@ function EmailConnectModal({ onClose }: { onClose: () => void }) {
           </View>
 
           <Text style={[styles.modalHeadline, { color: colors.foreground }]}>
-            Sync bank email alerts
+            {wasConnected ? "Update email connection" : "Sync bank email alerts"}
           </Text>
           <Text style={[styles.modalSubtext, { color: colors.mutedForeground }]}>
-            We read your bank transaction alert emails directly via IMAP and parse them into transactions. Your credentials are stored only on your device.
+            {wasConnected
+              ? "Enter new credentials to replace the existing connection."
+              : "We read your bank transaction alert emails directly via IMAP and parse them into transactions. Your credentials are stored only on your device."}
           </Text>
 
           {/* Step: Form */}
@@ -184,7 +187,7 @@ function EmailConnectModal({ onClose }: { onClose: () => void }) {
                 onPress={handle}
               >
                 <Feather name="link" size={16} color="#fff" />
-                <Text style={styles.connectBtnText}>Connect Email</Text>
+                <Text style={styles.connectBtnText}>{wasConnected ? "Update Connection" : "Connect Email"}</Text>
               </TouchableOpacity>
 
               {/* Gmail instructions */}
@@ -247,7 +250,9 @@ function EmailConnectModal({ onClose }: { onClose: () => void }) {
               <View style={[styles.successIcon, { backgroundColor: colors.success + "18" }]}>
                 <Feather name="check-circle" size={40} color={colors.success} />
               </View>
-              <Text style={[styles.successTitle, { color: colors.foreground }]}>Connected!</Text>
+              <Text style={[styles.successTitle, { color: colors.foreground }]}>
+                {wasConnected ? "Updated!" : "Connected!"}
+              </Text>
               <Text style={[styles.successSubtext, { color: colors.mutedForeground }]}>
                 {email} is connected. Go to Home and tap the sync button to import your bank transaction emails.
               </Text>
@@ -370,6 +375,14 @@ export default function AccountsScreen() {
               </Text>
             )}
 
+            <TouchableOpacity
+              onPress={() => setShowEmailConnect(true)}
+              style={styles.changeEmailBtn}
+            >
+              <Feather name="edit-2" size={13} color={colors.primary} />
+              <Text style={[styles.changeEmailText, { color: colors.primary }]}>Change email or password</Text>
+            </TouchableOpacity>
+
             {syncResult && (
               <View style={[
                 styles.syncResultBox,
@@ -450,6 +463,8 @@ const styles = StyleSheet.create({
   lastSynced: { fontSize: 11, fontFamily: "Inter_400Regular" },
   syncResultBox: { flexDirection: "row", alignItems: "flex-start", gap: 7, padding: 10, borderRadius: 8, borderWidth: 1 },
   syncResultText: { flex: 1, fontSize: 12, fontFamily: "Inter_500Medium", lineHeight: 17 },
+  changeEmailBtn: { flexDirection: "row", alignItems: "center", gap: 5 },
+  changeEmailText: { fontSize: 12, fontFamily: "Inter_500Medium" },
   syncBtn: { flexDirection: "row", alignItems: "center", justifyContent: "center", gap: 8, paddingVertical: 11, borderRadius: 10 },
   syncBtnText: { color: "#fff", fontSize: 14, fontFamily: "Inter_600SemiBold" },
   sectionLabel: { fontSize: 12, fontFamily: "Inter_600SemiBold", letterSpacing: 0.8, marginTop: 4 },
