@@ -1,0 +1,8 @@
+uploads = []
+outputs = []
+
+[[generated]]
+id = "XAsMQuPfUWRCfJqjy8BRm"
+uri = "file://artifacts/mobile/assets/images/icon.png"
+type = "image"
+title = "finance tracker app icon"
