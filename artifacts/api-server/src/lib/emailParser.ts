@@ -17,17 +17,44 @@ interface BankPattern {
 
 function categorizeFrom(merchant: string): string {
   const m = merchant.toLowerCase();
-  if (/amazon|ebay|etsy|walmart|target|best buy|costco|shop|store|market|mall|tj maxx|nordstrom|macy|gap|h&m|zara|uniqlo/.test(m)) return "Shopping";
-  if (/uber eats|doordash|grubhub|postmates|instacart|chipotle|mcdonald|starbucks|dunkin|chick|pizza|taco|subway|burger|restaurant|cafe|diner|sushi|thai|chinese|italian|grill|kitchen|bakery|eatery|food/.test(m)) return "Food";
-  if (/whole foods|trader joe|kroger|publix|safeway|aldi|wegmans|fresh market|sprouts|grocery/.test(m)) return "Groceries";
-  if (/netflix|spotify|hulu|disney|hbo|apple tv|amazon prime|youtube premium|twitch|gaming|game|xbox|playstation|steam/.test(m)) return "Entertainment";
-  if (/uber|lyft|grab|taxi|transit|metro|subway|bus|train|parking|gas|shell|bp|chevron|exxon|mobil|citgo|delta|united|southwest|american airlines|hotel|airbnb/.test(m)) return "Transport";
-  if (/rent|mortgage|lease|property|hoa/.test(m)) return "Housing";
-  if (/electric|gas|water|internet|phone|at&t|verizon|comcast|xfinity|spectrum|t-mobile|sprint/.test(m)) return "Utilities";
-  if (/doctor|hospital|pharmacy|cvs|walgreens|rite aid|health|dental|vision|clinic|medical|care/.test(m)) return "Health";
-  if (/insurance|geico|progressive|state farm|allstate|liberty mutual|farmers/.test(m)) return "Insurance";
+  // Shopping
+  if (/amazon|ebay|etsy|walmart|target|best buy|costco|shop|store|market|mall|tj maxx|nordstrom|macy|gap|h&m|zara|uniqlo|canadian tire|home depot|rona|winners|sport chek|sail|la vie en rose|reitmans|simons|bay\b|the source/.test(m)) return "Shopping";
+  // Food & dining
+  if (/uber eats|doordash|grubhub|postmates|instacart|chipotle|mcdonald|starbucks|dunkin|chick|pizza|taco|subway|burger|restaurant|cafe|diner|sushi|thai|chinese|italian|grill|kitchen|bakery|eatery|food|tim hortons|harvey's|swiss chalet|boston pizza|second cup|a&w|dairy queen|wendys|popeyes|poutine|beavertails|kelsey|montana|earls|moxies|joeys|cactus club/.test(m)) return "Food";
+  // Groceries (CA + US)
+  if (/whole foods|trader joe|kroger|publix|safeway|aldi|wegmans|fresh market|sprouts|grocery|loblaws|sobeys|metro|no frills|freshco|food basics|iga|maxi|provigo|super c|farm boy|co-op|superstore|atlantic superstore|real canadian/.test(m)) return "Groceries";
+  // Entertainment
+  if (/netflix|spotify|hulu|disney|hbo|apple tv|amazon prime|youtube premium|twitch|gaming|game|xbox|playstation|steam|crave|tubi|apple music|deezer|sportsnet|tsn/.test(m)) return "Entertainment";
+  // Transport
+  if (/uber|lyft|grab|taxi|transit|metro|subway|bus|train|parking|gas|shell|bp|chevron|exxon|mobil|citgo|delta|united|southwest|american airlines|hotel|airbnb|air canada|westjet|porter|via rail|presto|esso|petro-canada|husky|pioneer/.test(m)) return "Transport";
+  // Housing
+  if (/rent|mortgage|lease|property|hoa|strata|condo/.test(m)) return "Housing";
+  // Utilities (CA + US)
+  if (/electric|hydro|gas|water|internet|phone|at&t|verizon|comcast|xfinity|spectrum|t-mobile|sprint|rogers|bell\b|telus|fido|koodo|virgin mobile|shaw|videotron|cogeco|eastlink|sasktel|mts|enbridge|union gas|fortis/.test(m)) return "Utilities";
+  // Health
+  if (/doctor|hospital|pharmacy|cvs|walgreens|rite aid|health|dental|vision|clinic|medical|care|shoppers drug mart|jean coutu|pharmaprix|rexall|london drugs/.test(m)) return "Health";
+  // Insurance
+  if (/insurance|geico|progressive|state farm|allstate|liberty mutual|farmers|intact|aviva|desjardins assurance|co-operators|belairdirect|td insurance|rbc insurance/.test(m)) return "Insurance";
+  // Income
   if (/salary|payroll|deposit|direct deposit|paycheck|dividend|refund|transfer in|credit from/.test(m)) return "Income";
   return "Other";
+}
+
+/** Parse a Canadian French-format amount like "1 234,56 $" or "1234,56$" → 1234.56 */
+function parseFrenchAmount(text: string): number | null {
+  // French: "1 234,56 $" or "1234,56$"
+  const m = text.match(/([\d\s]+),(\d{2})\s*\$/) || text.match(/(\d[\d\s]*),(\d{2})/);
+  if (!m) return null;
+  const val = parseFloat(m[1].replace(/\s/g, "") + "." + m[2]);
+  return isNaN(val) ? null : val;
+}
+
+/** Parse a standard dollar amount like "$1,234.56" */
+function parseDollarAmount(text: string): number | null {
+  const m = text.match(/\$\s*([\d,]+\.?\d*)/);
+  if (!m) return null;
+  const val = parseFloat(m[1].replace(/,/g, ""));
+  return isNaN(val) ? null : val;
 }
 
 const BANK_PATTERNS: BankPattern[] = [
@@ -220,6 +247,280 @@ const BANK_PATTERNS: BankPattern[] = [
       },
     ],
   },
+
+  // ── Canadian Banks ──────────────────────────────────────────────────────────
+
+  // TD Bank (TD Canada Trust)
+  {
+    bankName: "TD",
+    fromPatterns: [/@td\.com/i, /@tdbank\.com/i, /@tdbankgroup\.com/i, /td canada trust/i],
+    subjectPatterns: [/transaction|purchase|charge|alert|alerte|achat|dépôt|deposit/i],
+    parsers: [
+      (text, subject) => {
+        // "A purchase of $XX.XX was made at MERCHANT with your TD Card"
+        // "Your TD card was used for a $XX.XX purchase at MERCHANT"
+        const patterns = [
+          /(?:purchase|transaction|charge)\s+of\s+\$?([\d,]+\.?\d*)\s+(?:was made\s+)?(?:at|from|chez)\s+([^<\n\r,\.]+)/i,
+          /(?:used for a|made a)\s+\$?([\d,]+\.?\d*)\s+purchase\s+at\s+([^<\n\r,\.]+)/i,
+          /TD[^$]*\$\s*([\d,]+\.?\d*)\s+(?:at|chez|from)\s+([^<\n\r,\.]+)/i,
+        ];
+        for (const pat of patterns) {
+          const m = text.match(pat);
+          if (m) {
+            const amount = parseFloat(m[1].replace(/,/g, ""));
+            const merchant = m[2].trim();
+            if (amount > 0) return { title: merchant, amount, type: "expense", category: categorizeFrom(merchant), bank: "TD", date: new Date().toISOString(), rawSubject: subject };
+          }
+        }
+        // French: "Un achat de 1 234,56 $ a été effectué chez MERCHANT"
+        const frM = text.match(/(?:achat|transaction)\s+de\s+([\d\s]+,\d{2})\s*\$\s+(?:a été effectué(?:e)?\s+)?(?:chez|à|de)\s+([^<\n\r,\.]+)/i);
+        if (frM) {
+          const amount = parseFrenchAmount(frM[1] + "," + "00");
+          const amount2 = parseFrenchAmount(frM[1]);
+          const finalAmt = amount2 ?? amount;
+          const merchant = frM[2].trim();
+          if (finalAmt && finalAmt > 0) return { title: merchant, amount: finalAmt, type: "expense", category: categorizeFrom(merchant), bank: "TD", date: new Date().toISOString(), rawSubject: subject };
+        }
+        return null;
+      },
+    ],
+  },
+
+  // RBC (Royal Bank of Canada)
+  {
+    bankName: "RBC",
+    fromPatterns: [/@rbc\.com/i, /@royalbank\.com/i, /royal bank/i],
+    subjectPatterns: [/transaction|purchase|charge|alert|alerte|activity|deposit/i],
+    parsers: [
+      (text, subject) => {
+        // "A purchase of $XX.XX was made at MERCHANT on your RBC card"
+        // "Your RBC account balance has changed. Amount: $XX.XX  Merchant: MERCHANT"
+        const patterns = [
+          /(?:purchase|transaction|charge)\s+of\s+\$?([\d,]+\.?\d*)\s+(?:was made\s+)?(?:at|from|on|chez)\s+([^<\n\r,\.]+)/i,
+          /amount:\s*\$?([\d,]+\.?\d*).*?merchant:\s+([^<\n\r,\.]+)/is,
+          /RBC[^$]*\$\s*([\d,]+\.?\d*)[^A-Z]*([A-Z][A-Za-z0-9 &'*-]{2,35})/,
+        ];
+        for (const pat of patterns) {
+          const m = text.match(pat);
+          if (m) {
+            const amount = parseFloat(m[1].replace(/,/g, ""));
+            const merchant = m[2].trim();
+            if (amount > 0) return { title: merchant, amount, type: "expense", category: categorizeFrom(merchant), bank: "RBC", date: new Date().toISOString(), rawSubject: subject };
+          }
+        }
+        // French
+        const frM = text.match(/(?:achat|transaction)\s+de\s+([\d\s]+,\d{2})\s*\$\s+(?:effectué(?:e)?\s+)?(?:chez|à)\s+([^<\n\r,\.]+)/i);
+        if (frM) {
+          const amount = parseFrenchAmount(frM[1]);
+          const merchant = frM[2].trim();
+          if (amount && amount > 0) return { title: merchant, amount, type: "expense", category: categorizeFrom(merchant), bank: "RBC", date: new Date().toISOString(), rawSubject: subject };
+        }
+        return null;
+      },
+    ],
+  },
+
+  // Scotiabank
+  {
+    bankName: "Scotiabank",
+    fromPatterns: [/@scotiabank\.com/i, /@scotiabankmessages\.com/i, /scotia/i],
+    subjectPatterns: [/transaction|purchase|charge|alert|alerte|activity/i],
+    parsers: [
+      (text, subject) => {
+        // "A purchase of $XX.XX was made at MERCHANT on your Scotiabank card"
+        // "Transaction Alert: $XX.XX at MERCHANT"
+        const patterns = [
+          /(?:purchase|transaction|charge)\s+of\s+\$?([\d,]+\.?\d*)\s+(?:was made\s+)?(?:at|from|chez)\s+([^<\n\r,\.]+)/i,
+          /Transaction Alert[^$]*\$\s*([\d,]+\.?\d*)\s+(?:at|from)\s+([^<\n\r,\.]+)/i,
+          /\$\s*([\d,]+\.?\d*)\s+(?:at|from|purchase at)\s+([A-Z][A-Za-z0-9 &'*#-]{2,40})/,
+        ];
+        for (const pat of patterns) {
+          const m = text.match(pat);
+          if (m) {
+            const amount = parseFloat(m[1].replace(/,/g, ""));
+            const merchant = m[2].trim();
+            if (amount > 0) return { title: merchant, amount, type: "expense", category: categorizeFrom(merchant), bank: "Scotiabank", date: new Date().toISOString(), rawSubject: subject };
+          }
+        }
+        // French
+        const frM = text.match(/(?:achat|transaction)\s+de\s+([\d\s]+,\d{2})\s*\$\s+(?:chez|à)\s+([^<\n\r,\.]+)/i);
+        if (frM) {
+          const amount = parseFrenchAmount(frM[1]);
+          const merchant = frM[2].trim();
+          if (amount && amount > 0) return { title: merchant, amount, type: "expense", category: categorizeFrom(merchant), bank: "Scotiabank", date: new Date().toISOString(), rawSubject: subject };
+        }
+        return null;
+      },
+    ],
+  },
+
+  // BMO (Bank of Montreal)
+  {
+    bankName: "BMO",
+    fromPatterns: [/@bmo\.com/i, /bank of montreal/i, /banque de montréal/i],
+    subjectPatterns: [/transaction|purchase|charge|alert|alerte|activity|achat/i],
+    parsers: [
+      (text, subject) => {
+        // "Your BMO card ending in XXXX was used for a $XX.XX purchase at MERCHANT"
+        // "A purchase of $XX.XX was made at MERCHANT"
+        const patterns = [
+          /(?:used for a|for a)\s+\$?([\d,]+\.?\d*)\s+purchase\s+at\s+([^<\n\r,\.]+)/i,
+          /(?:purchase|transaction|charge)\s+of\s+\$?([\d,]+\.?\d*)\s+(?:was made\s+)?(?:at|from|chez)\s+([^<\n\r,\.]+)/i,
+          /BMO[^$]*\$\s*([\d,]+\.?\d*)[^A-Z]*([A-Z][A-Za-z0-9 &'*-]{2,35})/,
+        ];
+        for (const pat of patterns) {
+          const m = text.match(pat);
+          if (m) {
+            const amount = parseFloat(m[1].replace(/,/g, ""));
+            const merchant = m[2].trim();
+            if (amount > 0) return { title: merchant, amount, type: "expense", category: categorizeFrom(merchant), bank: "BMO", date: new Date().toISOString(), rawSubject: subject };
+          }
+        }
+        // French: "Un achat de 1 234,56 $ a été effectué chez MERCHANT avec votre carte BMO"
+        const frM = text.match(/(?:achat|transaction)\s+de\s+([\d\s]+,\d{2})\s*\$\s+(?:a été effectué(?:e)?\s+)?(?:chez|à)\s+([^<\n\r,\.]+)/i);
+        if (frM) {
+          const amount = parseFrenchAmount(frM[1]);
+          const merchant = frM[2].trim();
+          if (amount && amount > 0) return { title: merchant, amount, type: "expense", category: categorizeFrom(merchant), bank: "BMO", date: new Date().toISOString(), rawSubject: subject };
+        }
+        return null;
+      },
+    ],
+  },
+
+  // CIBC
+  {
+    bankName: "CIBC",
+    fromPatterns: [/@cibc\.com/i, /cibc/i],
+    subjectPatterns: [/transaction|purchase|charge|alert|alerte|activity/i],
+    parsers: [
+      (text, subject) => {
+        // "A purchase of $XX.XX was made at MERCHANT on your CIBC card"
+        // "CIBC: $XX.XX purchase at MERCHANT"
+        const patterns = [
+          /(?:purchase|transaction|charge)\s+of\s+\$?([\d,]+\.?\d*)\s+(?:was made\s+)?(?:at|from|chez)\s+([^<\n\r,\.]+)/i,
+          /CIBC[^$]*\$\s*([\d,]+\.?\d*)\s+(?:purchase\s+)?(?:at|from)\s+([^<\n\r,\.]+)/i,
+          /\$\s*([\d,]+\.?\d*)\s+(?:purchase|transaction)\s+at\s+([^<\n\r,\.]+)/i,
+        ];
+        for (const pat of patterns) {
+          const m = text.match(pat);
+          if (m) {
+            const amount = parseFloat(m[1].replace(/,/g, ""));
+            const merchant = m[2].trim();
+            if (amount > 0) return { title: merchant, amount, type: "expense", category: categorizeFrom(merchant), bank: "CIBC", date: new Date().toISOString(), rawSubject: subject };
+          }
+        }
+        // French
+        const frM = text.match(/(?:achat|transaction)\s+de\s+([\d\s]+,\d{2})\s*\$\s+(?:chez|à)\s+([^<\n\r,\.]+)/i);
+        if (frM) {
+          const amount = parseFrenchAmount(frM[1]);
+          const merchant = frM[2].trim();
+          if (amount && amount > 0) return { title: merchant, amount, type: "expense", category: categorizeFrom(merchant), bank: "CIBC", date: new Date().toISOString(), rawSubject: subject };
+        }
+        return null;
+      },
+    ],
+  },
+
+  // Tangerine
+  {
+    bankName: "Tangerine",
+    fromPatterns: [/@tangerine\.ca/i, /tangerine bank/i],
+    subjectPatterns: [/transaction|purchase|charge|alert|activity|deposit/i],
+    parsers: [
+      (text, subject) => {
+        // "You just made a $XX.XX purchase at MERCHANT"
+        // "A purchase of $XX.XX at MERCHANT was made on your Tangerine account"
+        const patterns = [
+          /(?:made a|just made a)\s+\$?([\d,]+\.?\d*)\s+purchase\s+at\s+([^<\n\r,\.]+)/i,
+          /(?:purchase|transaction|charge)\s+of\s+\$?([\d,]+\.?\d*)\s+(?:at|from)\s+([^<\n\r,\.]+)/i,
+          /\$\s*([\d,]+\.?\d*)\s+(?:purchase|transaction)\s+(?:at|from)\s+([^<\n\r,\.]+)/i,
+        ];
+        for (const pat of patterns) {
+          const m = text.match(pat);
+          if (m) {
+            const amount = parseFloat(m[1].replace(/,/g, ""));
+            const merchant = m[2].trim();
+            if (amount > 0) return { title: merchant, amount, type: "expense", category: categorizeFrom(merchant), bank: "Tangerine", date: new Date().toISOString(), rawSubject: subject };
+          }
+        }
+        return null;
+      },
+    ],
+  },
+
+  // National Bank of Canada (Banque Nationale)
+  {
+    bankName: "National Bank",
+    fromPatterns: [/@nbc\.ca/i, /@bnc\.ca/i, /national bank/i, /banque nationale/i],
+    subjectPatterns: [/transaction|purchase|charge|alert|alerte|achat|activité/i],
+    parsers: [
+      (text, subject) => {
+        // English: "A transaction of $XX.XX was made at MERCHANT"
+        const enM = text.match(/(?:purchase|transaction|charge)\s+of\s+\$?([\d,]+\.?\d*)\s+(?:was made\s+)?(?:at|from|chez)\s+([^<\n\r,\.]+)/i);
+        if (enM) {
+          const amount = parseFloat(enM[1].replace(/,/g, ""));
+          const merchant = enM[2].trim();
+          if (amount > 0) return { title: merchant, amount, type: "expense", category: categorizeFrom(merchant), bank: "National Bank", date: new Date().toISOString(), rawSubject: subject };
+        }
+        // French: "Une transaction de 1 234,56 $ a été effectuée chez MERCHANT"
+        const frM = text.match(/(?:transaction|achat)\s+de\s+([\d\s]+,\d{2})\s*\$\s+(?:a été effectué(?:e)?\s+)?(?:chez|à|de)\s+([^<\n\r,\.]+)/i);
+        if (frM) {
+          const amount = parseFrenchAmount(frM[1]);
+          const merchant = frM[2].trim();
+          if (amount && amount > 0) return { title: merchant, amount, type: "expense", category: categorizeFrom(merchant), bank: "National Bank", date: new Date().toISOString(), rawSubject: subject };
+        }
+        return null;
+      },
+    ],
+  },
+
+  // Desjardins (French-first credit union)
+  {
+    bankName: "Desjardins",
+    fromPatterns: [/@desjardins\.com/i, /@caisse\.desjardins\.com/i, /desjardins/i],
+    subjectPatterns: [/transaction|achat|alerte|alert|purchase|activité/i],
+    parsers: [
+      (text, subject) => {
+        // French: "Un achat de 1 234,56 $ a été effectué chez MERCHANT avec votre carte Desjardins"
+        const frM = text.match(/(?:achat|transaction)\s+de\s+([\d\s]+,\d{2})\s*\$\s+(?:a été effectué(?:e)?\s+)?(?:chez|à|de)\s+([^<\n\r,\.]+)/i);
+        if (frM) {
+          const amount = parseFrenchAmount(frM[1]);
+          const merchant = frM[2].trim();
+          if (amount && amount > 0) return { title: merchant, amount, type: "expense", category: categorizeFrom(merchant), bank: "Desjardins", date: new Date().toISOString(), rawSubject: subject };
+        }
+        // English fallback
+        const enM = text.match(/(?:purchase|transaction|charge)\s+of\s+\$?([\d,]+\.?\d*)\s+(?:at|from|chez)\s+([^<\n\r,\.]+)/i);
+        if (enM) {
+          const amount = parseFloat(enM[1].replace(/,/g, ""));
+          const merchant = enM[2].trim();
+          if (amount > 0) return { title: merchant, amount, type: "expense", category: categorizeFrom(merchant), bank: "Desjardins", date: new Date().toISOString(), rawSubject: subject };
+        }
+        return null;
+      },
+    ],
+  },
+
+  // EQ Bank
+  {
+    bankName: "EQ Bank",
+    fromPatterns: [/@eqbank\.ca/i, /eq bank/i, /equitable bank/i],
+    subjectPatterns: [/transaction|transfer|deposit|alert|activity/i],
+    parsers: [
+      (text, subject) => {
+        const m = text.match(/(?:transfer|deposit|transaction)\s+of\s+\$?([\d,]+\.?\d*)\s+(?:was|has been)?\s*(?:made|sent|received|completed)\s*(?:to|from|at)?\s*([^<\n\r,\.]*)/i);
+        if (m) {
+          const amount = parseFloat(m[1].replace(/,/g, ""));
+          const merchant = m[2]?.trim() || "EQ Bank Transfer";
+          const isCredit = /deposit|received|credit/i.test(text.slice(0, 200));
+          if (amount > 0) return { title: merchant || "EQ Bank Transfer", amount, type: isCredit ? "income" : "expense", category: isCredit ? "Income" : categorizeFrom(merchant), bank: "EQ Bank", date: new Date().toISOString(), rawSubject: subject };
+        }
+        return null;
+      },
+    ],
+  },
+
+  // ── End Canadian Banks ───────────────────────────────────────────────────────
 
   // Generic bank alert fallback
   {
