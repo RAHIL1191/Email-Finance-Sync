@@ -1,11 +1,12 @@
 import { Feather } from "@expo/vector-icons";
 import * as Haptics from "expo-haptics";
-import { Linking } from "react-native";
-import React, { useState } from "react";
+import React, { useMemo, useState } from "react";
 import {
   ActivityIndicator,
   Alert,
+  Dimensions,
   KeyboardAvoidingView,
+  Linking,
   Modal,
   Platform,
   ScrollView,
@@ -15,6 +16,7 @@ import {
   TouchableOpacity,
   View,
 } from "react-native";
+import { Defs, LinearGradient, Path, Stop, Svg } from "react-native-svg";
 import { SafeAreaView, useSafeAreaInsets } from "react-native-safe-area-context";
 
 import AddAccountModal from "@/components/AddAccountModal";
@@ -22,63 +24,177 @@ import PlaidLinkModal from "@/components/PlaidLinkModal";
 import { Account, PlaidItem, useApp } from "@/context/AppContext";
 import { useColors } from "@/hooks/useColors";
 
-const TYPE_ICONS: Record<string, string> = {
-  checking: "credit-card",
-  savings: "dollar-sign",
-  credit: "credit-card",
-  investment: "trending-up",
-};
+const { width: SCREEN_W } = Dimensions.get("window");
 
-function AccountRow({ account, onDelete }: { account: Account; onDelete: () => void }) {
-  const colors = useColors();
-  const isNegative = account.balance < 0;
-  const isPlaid = !!account.plaidItemId;
+// ── Helpers ───────────────────────────────────────────────────────────────────
+
+function bankInitials(bank: string, name: string): string {
+  const src = bank || name;
+  const words = src.trim().split(/\s+/);
+  if (words.length >= 2) return (words[0][0] + words[1][0]).toUpperCase();
+  return src.slice(0, 2).toUpperCase();
+}
+
+function genMockData(balance: number, count: number): number[] {
+  const pts: number[] = [];
+  let v = Math.max(balance * 1.1, 500);
+  for (let i = 0; i < count; i++) {
+    v += (Math.random() - 0.53) * Math.abs(balance) * 0.025;
+    pts.push(v);
+  }
+  pts[count - 1] = balance;
+  return pts;
+}
+
+function buildPaths(values: number[], w: number, h: number) {
+  if (values.length < 2) return { line: "", area: "" };
+  const min = Math.min(...values);
+  const max = Math.max(...values);
+  const range = max - min || 1;
+  const padY = 8;
+  const pts = values.map((v, i) => ({
+    x: (i / (values.length - 1)) * w,
+    y: padY + ((max - v) / range) * (h - padY * 2),
+  }));
+  let line = `M ${pts[0].x.toFixed(2)} ${pts[0].y.toFixed(2)}`;
+  for (let i = 1; i < pts.length; i++) {
+    const p = pts[i - 1];
+    const c = pts[i];
+    const cx = ((p.x + c.x) / 2).toFixed(2);
+    line += ` C ${cx} ${p.y.toFixed(2)} ${cx} ${c.y.toFixed(2)} ${c.x.toFixed(2)} ${c.y.toFixed(2)}`;
+  }
+  const last = pts[pts.length - 1];
+  const area = `${line} L ${last.x.toFixed(2)} ${h} L 0 ${h} Z`;
+  return { line, area };
+}
+
+// ── Net Worth Chart ───────────────────────────────────────────────────────────
+
+function NetWorthChart({ balance, colors }: { balance: number; colors: any }) {
+  const h = 130;
+  const w = SCREEN_W;
+  const data = useMemo(() => genMockData(balance === 0 ? 1000 : balance, 22), [balance]);
+  const { line, area } = useMemo(() => buildPaths(data, w, h), [data, w, h]);
 
   return (
-    <View style={[styles.accountRow, { backgroundColor: colors.card }]}>
-      <View style={[styles.accountIcon, { backgroundColor: account.color + "20" }]}>
-        <Feather name={TYPE_ICONS[account.type] as any} size={20} color={account.color} />
+    <View style={{ marginTop: 8 }}>
+      <Svg width={w} height={h}>
+        <Defs>
+          <LinearGradient id="areaGrad" x1="0" y1="0" x2="0" y2="1">
+            <Stop offset="0%" stopColor={colors.primary} stopOpacity="0.22" />
+            <Stop offset="100%" stopColor={colors.primary} stopOpacity="0.01" />
+          </LinearGradient>
+        </Defs>
+        {area ? <Path d={area} fill="url(#areaGrad)" /> : null}
+        {line ? <Path d={line} stroke={colors.primary} strokeWidth="2.2" fill="none" /> : null}
+      </Svg>
+    </View>
+  );
+}
+
+// ── Account Row (new flat design) ─────────────────────────────────────────────
+
+function AccountRow({
+  account,
+  onDelete,
+  isLast,
+}: {
+  account: Account;
+  onDelete: () => void;
+  isLast: boolean;
+}) {
+  const colors = useColors();
+  const isNeg = account.balance < 0;
+  const initials = bankInitials(account.bank, account.name);
+  const typeLabel =
+    account.type.charAt(0).toUpperCase() + account.type.slice(1);
+
+  return (
+    <TouchableOpacity
+      style={[
+        styles.acctRow,
+        !isLast && { borderBottomWidth: StyleSheet.hairlineWidth, borderBottomColor: colors.border },
+      ]}
+      onLongPress={() => {
+        Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
+        Alert.alert("Delete Account", `Remove "${account.name}"?`, [
+          { text: "Cancel", style: "cancel" },
+          { text: "Delete", style: "destructive", onPress: onDelete },
+        ]);
+      }}
+      activeOpacity={0.7}
+    >
+      <View style={[styles.acctBadge, { backgroundColor: account.color }]}>
+        <Text style={styles.acctBadgeText}>{initials}</Text>
       </View>
-      <View style={styles.accountInfo}>
-        <View style={styles.accountNameRow}>
-          <Text style={[styles.accountName, { color: colors.foreground }]}>{account.name}</Text>
-          {isPlaid && (
-            <View style={[styles.syncBadge, { backgroundColor: "#10b98118" }]}>
-              <Feather name="link" size={9} color="#10b981" />
-              <Text style={[styles.syncBadgeText, { color: "#10b981" }]}>Plaid</Text>
-            </View>
-          )}
-        </View>
-        <Text style={[styles.accountBank, { color: colors.mutedForeground }]}>
-          {account.bank}{account.lastFour ? `  •••• ${account.lastFour}` : ""}
+      <View style={styles.acctInfo}>
+        <Text style={[styles.acctName, { color: colors.foreground }]} numberOfLines={1}>
+          {account.name}
         </Text>
-        <View style={[styles.typeBadge, { backgroundColor: account.color + "18" }]}>
-          <Text style={[styles.typeText, { color: account.color }]}>
-            {account.type.charAt(0).toUpperCase() + account.type.slice(1)}
+        <Text style={[styles.acctSub, { color: colors.mutedForeground }]} numberOfLines={1}>
+          {typeLabel} · {account.bank}
+        </Text>
+      </View>
+      <Text style={[styles.acctBal, { color: isNeg ? colors.expense : colors.foreground }]}>
+        {isNeg ? "- " : ""}$
+        {Math.abs(account.balance).toLocaleString("en-US", {
+          minimumFractionDigits: 2,
+          maximumFractionDigits: 2,
+        })}
+      </Text>
+    </TouchableOpacity>
+  );
+}
+
+// ── Account Group ─────────────────────────────────────────────────────────────
+
+function AccountGroup({
+  title,
+  accounts,
+  total,
+  onDelete,
+}: {
+  title: string;
+  accounts: Account[];
+  total: number;
+  onDelete: (id: string) => void;
+}) {
+  const colors = useColors();
+  const isNeg = total < 0;
+
+  return (
+    <View>
+      <View style={styles.groupHeader}>
+        <View style={{ flexDirection: "row", alignItems: "center", gap: 6 }}>
+          <Text style={[styles.groupTitle, { color: colors.foreground }]}>{title}</Text>
+          <Feather name="edit-2" size={12} color={colors.mutedForeground} />
+        </View>
+        <TouchableOpacity style={{ flexDirection: "row", alignItems: "center", gap: 3 }}>
+          <Text style={[styles.groupTotal, { color: isNeg ? colors.expense : colors.foreground }]}>
+            {isNeg ? "- " : ""}$
+            {Math.abs(total).toLocaleString("en-US", {
+              minimumFractionDigits: 2,
+              maximumFractionDigits: 2,
+            })}
           </Text>
-        </View>
-      </View>
-      <View style={styles.accountRight}>
-        <Text style={[styles.accountBalance, { color: isNegative ? colors.expense : colors.foreground }]}>
-          {isNegative ? "-" : ""}${Math.abs(account.balance).toLocaleString("en-US", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
-        </Text>
-        <TouchableOpacity
-          onPress={() => {
-            Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
-            Alert.alert("Delete Account", `Remove "${account.name}"?`, [
-              { text: "Cancel", style: "cancel" },
-              { text: "Delete", style: "destructive", onPress: onDelete },
-            ]);
-          }}
-        >
-          <Feather name="trash-2" size={16} color={colors.mutedForeground} />
+          <Feather name="chevron-right" size={15} color={colors.mutedForeground} />
         </TouchableOpacity>
+      </View>
+      <View style={[styles.groupCard, { backgroundColor: colors.card, borderColor: colors.border }]}>
+        {accounts.map((a, i) => (
+          <AccountRow
+            key={a.id}
+            account={a}
+            onDelete={() => onDelete(a.id)}
+            isLast={i === accounts.length - 1}
+          />
+        ))}
       </View>
     </View>
   );
 }
 
-// ── Email connect modal ────────────────────────────────────────────────────────
+// ── Email Connect Modal (unchanged) ───────────────────────────────────────────
 
 function EmailConnectModal({ onClose }: { onClose: () => void }) {
   const colors = useColors();
@@ -94,8 +210,7 @@ function EmailConnectModal({ onClose }: { onClose: () => void }) {
   const handle = async () => {
     if (!email.includes("@")) { setErrorMsg("Please enter a valid email address."); return; }
     if (appPassword.length < 8) { setErrorMsg("Please enter your app password."); return; }
-    setStep("loading");
-    setErrorMsg("");
+    setStep("loading"); setErrorMsg("");
     const result = await connectEmail(email.trim(), appPassword.trim());
     if (result.success) {
       setStep("success");
@@ -106,19 +221,13 @@ function EmailConnectModal({ onClose }: { onClose: () => void }) {
       Haptics.notificationAsync(Haptics.NotificationFeedbackType.Error);
     }
   };
-
   const isGmail = email.toLowerCase().includes("@gmail");
 
   return (
     <Modal visible animationType="slide" presentationStyle="pageSheet" onRequestClose={onClose}>
-      <KeyboardAvoidingView
-        style={{ flex: 1, backgroundColor: colors.background }}
-        behavior={Platform.OS === "ios" ? "padding" : "height"}
-      >
+      <KeyboardAvoidingView style={{ flex: 1, backgroundColor: colors.background }} behavior={Platform.OS === "ios" ? "padding" : "height"}>
         <View style={[styles.modalHeader, { paddingTop: (Platform.OS === "web" ? 20 : insets.top) + 16, borderBottomColor: colors.border }]}>
-          <TouchableOpacity onPress={onClose}>
-            <Feather name="x" size={22} color={colors.foreground} />
-          </TouchableOpacity>
+          <TouchableOpacity onPress={onClose}><Feather name="x" size={22} color={colors.foreground} /></TouchableOpacity>
           <Text style={[styles.modalTitle, { color: colors.foreground }]}>{wasConnected ? "Update Email" : "Connect Email"}</Text>
           <View style={{ width: 22 }} />
         </View>
@@ -130,20 +239,15 @@ function EmailConnectModal({ onClose }: { onClose: () => void }) {
           <Text style={[styles.modalSubtext, { color: colors.mutedForeground }]}>
             {wasConnected ? "Enter new credentials to replace the existing connection." : "We read your bank transaction alert emails directly via IMAP and parse them into transactions. Your credentials are stored only on your device."}
           </Text>
-
           {(step === "form" || step === "error") && (
             <View style={styles.formSection}>
               <View style={styles.inputGroup}>
                 <Text style={[styles.inputLabel, { color: colors.mutedForeground }]}>Email Address</Text>
                 <TextInput
                   style={[styles.input, { backgroundColor: colors.card, color: colors.foreground, borderColor: step === "error" ? colors.expense : colors.border }]}
-                  placeholder="you@gmail.com"
-                  placeholderTextColor={colors.mutedForeground}
-                  keyboardType="email-address"
-                  autoCapitalize="none"
-                  autoCorrect={false}
-                  value={email}
-                  onChangeText={(v) => { setEmail(v); setStep("form"); setErrorMsg(""); }}
+                  placeholder="you@gmail.com" placeholderTextColor={colors.mutedForeground}
+                  keyboardType="email-address" autoCapitalize="none" autoCorrect={false}
+                  value={email} onChangeText={(v) => { setEmail(v); setStep("form"); setErrorMsg(""); }}
                 />
               </View>
               <View style={styles.inputGroup}>
@@ -151,13 +255,9 @@ function EmailConnectModal({ onClose }: { onClose: () => void }) {
                 <View style={[styles.passwordRow, { backgroundColor: colors.card, borderColor: step === "error" ? colors.expense : colors.border }]}>
                   <TextInput
                     style={[styles.passwordInput, { color: colors.foreground }]}
-                    placeholder="xxxx xxxx xxxx xxxx"
-                    placeholderTextColor={colors.mutedForeground}
-                    secureTextEntry={!showPassword}
-                    autoCapitalize="none"
-                    autoCorrect={false}
-                    value={appPassword}
-                    onChangeText={(v) => { setAppPassword(v); setStep("form"); setErrorMsg(""); }}
+                    placeholder="xxxx xxxx xxxx xxxx" placeholderTextColor={colors.mutedForeground}
+                    secureTextEntry={!showPassword} autoCapitalize="none" autoCorrect={false}
+                    value={appPassword} onChangeText={(v) => { setAppPassword(v); setStep("form"); setErrorMsg(""); }}
                   />
                   <TouchableOpacity onPress={() => setShowPassword(!showPassword)} style={styles.eyeBtn}>
                     <Feather name={showPassword ? "eye-off" : "eye"} size={18} color={colors.mutedForeground} />
@@ -220,13 +320,12 @@ function EmailConnectModal({ onClose }: { onClose: () => void }) {
   );
 }
 
-// ── Plaid connected item panel ────────────────────────────────────────────────
+// ── Plaid item panel ──────────────────────────────────────────────────────────
 
 function PlaidItemPanel({ item }: { item: PlaidItem }) {
   const colors = useColors();
   const { syncPlaidTransactions, disconnectPlaid, isSyncing } = useApp();
   const [syncResult, setSyncResult] = useState<{ imported: number; error?: string } | null>(null);
-  const [expanded, setExpanded] = useState(true);
 
   const handleSync = async () => {
     Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium);
@@ -237,77 +336,36 @@ function PlaidItemPanel({ item }: { item: PlaidItem }) {
   };
 
   const handleDisconnect = () => {
-    Alert.alert(
-      "Disconnect Bank",
-      `Remove ${item.bankName} and all its imported accounts and transactions?`,
-      [
-        { text: "Cancel", style: "cancel" },
-        { text: "Disconnect", style: "destructive", onPress: () => disconnectPlaid(item.itemId) },
-      ]
-    );
+    Alert.alert("Disconnect Bank", `Remove ${item.bankName} and all its imported accounts?`, [
+      { text: "Cancel", style: "cancel" },
+      { text: "Disconnect", style: "destructive", onPress: () => disconnectPlaid(item.itemId) },
+    ]);
   };
 
-  if (!expanded) {
-    return (
-      <TouchableOpacity
-        style={[styles.connectedPanel, { backgroundColor: colors.card, borderColor: colors.border }]}
-        onPress={() => setExpanded(true)}
-      >
-        <View style={styles.connectedTop}>
-          <View style={[styles.connectedIconBg, { backgroundColor: item.bankColor + "18" }]}>
-            <Feather name="link" size={16} color={item.bankColor} />
-          </View>
-          <View style={{ flex: 1 }}>
-            <Text style={[styles.connectedTitle, { color: colors.foreground }]}>{item.bankName}</Text>
-            <Text style={[styles.connectedEmail, { color: colors.mutedForeground }]}>
-              {item.accountIds.length} account{item.accountIds.length !== 1 ? "s" : ""} linked
-            </Text>
-          </View>
-          <Feather name="chevron-right" size={16} color={colors.mutedForeground} />
-        </View>
-      </TouchableOpacity>
-    );
-  }
-
   return (
-    <View style={[styles.connectedPanel, { backgroundColor: colors.card, borderColor: item.bankColor + "50" }]}>
-      <View style={styles.connectedTop}>
-        <View style={[styles.connectedIconBg, { backgroundColor: item.bankColor + "18" }]}>
+    <View style={[styles.plaidPanel, { backgroundColor: colors.card, borderColor: item.bankColor + "50" }]}>
+      <View style={styles.plaidPanelTop}>
+        <View style={[styles.plaidIconBg, { backgroundColor: item.bankColor + "18" }]}>
           <Feather name="link" size={16} color={item.bankColor} />
         </View>
         <View style={{ flex: 1 }}>
-          <View style={{ flexDirection: "row", alignItems: "center", gap: 7 }}>
-            <Text style={[styles.connectedTitle, { color: colors.foreground }]}>{item.bankName}</Text>
+          <View style={{ flexDirection: "row", alignItems: "center", gap: 6 }}>
+            <Text style={[styles.plaidBankName, { color: colors.foreground }]}>{item.bankName}</Text>
             <View style={[styles.plaidBadge, { backgroundColor: item.bankColor + "18" }]}>
               <Text style={[styles.plaidBadgeText, { color: item.bankColor }]}>Plaid</Text>
             </View>
           </View>
-          <Text style={[styles.connectedEmail, { color: colors.mutedForeground }]}>
-            {item.accountIds.length} account{item.accountIds.length !== 1 ? "s" : ""} · {item.accountIds.length} linked
+          <Text style={[styles.plaidSub, { color: colors.mutedForeground }]}>
+            {item.accountIds.length} account{item.accountIds.length !== 1 ? "s" : ""} linked
           </Text>
         </View>
-        <TouchableOpacity
-          onPress={() => setExpanded(false)}
-          hitSlop={{ top: 10, bottom: 10, left: 10, right: 10 }}
-        >
-          <Feather name="x" size={18} color={colors.mutedForeground} />
-        </TouchableOpacity>
       </View>
-
       {item.lastSynced && (
-        <Text style={[styles.lastSynced, { color: colors.mutedForeground }]}>
+        <Text style={[styles.plaidLastSync, { color: colors.mutedForeground }]}>
           Last synced: {new Date(item.lastSynced).toLocaleString()}
           {item.lastImported !== undefined ? `  ·  ${item.lastImported} imported` : ""}
         </Text>
       )}
-
-      <View style={styles.connectedActions}>
-        <TouchableOpacity onPress={handleDisconnect} style={styles.changeEmailBtn}>
-          <Feather name="x-circle" size={13} color={colors.expense} />
-          <Text style={[styles.changeEmailText, { color: colors.expense }]}>Disconnect</Text>
-        </TouchableOpacity>
-      </View>
-
       {syncResult && (
         <View style={[styles.syncResultBox, { backgroundColor: syncResult.error ? colors.expense + "12" : "#10b98112", borderColor: syncResult.error ? colors.expense + "30" : "#10b98130" }]}>
           <Feather name={syncResult.error ? "alert-circle" : "check"} size={13} color={syncResult.error ? colors.expense : "#10b981"} />
@@ -319,208 +377,348 @@ function PlaidItemPanel({ item }: { item: PlaidItem }) {
           </TouchableOpacity>
         </View>
       )}
-
-      <TouchableOpacity
-        style={[styles.syncBtn, { backgroundColor: item.bankColor, opacity: isSyncing ? 0.7 : 1 }]}
-        onPress={handleSync}
-        disabled={isSyncing}
-      >
-        {isSyncing ? <ActivityIndicator size="small" color="#fff" /> : <Feather name="refresh-cw" size={15} color="#fff" />}
-        <Text style={styles.syncBtnText}>{isSyncing ? "Syncing…" : "Sync Now"}</Text>
-      </TouchableOpacity>
+      <View style={{ flexDirection: "row", gap: 10 }}>
+        <TouchableOpacity
+          style={[styles.plaidSyncBtn, { backgroundColor: item.bankColor, opacity: isSyncing ? 0.7 : 1, flex: 1 }]}
+          onPress={handleSync}
+          disabled={isSyncing}
+        >
+          {isSyncing ? <ActivityIndicator size="small" color="#fff" /> : <Feather name="refresh-cw" size={14} color="#fff" />}
+          <Text style={styles.syncBtnText}>{isSyncing ? "Syncing…" : "Sync Now"}</Text>
+        </TouchableOpacity>
+        <TouchableOpacity
+          style={[styles.plaidDisconnectBtn, { borderColor: colors.expense }]}
+          onPress={handleDisconnect}
+        >
+          <Feather name="x-circle" size={14} color={colors.expense} />
+          <Text style={[styles.disconnectText, { color: colors.expense }]}>Disconnect</Text>
+        </TouchableOpacity>
+      </View>
     </View>
   );
 }
 
-// ── Main screen ───────────────────────────────────────────────────────────────
+// ── Connected Institutions Modal ──────────────────────────────────────────────
 
-export default function AccountsScreen() {
+function ConnectedInstitutionsModal({
+  visible,
+  onClose,
+  onAddPlaid,
+  onAddEmail,
+}: {
+  visible: boolean;
+  onClose: () => void;
+  onAddPlaid: () => void;
+  onAddEmail: () => void;
+}) {
   const colors = useColors();
-  const { accounts, deleteAccount, totalBalance, emailSync, disconnectEmail, syncEmailTransactions, isSyncing, plaidSync } = useApp();
-  const [showAdd, setShowAdd] = useState(false);
-  const [showEmailConnect, setShowEmailConnect] = useState(false);
-  const [showPlaidLink, setShowPlaidLink] = useState(false);
+  const insets = useSafeAreaInsets();
+  const { plaidSync, emailSync, disconnectEmail, syncEmailTransactions, isSyncing } = useApp();
   const [syncResult, setSyncResult] = useState<{ imported: number; error?: string } | null>(null);
-  const [showConnectedPanel, setShowConnectedPanel] = useState(true);
 
-  const handleSync = async () => {
+  const handleEmailSync = async () => {
     Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium);
     setSyncResult(null);
-    setShowConnectedPanel(true);
     const result = await syncEmailTransactions();
     setSyncResult(result);
-    if (result.imported > 0) Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
   };
 
-  const handleDisconnect = () => {
+  const handleEmailDisconnect = () => {
     Alert.alert("Disconnect Email", "Remove email sync connection?", [
       { text: "Cancel", style: "cancel" },
-      { text: "Disconnect", style: "destructive", onPress: () => { disconnectEmail(); setSyncResult(null); } },
+      { text: "Disconnect", style: "destructive", onPress: disconnectEmail },
     ]);
   };
 
-  const manualAccounts = accounts.filter((a) => !a.plaidItemId);
-  const plaidAccounts = accounts.filter((a) => !!a.plaidItemId);
+  return (
+    <Modal visible={visible} animationType="slide" presentationStyle="pageSheet" onRequestClose={onClose}>
+      <View style={{ flex: 1, backgroundColor: colors.background }}>
+        <View style={[styles.modalHeader, { paddingTop: (Platform.OS === "web" ? 20 : insets.top) + 16, borderBottomColor: colors.border }]}>
+          <TouchableOpacity onPress={onClose}>
+            <Feather name="x" size={22} color={colors.foreground} />
+          </TouchableOpacity>
+          <Text style={[styles.modalTitle, { color: colors.foreground }]}>Connected Institutions</Text>
+          <View style={{ width: 22 }} />
+        </View>
+        <ScrollView
+          contentContainerStyle={{ padding: 16, gap: 14, paddingBottom: insets.bottom + 40 }}
+          showsVerticalScrollIndicator={false}
+        >
+          {/* Plaid items */}
+          {plaidSync.items.map((item) => (
+            <PlaidItemPanel key={item.itemId} item={item} />
+          ))}
+
+          {/* Email sync */}
+          {emailSync.isConnected && (
+            <View style={[styles.plaidPanel, { backgroundColor: colors.card, borderColor: colors.success + "50" }]}>
+              <View style={styles.plaidPanelTop}>
+                <View style={[styles.plaidIconBg, { backgroundColor: colors.success + "18" }]}>
+                  <Feather name="mail" size={16} color={colors.success} />
+                </View>
+                <View style={{ flex: 1 }}>
+                  <Text style={[styles.plaidBankName, { color: colors.foreground }]}>Email Sync</Text>
+                  <Text style={[styles.plaidSub, { color: colors.mutedForeground }]} numberOfLines={1}>{emailSync.email}</Text>
+                </View>
+              </View>
+              {emailSync.lastSynced && (
+                <Text style={[styles.plaidLastSync, { color: colors.mutedForeground }]}>
+                  Last synced: {new Date(emailSync.lastSynced).toLocaleString()}
+                  {emailSync.lastImported !== undefined ? `  ·  ${emailSync.lastImported} imported` : ""}
+                </Text>
+              )}
+              {syncResult && (
+                <View style={[styles.syncResultBox, { backgroundColor: syncResult.error ? colors.expense + "12" : "#10b98112", borderColor: syncResult.error ? colors.expense + "30" : "#10b98130" }]}>
+                  <Feather name={syncResult.error ? "alert-circle" : "check"} size={13} color={syncResult.error ? colors.expense : "#10b981"} />
+                  <Text style={[styles.syncResultText, { color: syncResult.error ? colors.expense : "#10b981" }]}>
+                    {syncResult.error ? syncResult.error : syncResult.imported > 0 ? `${syncResult.imported} new transaction${syncResult.imported !== 1 ? "s" : ""} imported` : "No new transactions"}
+                  </Text>
+                </View>
+              )}
+              <View style={{ flexDirection: "row", gap: 10 }}>
+                <TouchableOpacity
+                  style={[styles.plaidSyncBtn, { backgroundColor: colors.success, opacity: isSyncing ? 0.7 : 1, flex: 1 }]}
+                  onPress={handleEmailSync}
+                  disabled={isSyncing}
+                >
+                  {isSyncing ? <ActivityIndicator size="small" color="#fff" /> : <Feather name="refresh-cw" size={14} color="#fff" />}
+                  <Text style={styles.syncBtnText}>{isSyncing ? "Scanning…" : "Sync Emails"}</Text>
+                </TouchableOpacity>
+                <TouchableOpacity
+                  style={[styles.plaidDisconnectBtn, { borderColor: colors.expense }]}
+                  onPress={handleEmailDisconnect}
+                >
+                  <Feather name="x-circle" size={14} color={colors.expense} />
+                  <Text style={[styles.disconnectText, { color: colors.expense }]}>Remove</Text>
+                </TouchableOpacity>
+              </View>
+            </View>
+          )}
+
+          {/* Add Plaid bank */}
+          <TouchableOpacity
+            style={[styles.addInstRow, { backgroundColor: colors.card, borderColor: colors.border }]}
+            onPress={onAddPlaid}
+          >
+            <View style={[styles.instIconBg, { backgroundColor: "#10b98118" }]}>
+              <Feather name="link" size={18} color="#10b981" />
+            </View>
+            <View style={{ flex: 1 }}>
+              <Text style={[styles.instRowTitle, { color: colors.foreground }]}>
+                {plaidSync.items.length > 0 ? "Add Another Bank" : "Connect Bank via Plaid"}
+              </Text>
+              <Text style={[styles.instRowSub, { color: colors.mutedForeground }]}>
+                Chase, BMO, CIBC, TD, RBC & more
+              </Text>
+            </View>
+            <Feather name="chevron-right" size={18} color="#10b981" />
+          </TouchableOpacity>
+
+          {/* Add Email sync */}
+          {!emailSync.isConnected && (
+            <TouchableOpacity
+              style={[styles.addInstRow, { backgroundColor: colors.card, borderColor: colors.border }]}
+              onPress={onAddEmail}
+            >
+              <View style={[styles.instIconBg, { backgroundColor: colors.primary + "18" }]}>
+                <Feather name="mail" size={18} color={colors.primary} />
+              </View>
+              <View style={{ flex: 1 }}>
+                <Text style={[styles.instRowTitle, { color: colors.foreground }]}>Connect Email Sync</Text>
+                <Text style={[styles.instRowSub, { color: colors.mutedForeground }]}>Auto-import from bank alert emails</Text>
+              </View>
+              <Feather name="chevron-right" size={18} color={colors.primary} />
+            </TouchableOpacity>
+          )}
+        </ScrollView>
+      </View>
+    </Modal>
+  );
+}
+
+// ── Main Screen ───────────────────────────────────────────────────────────────
+
+const TIME_PERIODS = ["Week", "Month", "Year"] as const;
+type Period = (typeof TIME_PERIODS)[number];
+
+export default function AccountsScreen() {
+  const colors = useColors();
+  const {
+    accounts,
+    deleteAccount,
+    totalBalance,
+    emailSync,
+    plaidSync,
+  } = useApp();
+
+  const [activeView, setActiveView] = useState<"Accounts" | "Trends">("Accounts");
+  const [period, setPeriod] = useState<Period>("Month");
+  const [showPeriodPicker, setShowPeriodPicker] = useState(false);
+  const [showAdd, setShowAdd] = useState(false);
+  const [showEmailConnect, setShowEmailConnect] = useState(false);
+  const [showPlaidLink, setShowPlaidLink] = useState(false);
+  const [showInstitutions, setShowInstitutions] = useState(false);
+
+  const cashAccounts = accounts.filter((a) => a.type === "checking" || a.type === "savings");
+  const creditAccounts = accounts.filter((a) => a.type === "credit");
+  const investAccounts = accounts.filter((a) => a.type === "investment");
+
+  const cashTotal = cashAccounts.reduce((s, a) => s + a.balance, 0);
+  const creditTotal = creditAccounts.reduce((s, a) => s + a.balance, 0);
+  const investTotal = investAccounts.reduce((s, a) => s + a.balance, 0);
+
+  const connectedCount = plaidSync.items.length + (emailSync.isConnected ? 1 : 0);
 
   return (
     <SafeAreaView edges={["top"]} style={[styles.container, { backgroundColor: colors.background }]}>
       <ScrollView
         showsVerticalScrollIndicator={false}
-        contentContainerStyle={[styles.scroll, { paddingBottom: Platform.OS === "web" ? 34 + 84 : 100 }]}
+        contentContainerStyle={{ paddingBottom: Platform.OS === "web" ? 34 + 84 : 100 }}
       >
+        {/* ── Header ── */}
         <View style={[styles.header, { paddingTop: Platform.OS === "web" ? 64 : 12 }]}>
-          <Text style={[styles.title, { color: colors.foreground }]}>Accounts</Text>
-          <TouchableOpacity
-            style={[styles.addBtn, { backgroundColor: colors.primary }]}
-            onPress={() => { Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium); setShowAdd(true); }}
-          >
-            <Feather name="plus" size={20} color="#fff" />
+          <TouchableOpacity hitSlop={8}>
+            <Feather name="menu" size={22} color={colors.foreground} />
           </TouchableOpacity>
+          <Text style={[styles.headerTitle, { color: colors.foreground }]}>Accounts</Text>
+          <View style={{ flexDirection: "row", alignItems: "center", gap: 16 }}>
+            <TouchableOpacity hitSlop={8}>
+              <Feather name="sliders" size={20} color={colors.primary} />
+            </TouchableOpacity>
+            <TouchableOpacity
+              hitSlop={8}
+              onPress={() => { Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium); setShowAdd(true); }}
+            >
+              <Feather name="plus" size={22} color={colors.primary} />
+            </TouchableOpacity>
+          </View>
         </View>
 
-        {/* Net worth card */}
-        <View style={[styles.netWorthCard, { backgroundColor: colors.primary }]}>
-          <Text style={styles.netWorthLabel}>Net Worth</Text>
-          <Text style={styles.netWorthAmount}>
-            ${totalBalance.toLocaleString("en-US", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
+        {/* ── Net Worth ── */}
+        <View style={styles.netWorthSection}>
+          <View style={styles.netWorthTopRow}>
+            <Text style={[styles.netWorthLabel, { color: colors.mutedForeground }]}>Net worth</Text>
+            <TouchableOpacity
+              style={[styles.periodPill, { backgroundColor: colors.muted }]}
+              onPress={() => setShowPeriodPicker(!showPeriodPicker)}
+            >
+              <Text style={[styles.periodText, { color: colors.foreground }]}>{period}</Text>
+              <Feather name="chevron-down" size={13} color={colors.mutedForeground} />
+            </TouchableOpacity>
+          </View>
+          <Text style={[styles.netWorthAmount, { color: colors.foreground }]}>
+            ${Math.abs(totalBalance).toLocaleString("en-US", { minimumFractionDigits: 0, maximumFractionDigits: 0 })}
           </Text>
-          <Text style={styles.netWorthSub}>
-            Across {accounts.length} account{accounts.length !== 1 ? "s" : ""}
-          </Text>
+
+          {/* Period dropdown */}
+          {showPeriodPicker && (
+            <View style={[styles.periodDropdown, { backgroundColor: colors.card, borderColor: colors.border }]}>
+              {TIME_PERIODS.map((p) => (
+                <TouchableOpacity
+                  key={p}
+                  style={[styles.periodOption, period === p && { backgroundColor: colors.primary + "15" }]}
+                  onPress={() => { setPeriod(p); setShowPeriodPicker(false); }}
+                >
+                  <Text style={[styles.periodOptionText, { color: period === p ? colors.primary : colors.foreground }]}>{p}</Text>
+                </TouchableOpacity>
+              ))}
+            </View>
+          )}
         </View>
 
-        {/* ── Sync connections section ── */}
-        <Text style={[styles.sectionLabel, { color: colors.mutedForeground }]}>BANK CONNECTIONS</Text>
+        {/* ── Area Chart ── */}
+        <NetWorthChart balance={totalBalance} colors={colors} />
 
-        {/* Plaid connected items */}
-        {plaidSync.items.map((item) => (
-          <PlaidItemPanel key={item.itemId} item={item} />
-        ))}
+        {/* ── Toggle ── */}
+        <View style={[styles.toggleWrap, { backgroundColor: colors.muted }]}>
+          {(["Accounts", "Trends"] as const).map((v) => (
+            <TouchableOpacity
+              key={v}
+              style={[styles.togglePill, activeView === v && { backgroundColor: colors.background }]}
+              onPress={() => { Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light); setActiveView(v); }}
+            >
+              <Text style={[styles.toggleText, { color: activeView === v ? colors.foreground : colors.mutedForeground }]}>{v}</Text>
+            </TouchableOpacity>
+          ))}
+        </View>
 
-        {/* Connect a bank via Plaid */}
-        <TouchableOpacity
-          style={[styles.emailBanner, { backgroundColor: colors.card, borderColor: colors.border }]}
-          onPress={() => { Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light); setShowPlaidLink(true); }}
-        >
-          <View style={[styles.emailIconBg, { backgroundColor: "#10b98118" }]}>
-            <Feather name="link" size={20} color="#10b981" />
-          </View>
-          <View style={{ flex: 1 }}>
-            <Text style={[styles.emailBannerTitle, { color: colors.foreground }]}>
-              {plaidSync.items.length > 0 ? "Add Another Bank" : "Connect Bank Account"}
-            </Text>
-            <Text style={[styles.emailBannerSub, { color: colors.mutedForeground }]}>
-              Link Chase, BofA, Wells Fargo & more via Plaid
-            </Text>
-          </View>
-          <Feather name="chevron-right" size={18} color="#10b981" />
-        </TouchableOpacity>
-
-        {/* Email sync panel */}
-        {!emailSync.isConnected ? (
-          <TouchableOpacity
-            style={[styles.emailBanner, { backgroundColor: colors.card, borderColor: colors.border }]}
-            onPress={() => setShowEmailConnect(true)}
-          >
-            <View style={[styles.emailIconBg, { backgroundColor: colors.primary + "18" }]}>
-              <Feather name="mail" size={20} color={colors.primary} />
-            </View>
-            <View style={{ flex: 1 }}>
-              <Text style={[styles.emailBannerTitle, { color: colors.foreground }]}>Connect Email Sync</Text>
-              <Text style={[styles.emailBannerSub, { color: colors.mutedForeground }]}>
-                Auto-import from bank alert emails
-              </Text>
-            </View>
-            <Feather name="chevron-right" size={18} color={colors.primary} />
-          </TouchableOpacity>
-        ) : showConnectedPanel ? (
-          <View style={[styles.connectedPanel, { backgroundColor: colors.card, borderColor: colors.border }]}>
-            <View style={styles.connectedTop}>
-              <View style={[styles.connectedIconBg, { backgroundColor: colors.success + "18" }]}>
-                <Feather name="check-circle" size={18} color={colors.success} />
+        {activeView === "Accounts" ? (
+          <View style={{ paddingHorizontal: 16, paddingTop: 16, gap: 16 }}>
+            {/* Connected Institutions row */}
+            <TouchableOpacity
+              style={[styles.instRow, { backgroundColor: colors.card, borderColor: colors.border }]}
+              onPress={() => { Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light); setShowInstitutions(true); }}
+            >
+              <View style={[styles.instIconBg, { backgroundColor: colors.primary + "15" }]}>
+                <Feather name="home" size={17} color={colors.primary} />
               </View>
-              <View style={{ flex: 1 }}>
-                <Text style={[styles.connectedTitle, { color: colors.foreground }]}>Email Synced</Text>
-                <Text style={[styles.connectedEmail, { color: colors.mutedForeground }]} numberOfLines={1}>{emailSync.email}</Text>
-              </View>
-              <TouchableOpacity onPress={() => setShowConnectedPanel(false)} hitSlop={{ top: 10, bottom: 10, left: 10, right: 10 }}>
-                <Feather name="x" size={18} color={colors.mutedForeground} />
-              </TouchableOpacity>
-            </View>
-            {emailSync.lastSynced && (
-              <Text style={[styles.lastSynced, { color: colors.mutedForeground }]}>
-                Last synced: {new Date(emailSync.lastSynced).toLocaleString()}
-                {emailSync.lastEmailsScanned !== undefined ? `  ·  ${emailSync.lastEmailsScanned} emails scanned` : ""}
-                {emailSync.lastImported !== undefined ? `  ·  ${emailSync.lastImported} found` : ""}
-              </Text>
+              <Text style={[styles.instText, { color: colors.foreground }]}>Connected Institutions</Text>
+              {connectedCount > 0 && (
+                <View style={[styles.instCountBadge, { backgroundColor: colors.primary }]}>
+                  <Text style={styles.instCountText}>{connectedCount}</Text>
+                </View>
+              )}
+              <Feather name="chevron-right" size={18} color={colors.mutedForeground} />
+            </TouchableOpacity>
+
+            {/* Cash group */}
+            {cashAccounts.length > 0 && (
+              <AccountGroup
+                title="Cash"
+                accounts={cashAccounts}
+                total={cashTotal}
+                onDelete={deleteAccount}
+              />
             )}
-            <View style={styles.connectedActions}>
-              <TouchableOpacity onPress={() => setShowEmailConnect(true)} style={styles.changeEmailBtn}>
-                <Feather name="edit-2" size={13} color={colors.primary} />
-                <Text style={[styles.changeEmailText, { color: colors.primary }]}>Change email</Text>
-              </TouchableOpacity>
-              <TouchableOpacity onPress={handleDisconnect} style={styles.changeEmailBtn}>
-                <Feather name="x-circle" size={13} color={colors.expense} />
-                <Text style={[styles.changeEmailText, { color: colors.expense }]}>Disconnect</Text>
-              </TouchableOpacity>
-            </View>
-            {syncResult && (
-              <View style={[styles.syncResultBox, { backgroundColor: syncResult.error ? colors.expense + "12" : colors.success + "12", borderColor: syncResult.error ? colors.expense + "30" : colors.success + "30" }]}>
-                <Feather name={syncResult.error ? "alert-circle" : "check"} size={13} color={syncResult.error ? colors.expense : colors.success} />
-                <Text style={[styles.syncResultText, { color: syncResult.error ? colors.expense : colors.success }]}>
-                  {syncResult.error ? syncResult.error : syncResult.imported > 0 ? `${syncResult.imported} new transaction${syncResult.imported !== 1 ? "s" : ""} imported` : "No new transactions found"}
-                </Text>
-                <TouchableOpacity onPress={() => setSyncResult(null)} hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }} style={{ marginLeft: "auto" }}>
-                  <Feather name="x" size={13} color={syncResult.error ? colors.expense : colors.success} />
+
+            {/* Credit group */}
+            {creditAccounts.length > 0 && (
+              <AccountGroup
+                title="Credit"
+                accounts={creditAccounts}
+                total={creditTotal}
+                onDelete={deleteAccount}
+              />
+            )}
+
+            {/* Investment group */}
+            {investAccounts.length > 0 && (
+              <AccountGroup
+                title="Investment"
+                accounts={investAccounts}
+                total={investTotal}
+                onDelete={deleteAccount}
+              />
+            )}
+
+            {/* Empty state */}
+            {accounts.length === 0 && (
+              <View style={[styles.emptyWrap, { backgroundColor: colors.card, borderColor: colors.border }]}>
+                <Feather name="credit-card" size={36} color={colors.mutedForeground} />
+                <Text style={[styles.emptyText, { color: colors.mutedForeground }]}>No accounts yet</Text>
+                <TouchableOpacity onPress={() => setShowAdd(true)}>
+                  <Text style={[styles.emptyAction, { color: colors.primary }]}>+ Add Account</Text>
                 </TouchableOpacity>
               </View>
             )}
-            <TouchableOpacity
-              style={[styles.syncBtn, { backgroundColor: colors.primary, opacity: isSyncing ? 0.7 : 1 }]}
-              onPress={handleSync}
-              disabled={isSyncing}
-            >
-              {isSyncing ? <ActivityIndicator size="small" color="#fff" /> : <Feather name="refresh-cw" size={15} color="#fff" />}
-              <Text style={styles.syncBtnText}>{isSyncing ? "Scanning emails..." : "Sync Now"}</Text>
-            </TouchableOpacity>
+
+            {/* Add account */}
+            {accounts.length > 0 && (
+              <TouchableOpacity
+                style={[styles.addAcctBtn, { borderColor: colors.border }]}
+                onPress={() => { Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium); setShowAdd(true); }}
+              >
+                <Feather name="plus" size={16} color={colors.primary} />
+                <Text style={[styles.addAcctText, { color: colors.primary }]}>Add Account</Text>
+              </TouchableOpacity>
+            )}
           </View>
         ) : (
-          <TouchableOpacity
-            style={[styles.emailBanner, { backgroundColor: colors.card, borderColor: colors.border }]}
-            onPress={() => setShowConnectedPanel(true)}
-          >
-            <View style={[styles.emailIconBg, { backgroundColor: colors.success + "18" }]}>
-              <Feather name="check-circle" size={20} color={colors.success} />
+          <View style={{ paddingHorizontal: 16, paddingTop: 16 }}>
+            <View style={[styles.trendsPlaceholder, { backgroundColor: colors.card, borderColor: colors.border }]}>
+              <Feather name="trending-up" size={36} color={colors.mutedForeground} />
+              <Text style={[styles.emptyText, { color: colors.mutedForeground }]}>Balance trends coming soon</Text>
             </View>
-            <View style={{ flex: 1 }}>
-              <Text style={[styles.emailBannerTitle, { color: colors.foreground }]}>Email Connected</Text>
-              <Text style={[styles.emailBannerSub, { color: colors.mutedForeground }]} numberOfLines={1}>{emailSync.email}</Text>
-            </View>
-            <Feather name="chevron-right" size={18} color={colors.mutedForeground} />
-          </TouchableOpacity>
-        )}
-
-        {/* Plaid-linked accounts */}
-        {plaidAccounts.length > 0 && (
-          <>
-            <Text style={[styles.sectionLabel, { color: colors.mutedForeground, marginTop: 6 }]}>LINKED ACCOUNTS</Text>
-            {plaidAccounts.map((a) => (
-              <AccountRow key={a.id} account={a} onDelete={() => deleteAccount(a.id)} />
-            ))}
-          </>
-        )}
-
-        {/* Manual accounts */}
-        <Text style={[styles.sectionLabel, { color: colors.mutedForeground, marginTop: 6 }]}>
-          {plaidAccounts.length > 0 ? "MANUAL ACCOUNTS" : "ALL ACCOUNTS"}
-        </Text>
-        {manualAccounts.map((a) => (
-          <AccountRow key={a.id} account={a} onDelete={() => deleteAccount(a.id)} />
-        ))}
-        {manualAccounts.length === 0 && plaidAccounts.length === 0 && (
-          <View style={[styles.empty, { backgroundColor: colors.card }]}>
-            <Feather name="credit-card" size={36} color={colors.mutedForeground} />
-            <Text style={[styles.emptyText, { color: colors.mutedForeground }]}>No accounts yet</Text>
           </View>
         )}
       </ScrollView>
@@ -528,55 +726,131 @@ export default function AccountsScreen() {
       <AddAccountModal visible={showAdd} onClose={() => setShowAdd(false)} />
       {showEmailConnect && <EmailConnectModal onClose={() => setShowEmailConnect(false)} />}
       {showPlaidLink && <PlaidLinkModal onClose={() => setShowPlaidLink(false)} />}
+      <ConnectedInstitutionsModal
+        visible={showInstitutions}
+        onClose={() => setShowInstitutions(false)}
+        onAddPlaid={() => {
+          setShowInstitutions(false);
+          setTimeout(() => setShowPlaidLink(true), 350);
+        }}
+        onAddEmail={() => {
+          setShowInstitutions(false);
+          setTimeout(() => setShowEmailConnect(true), 350);
+        }}
+      />
     </SafeAreaView>
   );
 }
 
+// ── Styles ────────────────────────────────────────────────────────────────────
+
 const styles = StyleSheet.create({
   container: { flex: 1 },
-  scroll: { paddingHorizontal: 16, gap: 10 },
-  header: { flexDirection: "row", justifyContent: "space-between", alignItems: "center" },
-  title: { fontSize: 24, fontFamily: "Inter_700Bold" },
-  addBtn: { width: 40, height: 40, borderRadius: 12, alignItems: "center", justifyContent: "center" },
-  netWorthCard: { borderRadius: 20, padding: 24, gap: 4, marginBottom: 4 },
-  netWorthLabel: { color: "rgba(255,255,255,0.75)", fontSize: 13, fontFamily: "Inter_500Medium" },
-  netWorthAmount: { color: "#fff", fontSize: 36, fontFamily: "Inter_700Bold", letterSpacing: -0.5 },
-  netWorthSub: { color: "rgba(255,255,255,0.7)", fontSize: 13, fontFamily: "Inter_400Regular", marginTop: 4 },
-  sectionLabel: { fontSize: 11, fontFamily: "Inter_600SemiBold", letterSpacing: 0.8, marginTop: 6, marginBottom: 2 },
-  emailBanner: { flexDirection: "row", alignItems: "center", padding: 14, borderRadius: 14, borderWidth: 1, gap: 12 },
-  emailIconBg: { width: 40, height: 40, borderRadius: 12, alignItems: "center", justifyContent: "center" },
-  emailBannerTitle: { fontSize: 14, fontFamily: "Inter_600SemiBold" },
-  emailBannerSub: { fontSize: 12, fontFamily: "Inter_400Regular", marginTop: 2 },
-  connectedPanel: { borderRadius: 14, borderWidth: 1, padding: 14, gap: 10 },
-  connectedTop: { flexDirection: "row", alignItems: "center", gap: 10 },
-  connectedIconBg: { width: 36, height: 36, borderRadius: 10, alignItems: "center", justifyContent: "center" },
-  connectedTitle: { fontSize: 14, fontFamily: "Inter_600SemiBold" },
-  connectedEmail: { fontSize: 12, fontFamily: "Inter_400Regular", marginTop: 1 },
-  lastSynced: { fontSize: 11, fontFamily: "Inter_400Regular" },
-  syncResultBox: { flexDirection: "row", alignItems: "flex-start", gap: 7, padding: 10, borderRadius: 8, borderWidth: 1 },
-  syncResultText: { flex: 1, fontSize: 12, fontFamily: "Inter_500Medium", lineHeight: 17 },
-  connectedActions: { flexDirection: "row", gap: 16 },
-  changeEmailBtn: { flexDirection: "row", alignItems: "center", gap: 5 },
-  changeEmailText: { fontSize: 12, fontFamily: "Inter_500Medium" },
-  syncBtn: { flexDirection: "row", alignItems: "center", justifyContent: "center", gap: 8, paddingVertical: 11, borderRadius: 10 },
-  syncBtnText: { color: "#fff", fontSize: 14, fontFamily: "Inter_600SemiBold" },
+
+  // Header
+  header: {
+    flexDirection: "row",
+    justifyContent: "space-between",
+    alignItems: "center",
+    paddingHorizontal: 16,
+    paddingBottom: 10,
+  },
+  headerTitle: { fontSize: 22, fontFamily: "Inter_700Bold" },
+
+  // Net worth
+  netWorthSection: { paddingHorizontal: 16, paddingTop: 8, gap: 4 },
+  netWorthTopRow: { flexDirection: "row", justifyContent: "space-between", alignItems: "center" },
+  netWorthLabel: { fontSize: 13, fontFamily: "Inter_500Medium" },
+  netWorthAmount: { fontSize: 42, fontFamily: "Inter_700Bold", letterSpacing: -1, marginTop: 2 },
+  periodPill: {
+    flexDirection: "row", alignItems: "center", gap: 4,
+    paddingHorizontal: 12, paddingVertical: 6, borderRadius: 20,
+  },
+  periodText: { fontSize: 13, fontFamily: "Inter_500Medium" },
+  periodDropdown: {
+    position: "absolute", right: 0, top: 36,
+    borderRadius: 12, borderWidth: 1, overflow: "hidden", zIndex: 99,
+    shadowColor: "#000", shadowOffset: { width: 0, height: 4 },
+    shadowOpacity: 0.1, shadowRadius: 12, elevation: 8,
+  },
+  periodOption: { paddingHorizontal: 20, paddingVertical: 11 },
+  periodOptionText: { fontSize: 14, fontFamily: "Inter_500Medium" },
+
+  // Toggle
+  toggleWrap: {
+    flexDirection: "row",
+    marginHorizontal: 16,
+    marginTop: 16,
+    borderRadius: 50,
+    padding: 3,
+  },
+  togglePill: {
+    flex: 1, alignItems: "center", paddingVertical: 8,
+    borderRadius: 50,
+  },
+  toggleText: { fontSize: 14, fontFamily: "Inter_600SemiBold" },
+
+  // Connected institutions row
+  instRow: {
+    flexDirection: "row", alignItems: "center", gap: 12,
+    padding: 14, borderRadius: 14, borderWidth: 1,
+  },
+  instIconBg: { width: 38, height: 38, borderRadius: 11, alignItems: "center", justifyContent: "center" },
+  instText: { flex: 1, fontSize: 15, fontFamily: "Inter_600SemiBold" },
+  instCountBadge: { width: 22, height: 22, borderRadius: 11, alignItems: "center", justifyContent: "center" },
+  instCountText: { color: "#fff", fontSize: 11, fontFamily: "Inter_700Bold" },
+
+  // Account row
+  acctRow: { flexDirection: "row", alignItems: "center", paddingVertical: 13, paddingHorizontal: 14, gap: 12 },
+  acctBadge: { width: 42, height: 42, borderRadius: 21, alignItems: "center", justifyContent: "center" },
+  acctBadgeText: { color: "#fff", fontSize: 13, fontFamily: "Inter_700Bold" },
+  acctInfo: { flex: 1, gap: 2 },
+  acctName: { fontSize: 15, fontFamily: "Inter_600SemiBold" },
+  acctSub: { fontSize: 12, fontFamily: "Inter_400Regular" },
+  acctBal: { fontSize: 15, fontFamily: "Inter_600SemiBold" },
+
+  // Account group
+  groupHeader: {
+    flexDirection: "row", justifyContent: "space-between",
+    alignItems: "center", marginBottom: 8,
+  },
+  groupTitle: { fontSize: 17, fontFamily: "Inter_700Bold" },
+  groupTotal: { fontSize: 17, fontFamily: "Inter_700Bold" },
+  groupCard: { borderRadius: 16, borderWidth: 1, overflow: "hidden" },
+
+  // Empty / add
+  emptyWrap: { padding: 40, borderRadius: 16, borderWidth: 1, alignItems: "center", gap: 12 },
+  emptyText: { fontSize: 15, fontFamily: "Inter_400Regular" },
+  emptyAction: { fontSize: 14, fontFamily: "Inter_600SemiBold" },
+  addAcctBtn: {
+    flexDirection: "row", alignItems: "center", justifyContent: "center",
+    gap: 8, paddingVertical: 14, borderRadius: 14, borderWidth: 1,
+  },
+  addAcctText: { fontSize: 15, fontFamily: "Inter_600SemiBold" },
+  trendsPlaceholder: { padding: 48, borderRadius: 16, borderWidth: 1, alignItems: "center", gap: 12 },
+
+  // Plaid panel
+  plaidPanel: { borderRadius: 14, borderWidth: 1, padding: 14, gap: 10 },
+  plaidPanelTop: { flexDirection: "row", alignItems: "center", gap: 10 },
+  plaidIconBg: { width: 36, height: 36, borderRadius: 10, alignItems: "center", justifyContent: "center" },
+  plaidBankName: { fontSize: 14, fontFamily: "Inter_600SemiBold" },
+  plaidSub: { fontSize: 12, fontFamily: "Inter_400Regular", marginTop: 1 },
   plaidBadge: { paddingHorizontal: 6, paddingVertical: 2, borderRadius: 5 },
   plaidBadgeText: { fontSize: 10, fontFamily: "Inter_600SemiBold" },
-  accountRow: { flexDirection: "row", alignItems: "center", padding: 14, borderRadius: 14, gap: 12 },
-  accountNameRow: { flexDirection: "row", alignItems: "center", gap: 7 },
-  accountIcon: { width: 44, height: 44, borderRadius: 12, alignItems: "center", justifyContent: "center" },
-  accountInfo: { flex: 1, gap: 3 },
-  accountName: { fontSize: 15, fontFamily: "Inter_600SemiBold" },
-  accountBank: { fontSize: 12, fontFamily: "Inter_400Regular" },
-  typeBadge: { alignSelf: "flex-start", paddingHorizontal: 8, paddingVertical: 3, borderRadius: 6, marginTop: 2 },
-  typeText: { fontSize: 11, fontFamily: "Inter_500Medium" },
-  accountRight: { alignItems: "flex-end", gap: 8 },
-  accountBalance: { fontSize: 16, fontFamily: "Inter_700Bold" },
-  syncBadge: { flexDirection: "row", alignItems: "center", gap: 3, paddingHorizontal: 6, paddingVertical: 2, borderRadius: 5 },
-  syncBadgeText: { fontSize: 9, fontFamily: "Inter_600SemiBold" },
-  empty: { padding: 40, borderRadius: 14, alignItems: "center", gap: 12 },
-  emptyText: { fontSize: 15, fontFamily: "Inter_400Regular" },
-  // Email modal
+  plaidLastSync: { fontSize: 11, fontFamily: "Inter_400Regular" },
+  plaidSyncBtn: { flexDirection: "row", alignItems: "center", justifyContent: "center", gap: 6, paddingVertical: 10, borderRadius: 10 },
+  plaidDisconnectBtn: { flexDirection: "row", alignItems: "center", justifyContent: "center", gap: 6, paddingVertical: 10, paddingHorizontal: 14, borderRadius: 10, borderWidth: 1 },
+  syncBtnText: { color: "#fff", fontSize: 13, fontFamily: "Inter_600SemiBold" },
+  disconnectText: { fontSize: 13, fontFamily: "Inter_500Medium" },
+  syncResultBox: { flexDirection: "row", alignItems: "flex-start", gap: 7, padding: 10, borderRadius: 8, borderWidth: 1 },
+  syncResultText: { flex: 1, fontSize: 12, fontFamily: "Inter_500Medium", lineHeight: 17 },
+
+  // Institutions modal row
+  addInstRow: { flexDirection: "row", alignItems: "center", gap: 12, padding: 14, borderRadius: 14, borderWidth: 1 },
+  instRowTitle: { fontSize: 14, fontFamily: "Inter_600SemiBold" },
+  instRowSub: { fontSize: 12, fontFamily: "Inter_400Regular", marginTop: 2 },
+
+  // Modals (email)
   modalHeader: { flexDirection: "row", justifyContent: "space-between", alignItems: "center", paddingHorizontal: 20, paddingBottom: 16, borderBottomWidth: 1 },
   modalTitle: { fontSize: 17, fontFamily: "Inter_600SemiBold" },
   modalContent: { padding: 20, gap: 16 },
