@@ -20,6 +20,9 @@ export const features = {
   /** Email/Gmail sync for auto-importing bank transactions */
   emailSync: flag("FEATURE_EMAIL_SYNC"),
 
+  /** Plaid bank account sync */
+  plaidSync: flag("FEATURE_PLAID_SYNC"),
+
   /** Manual transaction entry */
   manualTransactions: flag("FEATURE_MANUAL_TRANSACTIONS"),
 

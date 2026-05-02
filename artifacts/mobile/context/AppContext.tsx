@@ -475,33 +475,78 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
       if (!item) return { imported: 0, error: "Bank not found" };
 
       setIsSyncing(true);
-      // Simulate a network delay + mock new transactions
-      await new Promise((r) => setTimeout(r, 1800));
 
-      const plaidAccounts = accounts.filter((a) => item.accountIds.includes(a.id));
-      if (plaidAccounts.length === 0) { setIsSyncing(false); return { imported: 0, error: "No linked accounts" }; }
+      try {
+        const res = await apiCall(
+          `/api/plaid/sync/${itemId}`,
+          "POST",
+          householdIdRef.current,
+          deviceIdRef.current
+        );
 
-      // Generate a few realistic mock transactions since last sync
-      const since = item.lastSynced ? new Date(item.lastSynced) : new Date(Date.now() - 7 * 86400000);
-      const mocked = generateMockPlaidTransactions(plaidAccounts, since);
+        if (!res) {
+          setIsSyncing(false);
+          return { imported: 0, error: "Network error. Could not reach server." };
+        }
 
-      let imported = 0;
-      setTransactions((prev) => {
-        const existingKeys = new Set(prev.map(dedupKey));
-        const fresh = mocked.filter((t) => !existingKeys.has(dedupKey(t)));
-        imported = fresh.length;
-        return [...fresh, ...prev];
-      });
+        const data = await res.json();
 
-      setPlaidSync((prev) => ({
-        items: prev.items.map((i) =>
-          i.itemId === itemId
-            ? { ...i, lastSynced: new Date().toISOString(), lastImported: imported }
-            : i
-        ),
-      }));
-      setIsSyncing(false);
-      return { imported };
+        if (!res.ok) {
+          setIsSyncing(false);
+          return { imported: 0, error: data.error ?? "Sync failed" };
+        }
+
+        // Build map of plaidAccountId → local account id
+        const plaidAccounts = accounts.filter((a) => item.accountIds.includes(a.id));
+        const plaidAccMap: Record<string, string> = {};
+        plaidAccounts.forEach((a) => {
+          if (a.plaidAccountId) plaidAccMap[a.plaidAccountId] = a.id;
+        });
+
+        let imported = 0;
+        if (Array.isArray(data.transactions) && data.transactions.length > 0) {
+          const newTxs: Transaction[] = (data.transactions as any[]).map((t) => ({
+            id: genId(),
+            title: t.title,
+            amount: t.amount,
+            type: t.type as "income" | "expense",
+            category: t.category ?? "Other",
+            accountId: plaidAccMap[t.accountId] ?? plaidAccounts[0]?.id ?? t.accountId,
+            date: t.date,
+            source: "plaid" as const,
+            bank: t.bank,
+          }));
+
+          setTransactions((prev) => {
+            const existingKeys = new Set(prev.map(dedupKey));
+            const fresh = newTxs.filter((t) => !existingKeys.has(dedupKey(t)));
+            imported = fresh.length;
+            if (fresh.length > 0) {
+              apiCall(
+                "/api/transactions/bulk",
+                "POST",
+                householdIdRef.current,
+                deviceIdRef.current,
+                { transactions: fresh }
+              );
+            }
+            return [...fresh, ...prev];
+          });
+        }
+
+        setPlaidSync((prev) => ({
+          items: prev.items.map((i) =>
+            i.itemId === itemId
+              ? { ...i, lastSynced: new Date().toISOString(), lastImported: imported }
+              : i
+          ),
+        }));
+        setIsSyncing(false);
+        return { imported };
+      } catch {
+        setIsSyncing(false);
+        return { imported: 0, error: "Sync failed unexpectedly" };
+      }
     },
     [plaidSync, accounts]
   );
@@ -509,11 +554,19 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
   const disconnectPlaid = useCallback((itemId: string) => {
     const item = plaidSync.items.find((i) => i.itemId === itemId);
     if (item) {
-      // Remove linked accounts and their transactions
       setAccounts((prev) => prev.filter((a) => !item.accountIds.includes(a.id)));
-      setTransactions((prev) => prev.filter((t) => !item.accountIds.includes(t.accountId) || t.source !== "plaid"));
+      setTransactions((prev) =>
+        prev.filter((t) => !item.accountIds.includes(t.accountId) || t.source !== "plaid")
+      );
     }
     setPlaidSync((prev) => ({ items: prev.items.filter((i) => i.itemId !== itemId) }));
+    // Best-effort: remove access token from server
+    apiCall(
+      `/api/plaid/disconnect/${itemId}`,
+      "DELETE",
+      householdIdRef.current,
+      deviceIdRef.current
+    );
   }, [plaidSync]);
 
   // ── Computed values ───────────────────────────────────────────────────────

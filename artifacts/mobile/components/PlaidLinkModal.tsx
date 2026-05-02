@@ -1,6 +1,6 @@
 import { Feather } from "@expo/vector-icons";
 import * as Haptics from "expo-haptics";
-import React, { useState } from "react";
+import React, { useEffect, useRef, useState } from "react";
 import {
   ActivityIndicator,
   Modal,
@@ -18,13 +18,12 @@ import {
   Account,
   PLAID_BANKS,
   PlaidItem,
-  generateMockPlaidAccounts,
-  generateMockPlaidTransactions,
+  getApiBase,
   useApp,
 } from "@/context/AppContext";
 import { useColors } from "@/hooks/useColors";
 
-type Step = "search" | "bank" | "credentials" | "connecting" | "accounts" | "success";
+type Step = "search" | "opening" | "accounts" | "importing" | "success" | "error";
 
 interface DiscoveredAccount {
   plaidAccountId: string;
@@ -35,6 +34,17 @@ interface DiscoveredAccount {
   selected: boolean;
 }
 
+interface ServerTransaction {
+  plaidTransactionId: string;
+  title: string;
+  amount: number;
+  type: "income" | "expense";
+  category: string;
+  date: string;
+  accountId: string;
+  bank: string;
+}
+
 const ACCOUNT_COLORS: Record<string, string> = {
   checking: "#3b82f6",
   savings: "#10b981",
@@ -42,120 +52,230 @@ const ACCOUNT_COLORS: Record<string, string> = {
   investment: "#8b5cf6",
 };
 
+// Plaid JS SDK on web
+declare global {
+  interface Window {
+    Plaid?: {
+      create(opts: {
+        token: string;
+        onSuccess: (publicToken: string, metadata: unknown) => void;
+        onExit: (err: unknown, metadata: unknown) => void;
+      }): { open(): void; destroy?(): void };
+    };
+  }
+}
+
+function loadPlaidScript(): Promise<void> {
+  return new Promise((resolve, reject) => {
+    if (window.Plaid) { resolve(); return; }
+    const existing = document.getElementById("plaid-link-script");
+    if (existing) { existing.addEventListener("load", () => resolve()); return; }
+    const script = document.createElement("script");
+    script.id = "plaid-link-script";
+    script.src = "https://cdn.plaid.com/link/v2/stable/link.js";
+    script.onload = () => resolve();
+    script.onerror = () => reject(new Error("Failed to load Plaid Link SDK"));
+    document.head.appendChild(script);
+  });
+}
+
 export default function PlaidLinkModal({ onClose }: { onClose: () => void }) {
   const colors = useColors();
   const insets = useSafeAreaInsets();
-  const { connectPlaid } = useApp();
+  const { connectPlaid, deviceId, householdId } = useApp();
 
   const [step, setStep] = useState<Step>("search");
   const [query, setQuery] = useState("");
-  const [selectedBank, setSelectedBank] = useState<typeof PLAID_BANKS[0] | null>(null);
-  const [username, setUsername] = useState("");
-  const [password, setPassword] = useState("");
-  const [showPassword, setShowPassword] = useState(false);
-  const [credError, setCredError] = useState("");
-  const [discovered, setDiscovered] = useState<DiscoveredAccount[]>([]);
-  const [importResult, setImportResult] = useState<{ accounts: number; transactions: number } | null>(null);
+  const [selectedBank, setSelectedBank] = useState<(typeof PLAID_BANKS)[0] | null>(null);
+  const [errorMsg, setErrorMsg] = useState("");
   const [connectingMsg, setConnectingMsg] = useState("Connecting to your bank…");
+  const [discovered, setDiscovered] = useState<DiscoveredAccount[]>([]);
+  const [serverTransactions, setServerTransactions] = useState<ServerTransaction[]>([]);
+  const [importResult, setImportResult] = useState<{ accounts: number; transactions: number } | null>(null);
+  const [plaidItemId, setPlaidItemId] = useState("");
+  const plaidHandlerRef = useRef<ReturnType<NonNullable<Window["Plaid"]>["create"]> | null>(null);
 
   const filteredBanks = query.trim()
     ? PLAID_BANKS.filter((b) => b.name.toLowerCase().includes(query.toLowerCase()))
     : PLAID_BANKS;
 
-  const handleBankSelect = (bank: typeof PLAID_BANKS[0]) => {
-    Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
-    setSelectedBank(bank);
-    setUsername("");
-    setPassword("");
-    setCredError("");
-    setStep("credentials");
-  };
+  // On unmount destroy Plaid handler
+  useEffect(() => {
+    return () => { plaidHandlerRef.current?.destroy?.(); };
+  }, []);
 
-  const handleConnect = async () => {
-    if (!username.trim()) { setCredError("Please enter your username."); return; }
-    if (password.length < 4) { setCredError("Please enter your password."); return; }
-    setCredError("");
-    setStep("connecting");
-
-    const msgs = [
-      "Connecting to your bank…",
-      "Verifying credentials…",
-      "Discovering accounts…",
-      "Loading recent transactions…",
-    ];
-    for (let i = 0; i < msgs.length; i++) {
-      await new Promise((r) => setTimeout(r, 700));
-      setConnectingMsg(msgs[i]);
+  // ── Bank selection → create link token → open Plaid Link ─────────────────
+  const handleBankSelect = async (bank: (typeof PLAID_BANKS)[0]) => {
+    if (Platform.OS !== "web") {
+      setErrorMsg("Bank linking via Plaid is available in the web version of the app.");
+      setSelectedBank(bank);
+      setStep("error");
+      return;
     }
 
-    // Generate mock discovered accounts
-    const raw = generateMockPlaidAccounts(selectedBank!.id, selectedBank!);
-    setDiscovered(raw.map((a) => ({ ...a, selected: true })));
-    Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
-    setStep("accounts");
+    Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
+    setSelectedBank(bank);
+    setErrorMsg("");
+    setStep("opening");
+    setConnectingMsg("Opening secure bank link…");
+
+    try {
+      // 1. Get link token from server
+      const tokenRes = await fetch(`${getApiBase()}/api/plaid/create-link-token`, {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          "X-Household-ID": householdId,
+          "X-Device-ID": deviceId,
+        },
+      });
+      const tokenData = await tokenRes.json();
+
+      if (!tokenRes.ok) {
+        setErrorMsg(tokenData.error ?? "Failed to start bank link.");
+        setStep("error");
+        return;
+      }
+
+      const linkToken = tokenData.link_token as string;
+
+      // 2. Load Plaid JS SDK and open Link
+      await loadPlaidScript();
+
+      if (!window.Plaid) {
+        setErrorMsg("Plaid Link SDK failed to load. Check your internet connection.");
+        setStep("error");
+        return;
+      }
+
+      plaidHandlerRef.current = window.Plaid.create({
+        token: linkToken,
+        onSuccess: (publicToken) => {
+          handlePublicToken(publicToken, bank);
+        },
+        onExit: (_err) => {
+          // User closed Plaid Link without completing
+          setStep("search");
+        },
+      });
+
+      plaidHandlerRef.current.open();
+      // Plaid Link overlay is now visible — our modal stays beneath it
+    } catch (err: unknown) {
+      const msg = err instanceof Error ? err.message : "Unknown error";
+      setErrorMsg(msg);
+      setStep("error");
+    }
+  };
+
+  // ── Exchange public token → real accounts + transactions ──────────────────
+  const handlePublicToken = async (publicToken: string, bank: (typeof PLAID_BANKS)[0]) => {
+    setStep("opening");
+    let msgIdx = 0;
+    const msgs = ["Importing your accounts…", "Loading recent transactions…", "Almost done…"];
+    setConnectingMsg(msgs[0]);
+    const msgTimer = setInterval(() => {
+      msgIdx = (msgIdx + 1) % msgs.length;
+      setConnectingMsg(msgs[msgIdx]);
+    }, 1400);
+
+    try {
+      const res = await fetch(`${getApiBase()}/api/plaid/exchange-token`, {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          "X-Household-ID": householdId,
+          "X-Device-ID": deviceId,
+        },
+        body: JSON.stringify({
+          public_token: publicToken,
+          bank_name: bank.name,
+          bank_color: bank.color,
+        }),
+      });
+
+      clearInterval(msgTimer);
+      const data = await res.json();
+
+      if (!res.ok) {
+        setErrorMsg(data.error ?? "Failed to link bank account.");
+        setStep("error");
+        return;
+      }
+
+      setPlaidItemId(data.itemId as string);
+
+      const accts: DiscoveredAccount[] = (
+        data.accounts as Array<{
+          plaidAccountId: string;
+          name: string;
+          type: "checking" | "savings" | "credit" | "investment";
+          balance: number;
+          lastFour: string;
+        }>
+      ).map((a) => ({ ...a, selected: true }));
+
+      setDiscovered(accts);
+      setServerTransactions(data.transactions as ServerTransaction[]);
+      Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
+      setStep("accounts");
+    } catch {
+      clearInterval(msgTimer);
+      setErrorMsg("Network error during account import.");
+      setStep("error");
+    }
   };
 
   const toggleAccount = (plaidAccountId: string) => {
     Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
     setDiscovered((prev) =>
-      prev.map((a) => a.plaidAccountId === plaidAccountId ? { ...a, selected: !a.selected } : a)
+      prev.map((a) => (a.plaidAccountId === plaidAccountId ? { ...a, selected: !a.selected } : a))
     );
   };
 
+  // ── Confirm account selection → add to app ────────────────────────────────
   const handleImport = async () => {
     const selected = discovered.filter((a) => a.selected);
-    if (selected.length === 0) { return; }
+    if (selected.length === 0) return;
+
     Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium);
-    setStep("connecting");
-    setConnectingMsg("Importing transactions…");
+    setStep("importing");
+    setConnectingMsg("Saving accounts…");
 
-    await new Promise((r) => setTimeout(r, 1200));
-
-    const itemId = `plaid_${selectedBank!.id}_${Date.now().toString(36)}`;
     const newAccounts: Omit<Account, "id">[] = selected.map((a) => ({
       name: a.name,
       bank: selectedBank!.name,
       balance: a.balance,
       type: a.type,
-      color: ACCOUNT_COLORS[a.type] || selectedBank!.color,
+      color: ACCOUNT_COLORS[a.type] ?? selectedBank!.color,
       lastFour: a.lastFour,
-      plaidItemId: itemId,
+      plaidItemId,
       plaidAccountId: a.plaidAccountId,
     }));
 
-    // Generate initial transactions (30 days back)
-    const tempAccForGen = selected.map((a) => ({
-      id: a.plaidAccountId,
-      name: a.name,
-      bank: selectedBank!.name,
-      balance: a.balance,
-      type: a.type,
-      color: selectedBank!.color,
-      lastFour: a.lastFour,
-    }));
-    const since = new Date(Date.now() - 30 * 86400000);
-    // Generate more initial transactions (8–14)
-    const initialTxCount = 8 + Math.floor(Math.random() * 7);
-    let allTxs: ReturnType<typeof generateMockPlaidTransactions> = [];
-    for (let i = 0; i < 3; i++) {
-      const batch = generateMockPlaidTransactions(tempAccForGen as any, since);
-      allTxs = [...allTxs, ...batch];
-    }
-    // Use plaidAccountId as temporary accountId — connectPlaid will remap
-    const initialTxs = allTxs.slice(0, initialTxCount).map((t) => ({
-      ...t,
-      accountId: t.accountId, // will be remapped by connectPlaid
-    }));
+    const selectedPlaidIds = new Set(selected.map((a) => a.plaidAccountId));
+    const initialTxs = serverTransactions
+      .filter((t) => selectedPlaidIds.has(t.accountId))
+      .map((t) => ({
+        title: t.title,
+        amount: t.amount,
+        type: t.type,
+        category: t.category,
+        accountId: t.accountId,
+        date: t.date,
+        bank: t.bank,
+        source: "plaid" as const,
+      }));
 
     const item: PlaidItem = {
-      itemId,
+      itemId: plaidItemId,
       bankName: selectedBank!.name,
       bankColor: selectedBank!.color,
       connectedAt: new Date().toISOString(),
       accountIds: [],
     };
 
-    const { imported } = await connectPlaid(item, newAccounts, initialTxs as any);
+    const { imported } = await connectPlaid(item, newAccounts, initialTxs);
     setImportResult({ accounts: selected.length, transactions: imported });
     Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
     setStep("success");
@@ -166,33 +286,37 @@ export default function PlaidLinkModal({ onClose }: { onClose: () => void }) {
   return (
     <Modal visible animationType="slide" presentationStyle="pageSheet" onRequestClose={onClose}>
       <View style={[styles.container, { backgroundColor: colors.background }]}>
-        {/* Header */}
+
+        {/* ── Header ── */}
         <View style={[styles.header, { paddingTop: topPad, borderBottomColor: colors.border }]}>
-          {step !== "connecting" ? (
+          {step !== "opening" && step !== "importing" ? (
             <TouchableOpacity
               onPress={() => {
                 if (step === "search" || step === "success") { onClose(); return; }
-                if (step === "credentials") { setStep("search"); return; }
-                if (step === "accounts") { setStep("credentials"); return; }
-                onClose();
+                setStep("search");
               }}
             >
-              <Feather name={step === "search" || step === "success" ? "x" : "arrow-left"} size={22} color={colors.foreground} />
+              <Feather
+                name={step === "search" || step === "success" ? "x" : "arrow-left"}
+                size={22}
+                color={colors.foreground}
+              />
             </TouchableOpacity>
           ) : (
             <View style={{ width: 22 }} />
           )}
           <Text style={[styles.headerTitle, { color: colors.foreground }]}>
             {step === "search" && "Connect a Bank"}
-            {step === "credentials" && selectedBank?.name}
-            {step === "connecting" && "Linking…"}
+            {step === "opening" && "Linking…"}
             {step === "accounts" && "Select Accounts"}
+            {step === "importing" && "Importing…"}
             {step === "success" && "All Done!"}
+            {step === "error" && "Connection Failed"}
           </Text>
           <View style={{ width: 22 }} />
         </View>
 
-        {/* ── Step: Search / bank list ── */}
+        {/* ── Search / bank list ── */}
         {step === "search" && (
           <>
             <View style={[styles.searchWrap, { borderColor: colors.border, backgroundColor: colors.card }]}>
@@ -211,6 +335,7 @@ export default function PlaidLinkModal({ onClose }: { onClose: () => void }) {
                 </TouchableOpacity>
               )}
             </View>
+
             <ScrollView showsVerticalScrollIndicator={false} contentContainerStyle={styles.bankList}>
               {filteredBanks.map((bank) => (
                 <TouchableOpacity
@@ -232,83 +357,21 @@ export default function PlaidLinkModal({ onClose }: { onClose: () => void }) {
                 </View>
               )}
             </ScrollView>
+
+            <View style={[styles.poweredBy, { borderTopColor: colors.border }]}>
+              <Feather name="lock" size={12} color={colors.mutedForeground} />
+              <Text style={[styles.poweredByText, { color: colors.mutedForeground }]}>
+                Powered by Plaid · Bank-level encryption · Read-only access
+              </Text>
+            </View>
           </>
         )}
 
-        {/* ── Step: Credentials ── */}
-        {step === "credentials" && selectedBank && (
-          <ScrollView contentContainerStyle={styles.formScroll} keyboardShouldPersistTaps="handled">
-            <View style={[styles.bankHero, { backgroundColor: selectedBank.color + "15" }]}>
-              <Text style={styles.bankHeroEmoji}>{selectedBank.icon}</Text>
-              <Text style={[styles.bankHeroName, { color: selectedBank.color }]}>{selectedBank.name}</Text>
-            </View>
-
-            <Text style={[styles.formHeadline, { color: colors.foreground }]}>Sign in to {selectedBank.name}</Text>
-            <Text style={[styles.formSub, { color: colors.mutedForeground }]}>
-              Your credentials are used only once to link your accounts and are never stored.
-            </Text>
-
-            <View style={styles.fieldGroup}>
-              <Text style={[styles.fieldLabel, { color: colors.mutedForeground }]}>Username or Email</Text>
-              <TextInput
-                style={[styles.fieldInput, { backgroundColor: colors.card, borderColor: credError ? colors.expense : colors.border, color: colors.foreground }]}
-                placeholder="Enter username"
-                placeholderTextColor={colors.mutedForeground}
-                autoCapitalize="none"
-                autoCorrect={false}
-                value={username}
-                onChangeText={(v) => { setUsername(v); setCredError(""); }}
-              />
-            </View>
-
-            <View style={styles.fieldGroup}>
-              <Text style={[styles.fieldLabel, { color: colors.mutedForeground }]}>Password</Text>
-              <View style={[styles.pwRow, { backgroundColor: colors.card, borderColor: credError ? colors.expense : colors.border }]}>
-                <TextInput
-                  style={[styles.pwInput, { color: colors.foreground }]}
-                  placeholder="Enter password"
-                  placeholderTextColor={colors.mutedForeground}
-                  secureTextEntry={!showPassword}
-                  autoCapitalize="none"
-                  autoCorrect={false}
-                  value={password}
-                  onChangeText={(v) => { setPassword(v); setCredError(""); }}
-                />
-                <TouchableOpacity onPress={() => setShowPassword(!showPassword)} style={styles.eyeBtn}>
-                  <Feather name={showPassword ? "eye-off" : "eye"} size={18} color={colors.mutedForeground} />
-                </TouchableOpacity>
-              </View>
-            </View>
-
-            {credError ? (
-              <View style={[styles.errBox, { backgroundColor: colors.expense + "12", borderColor: colors.expense + "40" }]}>
-                <Feather name="alert-circle" size={14} color={colors.expense} />
-                <Text style={[styles.errText, { color: colors.expense }]}>{credError}</Text>
-              </View>
-            ) : null}
-
-            <View style={[styles.secureNote, { backgroundColor: colors.muted }]}>
-              <Feather name="lock" size={13} color={colors.mutedForeground} />
-              <Text style={[styles.secureNoteText, { color: colors.mutedForeground }]}>
-                256-bit encrypted · Read-only access · Credentials never stored
-              </Text>
-            </View>
-
-            <TouchableOpacity
-              style={[styles.primaryBtn, { backgroundColor: selectedBank.color }]}
-              onPress={handleConnect}
-            >
-              <Feather name="link" size={16} color="#fff" />
-              <Text style={styles.primaryBtnText}>Link {selectedBank.name}</Text>
-            </TouchableOpacity>
-          </ScrollView>
-        )}
-
-        {/* ── Step: Connecting / loading ── */}
-        {step === "connecting" && (
+        {/* ── Opening / importing spinner ── */}
+        {(step === "opening" || step === "importing") && (
           <View style={styles.loadingWrap}>
-            <View style={[styles.loadingIcon, { backgroundColor: selectedBank ? selectedBank.color + "18" : colors.accent }]}>
-              <ActivityIndicator size="large" color={selectedBank?.color || colors.primary} />
+            <View style={[styles.loadingIcon, { backgroundColor: (selectedBank?.color ?? colors.primary) + "18" }]}>
+              <ActivityIndicator size="large" color={selectedBank?.color ?? colors.primary} />
             </View>
             <Text style={[styles.loadingTitle, { color: colors.foreground }]}>{connectingMsg}</Text>
             <Text style={[styles.loadingSub, { color: colors.mutedForeground }]}>
@@ -317,7 +380,7 @@ export default function PlaidLinkModal({ onClose }: { onClose: () => void }) {
           </View>
         )}
 
-        {/* ── Step: Account selection ── */}
+        {/* ── Account selection ── */}
         {step === "accounts" && (
           <>
             <Text style={[styles.acctSubtitle, { color: colors.mutedForeground }]}>
@@ -327,28 +390,54 @@ export default function PlaidLinkModal({ onClose }: { onClose: () => void }) {
               {discovered.map((a) => (
                 <TouchableOpacity
                   key={a.plaidAccountId}
-                  style={[styles.acctRow, { backgroundColor: colors.card, borderColor: a.selected ? (ACCOUNT_COLORS[a.type] || colors.primary) : colors.border }]}
+                  style={[
+                    styles.acctRow,
+                    {
+                      backgroundColor: colors.card,
+                      borderColor: a.selected
+                        ? (ACCOUNT_COLORS[a.type] ?? colors.primary)
+                        : colors.border,
+                    },
+                  ]}
                   onPress={() => toggleAccount(a.plaidAccountId)}
                   activeOpacity={0.8}
                 >
-                  <View style={[styles.acctIconWrap, { backgroundColor: (ACCOUNT_COLORS[a.type] || colors.primary) + "18" }]}>
+                  <View style={[styles.acctIconWrap, { backgroundColor: (ACCOUNT_COLORS[a.type] ?? colors.primary) + "18" }]}>
                     <Feather
-                      name={a.type === "credit" ? "credit-card" : a.type === "investment" ? "trending-up" : a.type === "savings" ? "dollar-sign" : "credit-card"}
+                      name={
+                        a.type === "credit"
+                          ? "credit-card"
+                          : a.type === "investment"
+                          ? "trending-up"
+                          : a.type === "savings"
+                          ? "dollar-sign"
+                          : "credit-card"
+                      }
                       size={18}
-                      color={ACCOUNT_COLORS[a.type] || colors.primary}
+                      color={ACCOUNT_COLORS[a.type] ?? colors.primary}
                     />
                   </View>
                   <View style={styles.acctInfo}>
                     <Text style={[styles.acctName, { color: colors.foreground }]}>{a.name}</Text>
                     <Text style={[styles.acctMeta, { color: colors.mutedForeground }]}>
-                      •••• {a.lastFour} · {a.type.charAt(0).toUpperCase() + a.type.slice(1)}
+                      {a.lastFour ? `•••• ${a.lastFour} · ` : ""}
+                      {a.type.charAt(0).toUpperCase() + a.type.slice(1)}
                     </Text>
                   </View>
                   <View style={styles.acctRight}>
                     <Text style={[styles.acctBalance, { color: a.balance < 0 ? colors.expense : colors.foreground }]}>
-                      {a.balance < 0 ? "-" : ""}${Math.abs(a.balance).toLocaleString("en-US", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
+                      {a.balance < 0 ? "-" : ""}$
+                      {Math.abs(a.balance).toLocaleString("en-CA", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
                     </Text>
-                    <View style={[styles.checkbox, { borderColor: a.selected ? (ACCOUNT_COLORS[a.type] || colors.primary) : colors.border, backgroundColor: a.selected ? (ACCOUNT_COLORS[a.type] || colors.primary) : "transparent" }]}>
+                    <View
+                      style={[
+                        styles.checkbox,
+                        {
+                          borderColor: a.selected ? (ACCOUNT_COLORS[a.type] ?? colors.primary) : colors.border,
+                          backgroundColor: a.selected ? (ACCOUNT_COLORS[a.type] ?? colors.primary) : "transparent",
+                        },
+                      ]}
+                    >
                       {a.selected && <Feather name="check" size={12} color="#fff" />}
                     </View>
                   </View>
@@ -360,7 +449,15 @@ export default function PlaidLinkModal({ onClose }: { onClose: () => void }) {
                 {discovered.filter((a) => a.selected).length} of {discovered.length} selected
               </Text>
               <TouchableOpacity
-                style={[styles.primaryBtn, { backgroundColor: selectedBank?.color || colors.primary, flex: 0, paddingHorizontal: 28 }]}
+                style={[
+                  styles.primaryBtn,
+                  {
+                    backgroundColor: selectedBank?.color ?? colors.primary,
+                    flex: 0,
+                    paddingHorizontal: 28,
+                    opacity: discovered.filter((a) => a.selected).length === 0 ? 0.4 : 1,
+                  },
+                ]}
                 onPress={handleImport}
                 disabled={discovered.filter((a) => a.selected).length === 0}
               >
@@ -370,41 +467,71 @@ export default function PlaidLinkModal({ onClose }: { onClose: () => void }) {
           </>
         )}
 
-        {/* ── Step: Success ── */}
+        {/* ── Success ── */}
         {step === "success" && importResult && (
-          <View style={styles.successWrap}>
-            <View style={[styles.successIcon, { backgroundColor: "#10b98118" }]}>
+          <View style={styles.centeredWrap}>
+            <View style={[styles.bigIcon, { backgroundColor: "#10b98118" }]}>
               <Feather name="check-circle" size={48} color="#10b981" />
             </View>
-            <Text style={[styles.successTitle, { color: colors.foreground }]}>Bank Linked!</Text>
-            <Text style={[styles.successSub, { color: colors.mutedForeground }]}>
-              Imported {importResult.accounts} account{importResult.accounts !== 1 ? "s" : ""} and {importResult.transactions} transaction{importResult.transactions !== 1 ? "s" : ""} from {selectedBank?.name}.
+            <Text style={[styles.bigTitle, { color: colors.foreground }]}>Bank Linked!</Text>
+            <Text style={[styles.bigSub, { color: colors.mutedForeground }]}>
+              Imported {importResult.accounts} account{importResult.accounts !== 1 ? "s" : ""} and{" "}
+              {importResult.transactions} real transaction{importResult.transactions !== 1 ? "s" : ""} from{" "}
+              {selectedBank?.name}.
             </Text>
-
-            <View style={[styles.successStats, { backgroundColor: colors.card }]}>
+            <View style={[styles.statsRow, { backgroundColor: colors.card }]}>
               <View style={styles.statItem}>
-                <Text style={[styles.statNum, { color: selectedBank?.color || colors.primary }]}>{importResult.accounts}</Text>
+                <Text style={[styles.statNum, { color: selectedBank?.color ?? colors.primary }]}>
+                  {importResult.accounts}
+                </Text>
                 <Text style={[styles.statLabel, { color: colors.mutedForeground }]}>Accounts</Text>
               </View>
               <View style={[styles.statDivider, { backgroundColor: colors.border }]} />
               <View style={styles.statItem}>
-                <Text style={[styles.statNum, { color: selectedBank?.color || colors.primary }]}>{importResult.transactions}</Text>
+                <Text style={[styles.statNum, { color: selectedBank?.color ?? colors.primary }]}>
+                  {importResult.transactions}
+                </Text>
                 <Text style={[styles.statLabel, { color: colors.mutedForeground }]}>Transactions</Text>
               </View>
             </View>
-
-            <View style={[styles.dedupNote, { backgroundColor: colors.muted }]}>
+            <View style={[styles.infoNote, { backgroundColor: colors.muted }]}>
               <Feather name="shield" size={13} color={colors.mutedForeground} />
-              <Text style={[styles.dedupText, { color: colors.mutedForeground }]}>
-                Duplicate prevention is active — Plaid and email sync will never import the same transaction twice.
+              <Text style={[styles.infoText, { color: colors.mutedForeground }]}>
+                Duplicate prevention active — Plaid and email sync will never import the same transaction twice.
               </Text>
             </View>
-
             <TouchableOpacity
-              style={[styles.primaryBtn, { backgroundColor: selectedBank?.color || colors.primary }]}
+              style={[styles.primaryBtn, { backgroundColor: selectedBank?.color ?? colors.primary, alignSelf: "stretch" }]}
               onPress={onClose}
             >
               <Text style={styles.primaryBtnText}>Done</Text>
+            </TouchableOpacity>
+          </View>
+        )}
+
+        {/* ── Error ── */}
+        {step === "error" && (
+          <View style={styles.centeredWrap}>
+            <View style={[styles.bigIcon, { backgroundColor: colors.expense + "15" }]}>
+              <Feather name="alert-circle" size={44} color={colors.expense} />
+            </View>
+            <Text style={[styles.bigTitle, { color: colors.foreground }]}>Connection Failed</Text>
+            <View style={[styles.errBox, { backgroundColor: colors.expense + "10", borderColor: colors.expense + "30" }]}>
+              <Text style={[styles.errText, { color: colors.foreground }]}>{errorMsg}</Text>
+            </View>
+            {(errorMsg.includes("PLAID_CLIENT_ID") || errorMsg.includes("PLAID_SECRET")) && (
+              <View style={[styles.infoNote, { backgroundColor: colors.muted }]}>
+                <Feather name="info" size={13} color={colors.mutedForeground} />
+                <Text style={[styles.infoText, { color: colors.mutedForeground }]}>
+                  Get your free API keys at dashboard.plaid.com and add them as PLAID_CLIENT_ID and PLAID_SECRET in the environment secrets panel.
+                </Text>
+              </View>
+            )}
+            <TouchableOpacity
+              style={[styles.primaryBtn, { backgroundColor: colors.primary, alignSelf: "stretch" }]}
+              onPress={() => setStep("search")}
+            >
+              <Text style={styles.primaryBtnText}>Try Again</Text>
             </TouchableOpacity>
           </View>
         )}
@@ -456,36 +583,57 @@ const styles = StyleSheet.create({
   bankName: { flex: 1, fontSize: 15, fontFamily: "Inter_500Medium" },
   noResults: { paddingTop: 40, alignItems: "center", gap: 10 },
   noResultsText: { fontSize: 14, fontFamily: "Inter_400Regular" },
-  formScroll: { padding: 20, gap: 14 },
-  bankHero: {
-    alignSelf: "center",
-    alignItems: "center",
-    paddingVertical: 18,
-    paddingHorizontal: 40,
-    borderRadius: 18,
-    gap: 6,
-    marginBottom: 4,
-  },
-  bankHeroEmoji: { fontSize: 36 },
-  bankHeroName: { fontSize: 18, fontFamily: "Inter_700Bold" },
-  formHeadline: { fontSize: 20, fontFamily: "Inter_700Bold", textAlign: "center" },
-  formSub: { fontSize: 13, fontFamily: "Inter_400Regular", lineHeight: 19, textAlign: "center" },
-  fieldGroup: { gap: 7 },
-  fieldLabel: { fontSize: 12, fontFamily: "Inter_500Medium", textTransform: "uppercase", letterSpacing: 0.5 },
-  fieldInput: { borderWidth: 1, borderRadius: 12, paddingHorizontal: 14, paddingVertical: 13, fontSize: 15, fontFamily: "Inter_400Regular" },
-  pwRow: { flexDirection: "row", alignItems: "center", borderWidth: 1, borderRadius: 12, paddingHorizontal: 14 },
-  pwInput: { flex: 1, paddingVertical: 13, fontSize: 15, fontFamily: "Inter_400Regular" },
-  eyeBtn: { padding: 4 },
-  errBox: { flexDirection: "row", alignItems: "center", gap: 8, padding: 11, borderRadius: 10, borderWidth: 1 },
-  errText: { flex: 1, fontSize: 13, fontFamily: "Inter_400Regular" },
-  secureNote: {
+  poweredBy: {
     flexDirection: "row",
     alignItems: "center",
-    gap: 7,
-    padding: 11,
-    borderRadius: 10,
+    justifyContent: "center",
+    gap: 6,
+    padding: 14,
+    borderTopWidth: 1,
   },
-  secureNoteText: { flex: 1, fontSize: 12, fontFamily: "Inter_400Regular", lineHeight: 17 },
+  poweredByText: { fontSize: 12, fontFamily: "Inter_400Regular" },
+  loadingWrap: { flex: 1, alignItems: "center", justifyContent: "center", gap: 18, padding: 32 },
+  loadingIcon: { width: 90, height: 90, borderRadius: 28, alignItems: "center", justifyContent: "center" },
+  loadingTitle: { fontSize: 18, fontFamily: "Inter_600SemiBold", textAlign: "center" },
+  loadingSub: { fontSize: 13, fontFamily: "Inter_400Regular", textAlign: "center" },
+  acctSubtitle: {
+    fontSize: 13,
+    fontFamily: "Inter_400Regular",
+    textAlign: "center",
+    paddingTop: 12,
+    paddingBottom: 4,
+  },
+  acctList: { padding: 16, gap: 10 },
+  acctRow: {
+    flexDirection: "row",
+    alignItems: "center",
+    padding: 14,
+    borderRadius: 14,
+    gap: 12,
+    borderWidth: 1.5,
+  },
+  acctIconWrap: { width: 42, height: 42, borderRadius: 12, alignItems: "center", justifyContent: "center" },
+  acctInfo: { flex: 1, gap: 3 },
+  acctName: { fontSize: 14, fontFamily: "Inter_600SemiBold" },
+  acctMeta: { fontSize: 12, fontFamily: "Inter_400Regular" },
+  acctRight: { alignItems: "flex-end", gap: 8 },
+  acctBalance: { fontSize: 14, fontFamily: "Inter_600SemiBold" },
+  checkbox: {
+    width: 22,
+    height: 22,
+    borderRadius: 6,
+    borderWidth: 2,
+    alignItems: "center",
+    justifyContent: "center",
+  },
+  acctFooter: {
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "space-between",
+    padding: 16,
+    borderTopWidth: 1,
+  },
+  acctFooterNote: { fontSize: 13, fontFamily: "Inter_400Regular" },
   primaryBtn: {
     flexDirection: "row",
     alignItems: "center",
@@ -495,31 +643,30 @@ const styles = StyleSheet.create({
     borderRadius: 13,
   },
   primaryBtnText: { color: "#fff", fontSize: 16, fontFamily: "Inter_600SemiBold" },
-  loadingWrap: { flex: 1, alignItems: "center", justifyContent: "center", gap: 18, padding: 32 },
-  loadingIcon: { width: 90, height: 90, borderRadius: 28, alignItems: "center", justifyContent: "center" },
-  loadingTitle: { fontSize: 18, fontFamily: "Inter_600SemiBold", textAlign: "center" },
-  loadingSub: { fontSize: 13, fontFamily: "Inter_400Regular", textAlign: "center" },
-  acctSubtitle: { fontSize: 13, fontFamily: "Inter_400Regular", textAlign: "center", paddingTop: 12, paddingBottom: 4 },
-  acctList: { padding: 16, gap: 10 },
-  acctRow: { flexDirection: "row", alignItems: "center", padding: 14, borderRadius: 14, gap: 12, borderWidth: 1.5 },
-  acctIconWrap: { width: 42, height: 42, borderRadius: 12, alignItems: "center", justifyContent: "center" },
-  acctInfo: { flex: 1, gap: 3 },
-  acctName: { fontSize: 14, fontFamily: "Inter_600SemiBold" },
-  acctMeta: { fontSize: 12, fontFamily: "Inter_400Regular" },
-  acctRight: { alignItems: "flex-end", gap: 8 },
-  acctBalance: { fontSize: 14, fontFamily: "Inter_600SemiBold" },
-  checkbox: { width: 22, height: 22, borderRadius: 6, borderWidth: 2, alignItems: "center", justifyContent: "center" },
-  acctFooter: { flexDirection: "row", alignItems: "center", justifyContent: "space-between", padding: 16, borderTopWidth: 1 },
-  acctFooterNote: { fontSize: 13, fontFamily: "Inter_400Regular" },
-  successWrap: { flex: 1, alignItems: "center", justifyContent: "center", padding: 28, gap: 16 },
-  successIcon: { width: 96, height: 96, borderRadius: 30, alignItems: "center", justifyContent: "center" },
-  successTitle: { fontSize: 24, fontFamily: "Inter_700Bold" },
-  successSub: { fontSize: 14, fontFamily: "Inter_400Regular", lineHeight: 20, textAlign: "center" },
-  successStats: { flexDirection: "row", borderRadius: 16, padding: 20, gap: 0, alignSelf: "stretch", justifyContent: "center" },
+  centeredWrap: { flex: 1, alignItems: "center", justifyContent: "center", padding: 28, gap: 16 },
+  bigIcon: { width: 96, height: 96, borderRadius: 30, alignItems: "center", justifyContent: "center" },
+  bigTitle: { fontSize: 24, fontFamily: "Inter_700Bold", textAlign: "center" },
+  bigSub: { fontSize: 14, fontFamily: "Inter_400Regular", lineHeight: 20, textAlign: "center" },
+  statsRow: {
+    flexDirection: "row",
+    borderRadius: 16,
+    padding: 20,
+    alignSelf: "stretch",
+    justifyContent: "center",
+  },
   statItem: { flex: 1, alignItems: "center", gap: 4 },
   statNum: { fontSize: 28, fontFamily: "Inter_700Bold" },
   statLabel: { fontSize: 12, fontFamily: "Inter_400Regular" },
   statDivider: { width: 1, marginHorizontal: 16 },
-  dedupNote: { flexDirection: "row", alignItems: "flex-start", gap: 8, padding: 12, borderRadius: 10, alignSelf: "stretch" },
-  dedupText: { flex: 1, fontSize: 12, fontFamily: "Inter_400Regular", lineHeight: 17 },
+  infoNote: {
+    flexDirection: "row",
+    alignItems: "flex-start",
+    gap: 8,
+    padding: 12,
+    borderRadius: 10,
+    alignSelf: "stretch",
+  },
+  infoText: { flex: 1, fontSize: 12, fontFamily: "Inter_400Regular", lineHeight: 17 },
+  errBox: { borderWidth: 1, borderRadius: 12, padding: 14, alignSelf: "stretch" },
+  errText: { fontSize: 14, fontFamily: "Inter_400Regular", lineHeight: 20, textAlign: "center" },
 });

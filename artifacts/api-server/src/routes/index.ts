@@ -7,6 +7,7 @@ import accountsRouter from "./accounts.js";
 import transactionsRouter from "./transactions.js";
 import billsRouter from "./bills.js";
 import emailRouter from "./email.js";
+import plaidRouter from "./plaid.js";
 
 const router: IRouter = Router();
 
@@ -25,6 +26,15 @@ if (features.emailSync) {
 } else {
   router.all("/email/*", (_req, res) => {
     res.status(403).json({ error: "Email sync feature is currently disabled." });
+  });
+}
+
+// Feature-flagged: Plaid bank sync (apply strict rate limit)
+if (features.plaidSync) {
+  router.use(strictRateLimit, plaidRouter);
+} else {
+  router.all("/plaid/*", (_req, res) => {
+    res.status(403).json({ error: "Plaid sync feature is currently disabled." });
   });
 }
 
