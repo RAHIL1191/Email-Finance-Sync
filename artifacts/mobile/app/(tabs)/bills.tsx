@@ -10,7 +10,7 @@ import {
   TouchableOpacity,
   View,
 } from "react-native";
-import { useSafeAreaInsets } from "react-native-safe-area-context";
+import { SafeAreaView } from "react-native-safe-area-context";
 
 import AddBillModal from "@/components/AddBillModal";
 import BillFilterModal, {
@@ -379,14 +379,11 @@ const TABS: { key: Tab; label: string }[] = [
 
 export default function BillsScreen() {
   const colors = useColors();
-  const insets = useSafeAreaInsets();
   const { bills, markBillPaid, deleteBill } = useApp();
   const [tab, setTab]           = useState<Tab>("upcoming");
   const [showAdd, setShowAdd]   = useState(false);
   const [showFilter, setShowFilter] = useState(false);
   const [filterSettings, setFilterSettings] = useState<BillFilterSettings>(DEFAULT_FILTER);
-  const topPad = Platform.OS === "web" ? 67 : insets.top;
-
   // Has any non-default filter active?
   const isFiltered =
     filterSettings.sortBy !== DEFAULT_FILTER.sortBy ||
@@ -438,9 +435,9 @@ export default function BillsScreen() {
   }
 
   return (
-    <View style={[styles.container, { backgroundColor: colors.background }]}>
+    <SafeAreaView edges={["top"]} style={[styles.container, { backgroundColor: colors.background }]}>
       {/* Header */}
-      <View style={[styles.header, { paddingTop: topPad + 14, backgroundColor: colors.card, borderBottomColor: colors.border }]}>
+      <View style={[styles.header, { paddingTop: 14, backgroundColor: colors.card, borderBottomColor: colors.border }]}>
         <Text style={[styles.headerTitle, { color: colors.foreground }]}>Bills</Text>
         <View style={styles.headerIcons}>
           {/* Filter button — dot indicator when active */}
@@ -527,13 +524,14 @@ export default function BillsScreen() {
       <BillFilterModal
         visible={showFilter}
         current={filterSettings}
+
         onApply={(s) => {
           setFilterSettings(s);
           setShowFilter(false);
         }}
         onClose={() => setShowFilter(false)}
       />
-    </View>
+    </SafeAreaView>
   );
 }
 

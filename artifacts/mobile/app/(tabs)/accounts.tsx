@@ -15,7 +15,7 @@ import {
   TouchableOpacity,
   View,
 } from "react-native";
-import { useSafeAreaInsets } from "react-native-safe-area-context";
+import { SafeAreaView, useSafeAreaInsets } from "react-native-safe-area-context";
 
 import AddAccountModal from "@/components/AddAccountModal";
 import PlaidLinkModal from "@/components/PlaidLinkModal";
@@ -336,15 +336,12 @@ function PlaidItemPanel({ item }: { item: PlaidItem }) {
 
 export default function AccountsScreen() {
   const colors = useColors();
-  const insets = useSafeAreaInsets();
   const { accounts, deleteAccount, totalBalance, emailSync, disconnectEmail, syncEmailTransactions, isSyncing, plaidSync } = useApp();
   const [showAdd, setShowAdd] = useState(false);
   const [showEmailConnect, setShowEmailConnect] = useState(false);
   const [showPlaidLink, setShowPlaidLink] = useState(false);
   const [syncResult, setSyncResult] = useState<{ imported: number; error?: string } | null>(null);
   const [showConnectedPanel, setShowConnectedPanel] = useState(true);
-
-  const topPaddingWeb = Platform.OS === "web" ? 67 : insets.top;
 
   const handleSync = async () => {
     Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium);
@@ -366,12 +363,12 @@ export default function AccountsScreen() {
   const plaidAccounts = accounts.filter((a) => !!a.plaidItemId);
 
   return (
-    <View style={[styles.container, { backgroundColor: colors.background }]}>
+    <SafeAreaView edges={["top"]} style={[styles.container, { backgroundColor: colors.background }]}>
       <ScrollView
         showsVerticalScrollIndicator={false}
         contentContainerStyle={[styles.scroll, { paddingBottom: Platform.OS === "web" ? 34 + 84 : 100 }]}
       >
-        <View style={[styles.header, { paddingTop: topPaddingWeb + 12 }]}>
+        <View style={[styles.header, { paddingTop: 12 }]}>
           <Text style={[styles.title, { color: colors.foreground }]}>Accounts</Text>
           <TouchableOpacity
             style={[styles.addBtn, { backgroundColor: colors.primary }]}
@@ -531,7 +528,7 @@ export default function AccountsScreen() {
       <AddAccountModal visible={showAdd} onClose={() => setShowAdd(false)} />
       {showEmailConnect && <EmailConnectModal onClose={() => setShowEmailConnect(false)} />}
       {showPlaidLink && <PlaidLinkModal onClose={() => setShowPlaidLink(false)} />}
-    </View>
+    </SafeAreaView>
   );
 }
 

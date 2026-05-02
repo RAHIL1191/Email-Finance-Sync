@@ -9,7 +9,7 @@ import {
   TouchableOpacity,
   View,
 } from "react-native";
-import { useSafeAreaInsets } from "react-native-safe-area-context";
+import { SafeAreaView } from "react-native-safe-area-context";
 
 import { useApp } from "@/context/AppContext";
 import { useColors } from "@/hooks/useColors";
@@ -39,13 +39,10 @@ const CATEGORY_COLORS: Record<string, string> = {
 
 export default function InsightsScreen() {
   const colors = useColors();
-  const insets = useSafeAreaInsets();
   const { transactions, accounts, bills, monthlyIncome, monthlyExpense } =
     useApp();
   const [isGenerating, setIsGenerating] = useState(false);
   const [aiInsights, setAiInsights] = useState<string[]>([]);
-
-  const topPaddingWeb = Platform.OS === "web" ? 67 : insets.top;
 
   const categorySpend = useMemo(() => {
     const now = new Date();
@@ -166,7 +163,7 @@ export default function InsightsScreen() {
   };
 
   return (
-    <View style={[styles.container, { backgroundColor: colors.background }]}>
+    <SafeAreaView edges={["top"]} style={[styles.container, { backgroundColor: colors.background }]}>
       <ScrollView
         showsVerticalScrollIndicator={false}
         contentContainerStyle={[
@@ -174,7 +171,7 @@ export default function InsightsScreen() {
           { paddingBottom: Platform.OS === "web" ? 34 + 84 : 100 },
         ]}
       >
-        <View style={[styles.header, { paddingTop: topPaddingWeb + 12 }]}>
+        <View style={[styles.header, { paddingTop: 12 }]}>
           <Text style={[styles.title, { color: colors.foreground }]}>
             AI Insights
           </Text>
@@ -398,7 +395,7 @@ export default function InsightsScreen() {
           </View>
         ))}
       </ScrollView>
-    </View>
+    </SafeAreaView>
   );
 }
 

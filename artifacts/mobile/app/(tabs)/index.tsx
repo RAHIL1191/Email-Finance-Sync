@@ -12,7 +12,7 @@ import {
   TouchableOpacity,
   View,
 } from "react-native";
-import { useSafeAreaInsets } from "react-native-safe-area-context";
+import { SafeAreaView } from "react-native-safe-area-context";
 
 import AddTransactionModal from "@/components/AddTransactionModal";
 import { useApp } from "@/context/AppContext";
@@ -149,7 +149,6 @@ const TIPS = [
 // ─── Main screen ──────────────────────────────────────────────────────────────
 export default function HomeScreen() {
   const colors = useColors();
-  const insets = useSafeAreaInsets();
   const { openDrawer } = useDrawer();
   const {
     accounts,
@@ -165,7 +164,6 @@ export default function HomeScreen() {
 
   const [showAddTx, setShowAddTx] = useState(false);
   const [refreshing, setRefreshing] = useState(false);
-  const topPad = Platform.OS === "web" ? 67 : insets.top;
 
   const handleRefresh = async () => {
     setRefreshing(true);
@@ -225,51 +223,51 @@ export default function HomeScreen() {
   };
 
   return (
-    <View style={[styles.container, { backgroundColor: colors.background }]}>
+    <SafeAreaView edges={["top"]} style={[styles.container, { backgroundColor: colors.background }]}>
+      {/* ── Fixed Header ── */}
+      <View style={[styles.header, { backgroundColor: colors.background }]}>
+        <View style={styles.headerLeft}>
+          <TouchableOpacity
+            style={[styles.hamburgerBtn, { backgroundColor: colors.card, borderColor: colors.border }]}
+            onPress={() => { Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light); openDrawer(); }}
+            hitSlop={8}
+          >
+            <Feather name="menu" size={20} color={colors.foreground} />
+          </TouchableOpacity>
+          <View>
+            <Text style={[styles.greeting, { color: colors.mutedForeground }]}>{greeting}</Text>
+            <Text style={[styles.pageTitle, { color: colors.foreground }]}>My Finances</Text>
+          </View>
+        </View>
+        <View style={styles.headerActions}>
+          {emailSync.isConnected && (
+            <TouchableOpacity
+              style={[styles.iconBtn, { backgroundColor: colors.card, borderColor: colors.border }]}
+              onPress={() => { Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light); syncEmailTransactions(); }}
+              disabled={isSyncing}
+            >
+              {isSyncing
+                ? <ActivityIndicator size="small" color={colors.primary} />
+                : <Feather name="refresh-cw" size={16} color={colors.primary} />}
+            </TouchableOpacity>
+          )}
+          <TouchableOpacity
+            style={[styles.iconBtn, { backgroundColor: colors.primary }]}
+            onPress={() => { Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium); setShowAddTx(true); }}
+          >
+            <Feather name="plus" size={20} color="#fff" />
+          </TouchableOpacity>
+        </View>
+      </View>
+
       <ScrollView
         showsVerticalScrollIndicator={false}
         refreshControl={<RefreshControl refreshing={refreshing} onRefresh={handleRefresh} />}
         contentContainerStyle={[
           styles.scroll,
-          { paddingBottom: Platform.OS === "web" ? 34 + 84 : 100, paddingTop: topPad + 12 },
+          { paddingBottom: Platform.OS === "web" ? 34 + 84 : 100, paddingTop: 12 },
         ]}
       >
-        {/* ── Header ── */}
-        <View style={styles.header}>
-          <View style={styles.headerLeft}>
-            <TouchableOpacity
-              style={[styles.hamburgerBtn, { backgroundColor: colors.card, borderColor: colors.border }]}
-              onPress={() => { Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light); openDrawer(); }}
-              hitSlop={8}
-            >
-              <Feather name="menu" size={20} color={colors.foreground} />
-            </TouchableOpacity>
-            <View>
-              <Text style={[styles.greeting, { color: colors.mutedForeground }]}>{greeting}</Text>
-              <Text style={[styles.pageTitle, { color: colors.foreground }]}>My Finances</Text>
-            </View>
-          </View>
-          <View style={styles.headerActions}>
-            {emailSync.isConnected && (
-              <TouchableOpacity
-                style={[styles.iconBtn, { backgroundColor: colors.card, borderColor: colors.border }]}
-                onPress={() => { Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light); syncEmailTransactions(); }}
-                disabled={isSyncing}
-              >
-                {isSyncing
-                  ? <ActivityIndicator size="small" color={colors.primary} />
-                  : <Feather name="refresh-cw" size={16} color={colors.primary} />}
-              </TouchableOpacity>
-            )}
-            <TouchableOpacity
-              style={[styles.iconBtn, { backgroundColor: colors.primary }]}
-              onPress={() => { Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium); setShowAddTx(true); }}
-            >
-              <Feather name="plus" size={20} color="#fff" />
-            </TouchableOpacity>
-          </View>
-        </View>
-
         {/* ── Net Worth banner ── */}
         <View style={[styles.netBanner, { backgroundColor: colors.primary }]}>
           <View>
@@ -477,14 +475,14 @@ export default function HomeScreen() {
       </ScrollView>
 
       <AddTransactionModal visible={showAddTx} onClose={() => setShowAddTx(false)} />
-    </View>
+    </SafeAreaView>
   );
 }
 
 const styles = StyleSheet.create({
   container: { flex: 1 },
   scroll: { paddingHorizontal: 14, gap: 12 },
-  header: { flexDirection: "row", justifyContent: "space-between", alignItems: "center" },
+  header: { flexDirection: "row", justifyContent: "space-between", alignItems: "center", paddingHorizontal: 14, paddingVertical: 12 },
   headerLeft: { flexDirection: "row", alignItems: "center", gap: 10 },
   hamburgerBtn: { width: 38, height: 38, borderRadius: 11, alignItems: "center", justifyContent: "center", borderWidth: 1 },
   greeting: { fontSize: 12, fontFamily: "Inter_400Regular" },

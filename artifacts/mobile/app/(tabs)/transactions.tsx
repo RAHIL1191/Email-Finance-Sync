@@ -11,7 +11,7 @@ import {
   TouchableOpacity,
   View,
 } from "react-native";
-import { useSafeAreaInsets } from "react-native-safe-area-context";
+import { SafeAreaView } from "react-native-safe-area-context";
 
 import AddTransactionModal from "@/components/AddTransactionModal";
 import MonthDetailModal from "@/components/MonthDetailModal";
@@ -1025,7 +1025,6 @@ function TransactionsTab({ transactions, colors }: { transactions: Transaction[]
 
 export default function InsightsScreen() {
   const colors = useColors();
-  const insets = useSafeAreaInsets();
   const { transactions, bills, accounts } = useApp();
   const [activeTab, setActiveTab] = useState<Subtab>("CASH FLOW");
   const [chartView, setChartView] = useState<ChartView>("Chart");
@@ -1039,12 +1038,10 @@ export default function InsightsScreen() {
     setSelectedMonth({ year: y, month: m });
   };
 
-  const topPaddingWeb = Platform.OS === "web" ? 67 : insets.top;
-
   return (
-    <View style={[styles.container, { backgroundColor: colors.background }]}>
+    <SafeAreaView edges={["top"]} style={[styles.container, { backgroundColor: colors.background }]}>
       {/* Header */}
-      <View style={[styles.header, { paddingTop: topPaddingWeb + 8, backgroundColor: colors.background }]}>
+      <View style={[styles.header, { paddingTop: 8, backgroundColor: colors.background }]}>
         <TouchableOpacity style={styles.headerIcon}>
           <Feather name="menu" size={22} color={colors.foreground} />
         </TouchableOpacity>
@@ -1124,7 +1121,7 @@ export default function InsightsScreen() {
         bills={bills}
         accounts={accounts}
       />
-    </View>
+    </SafeAreaView>
   );
 }
 
