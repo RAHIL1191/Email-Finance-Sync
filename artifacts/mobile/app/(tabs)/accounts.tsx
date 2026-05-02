@@ -277,12 +277,14 @@ export default function AccountsScreen() {
   const [showAdd, setShowAdd] = useState(false);
   const [showEmailConnect, setShowEmailConnect] = useState(false);
   const [syncResult, setSyncResult] = useState<{ imported: number; error?: string } | null>(null);
+  const [showConnectedPanel, setShowConnectedPanel] = useState(true);
 
   const topPaddingWeb = Platform.OS === "web" ? 67 : insets.top;
 
   const handleSync = async () => {
     Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium);
     setSyncResult(null);
+    setShowConnectedPanel(true);
     const result = await syncEmailTransactions();
     setSyncResult(result);
     if (result.imported > 0) {
@@ -350,7 +352,7 @@ export default function AccountsScreen() {
             </View>
             <Feather name="chevron-right" size={18} color={colors.primary} />
           </TouchableOpacity>
-        ) : (
+        ) : showConnectedPanel ? (
           <View style={[styles.connectedPanel, { backgroundColor: colors.card, borderColor: colors.border }]}>
             <View style={[styles.connectedTop]}>
               <View style={[styles.connectedIconBg, { backgroundColor: colors.success + "18" }]}>
@@ -362,8 +364,11 @@ export default function AccountsScreen() {
                   {emailSync.email}
                 </Text>
               </View>
-              <TouchableOpacity onPress={handleDisconnect}>
-                <Feather name="x-circle" size={18} color={colors.mutedForeground} />
+              <TouchableOpacity
+                onPress={() => setShowConnectedPanel(false)}
+                hitSlop={{ top: 10, bottom: 10, left: 10, right: 10 }}
+              >
+                <Feather name="x" size={18} color={colors.mutedForeground} />
               </TouchableOpacity>
             </View>
 
@@ -375,13 +380,19 @@ export default function AccountsScreen() {
               </Text>
             )}
 
-            <TouchableOpacity
-              onPress={() => setShowEmailConnect(true)}
-              style={styles.changeEmailBtn}
-            >
-              <Feather name="edit-2" size={13} color={colors.primary} />
-              <Text style={[styles.changeEmailText, { color: colors.primary }]}>Change email or password</Text>
-            </TouchableOpacity>
+            <View style={styles.connectedActions}>
+              <TouchableOpacity
+                onPress={() => setShowEmailConnect(true)}
+                style={styles.changeEmailBtn}
+              >
+                <Feather name="edit-2" size={13} color={colors.primary} />
+                <Text style={[styles.changeEmailText, { color: colors.primary }]}>Change email</Text>
+              </TouchableOpacity>
+              <TouchableOpacity onPress={handleDisconnect} style={styles.changeEmailBtn}>
+                <Feather name="x-circle" size={13} color={colors.expense} />
+                <Text style={[styles.changeEmailText, { color: colors.expense }]}>Disconnect</Text>
+              </TouchableOpacity>
+            </View>
 
             {syncResult && (
               <View style={[
@@ -403,6 +414,13 @@ export default function AccountsScreen() {
                     ? `${syncResult.imported} new transaction${syncResult.imported !== 1 ? "s" : ""} imported`
                     : "No new transactions found"}
                 </Text>
+                <TouchableOpacity
+                  onPress={() => setSyncResult(null)}
+                  hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
+                  style={{ marginLeft: "auto" }}
+                >
+                  <Feather name="x" size={13} color={syncResult.error ? colors.expense : colors.success} />
+                </TouchableOpacity>
               </View>
             )}
 
@@ -421,6 +439,22 @@ export default function AccountsScreen() {
               </Text>
             </TouchableOpacity>
           </View>
+        ) : (
+          <TouchableOpacity
+            style={[styles.emailBanner, { backgroundColor: colors.card, borderColor: colors.border }]}
+            onPress={() => setShowConnectedPanel(true)}
+          >
+            <View style={[styles.emailIconBg, { backgroundColor: colors.success + "18" }]}>
+              <Feather name="check-circle" size={20} color={colors.success} />
+            </View>
+            <View style={{ flex: 1 }}>
+              <Text style={[styles.emailBannerTitle, { color: colors.foreground }]}>Email Connected</Text>
+              <Text style={[styles.emailBannerSub, { color: colors.mutedForeground }]} numberOfLines={1}>
+                {emailSync.email}
+              </Text>
+            </View>
+            <Feather name="chevron-right" size={18} color={colors.mutedForeground} />
+          </TouchableOpacity>
         )}
 
         <Text style={[styles.sectionLabel, { color: colors.mutedForeground }]}>ALL ACCOUNTS</Text>
@@ -463,6 +497,7 @@ const styles = StyleSheet.create({
   lastSynced: { fontSize: 11, fontFamily: "Inter_400Regular" },
   syncResultBox: { flexDirection: "row", alignItems: "flex-start", gap: 7, padding: 10, borderRadius: 8, borderWidth: 1 },
   syncResultText: { flex: 1, fontSize: 12, fontFamily: "Inter_500Medium", lineHeight: 17 },
+  connectedActions: { flexDirection: "row", gap: 16 },
   changeEmailBtn: { flexDirection: "row", alignItems: "center", gap: 5 },
   changeEmailText: { fontSize: 12, fontFamily: "Inter_500Medium" },
   syncBtn: { flexDirection: "row", alignItems: "center", justifyContent: "center", gap: 8, paddingVertical: 11, borderRadius: 10 },
