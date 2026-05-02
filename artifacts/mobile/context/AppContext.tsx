@@ -605,18 +605,18 @@ export function generateMockPlaidTransactions(
 // ── Bank catalog (used by PlaidLinkModal) ─────────────────────────────────────
 
 export const PLAID_BANKS = [
-  { id: "chase", name: "Chase", color: "#117ACA", icon: "🏦", accountTypes: ["checking", "savings", "credit"] },
-  { id: "bofa", name: "Bank of America", color: "#E31837", icon: "🏛", accountTypes: ["checking", "savings", "credit"] },
-  { id: "wells", name: "Wells Fargo", color: "#D71E28", icon: "🏦", accountTypes: ["checking", "savings", "credit"] },
-  { id: "citi", name: "Citibank", color: "#003B70", icon: "🏙", accountTypes: ["checking", "savings", "credit"] },
-  { id: "usbank", name: "US Bank", color: "#002868", icon: "🇺🇸", accountTypes: ["checking", "savings"] },
-  { id: "capital_one", name: "Capital One", color: "#D03027", icon: "💳", accountTypes: ["checking", "savings", "credit"] },
-  { id: "td", name: "TD Bank", color: "#34A853", icon: "🍀", accountTypes: ["checking", "savings"] },
-  { id: "pnc", name: "PNC Bank", color: "#F15A22", icon: "🔶", accountTypes: ["checking", "savings"] },
-  { id: "amex", name: "American Express", color: "#007BC1", icon: "💠", accountTypes: ["credit"] },
-  { id: "discover", name: "Discover", color: "#F76F20", icon: "🔍", accountTypes: ["checking", "credit"] },
-  { id: "ally", name: "Ally Bank", color: "#7B2D8B", icon: "💜", accountTypes: ["checking", "savings"] },
-  { id: "schwab", name: "Charles Schwab", color: "#0073CF", icon: "📈", accountTypes: ["checking", "investment"] },
+  { id: "rbc", name: "RBC Royal Bank", color: "#003168", icon: "🦁", accountTypes: ["checking", "savings", "credit", "investment"] },
+  { id: "td", name: "TD Canada Trust", color: "#34A853", icon: "🍀", accountTypes: ["checking", "savings", "credit", "investment"] },
+  { id: "scotiabank", name: "Scotiabank", color: "#EC111A", icon: "🏦", accountTypes: ["checking", "savings", "credit"] },
+  { id: "bmo", name: "BMO Bank of Montreal", color: "#0079C1", icon: "💙", accountTypes: ["checking", "savings", "credit", "investment"] },
+  { id: "cibc", name: "CIBC", color: "#C41F3E", icon: "🏛", accountTypes: ["checking", "savings", "credit"] },
+  { id: "national", name: "National Bank", color: "#EA1D2C", icon: "🇨🇦", accountTypes: ["checking", "savings", "credit"] },
+  { id: "tangerine", name: "Tangerine", color: "#FF6A00", icon: "🍊", accountTypes: ["checking", "savings"] },
+  { id: "simplii", name: "Simplii Financial", color: "#E4002B", icon: "🔴", accountTypes: ["checking", "savings"] },
+  { id: "eqbank", name: "EQ Bank", color: "#00B388", icon: "💚", accountTypes: ["savings"] },
+  { id: "atb", name: "ATB Financial", color: "#004B87", icon: "🏔", accountTypes: ["checking", "savings", "credit"] },
+  { id: "desjardins", name: "Desjardins", color: "#009A44", icon: "🌿", accountTypes: ["checking", "savings", "credit"] },
+  { id: "questrade", name: "Questrade", color: "#E8181C", icon: "📈", accountTypes: ["investment"] },
 ];
 
 /** Generate mock accounts for a bank after "linking" */
