@@ -52,27 +52,30 @@ const ACCOUNT_COLORS: Record<string, string> = {
   investment: "#8b5cf6",
 };
 
-// Opens Plaid Link in a popup window and resolves with the public token.
-function openPlaidPopup(
+// Opens Plaid Link by injecting a full-screen iframe overlay into the DOM.
+// This avoids popup-blocking and cross-origin postMessage issues inside Replit's iframe preview.
+function openPlaidIframe(
   linkToken: string,
   apiBase: string
 ): Promise<{ publicToken: string; metadata: unknown }> {
   return new Promise((resolve, reject) => {
     const url = `${apiBase}/api/plaid/link-page?token=${encodeURIComponent(linkToken)}`;
-    const width = 500;
-    const height = 700;
-    const left = Math.max(0, (window.screen.width - width) / 2);
-    const top = Math.max(0, (window.screen.height - height) / 2);
-    const popup = window.open(
-      url,
-      "plaid_link",
-      `width=${width},height=${height},left=${left},top=${top},resizable=yes,scrollbars=yes`
-    );
 
-    if (!popup) {
-      reject(new Error("Popup was blocked. Please allow popups for this site and try again."));
-      return;
-    }
+    // Create full-screen overlay iframe
+    const iframe = document.createElement("iframe");
+    iframe.src = url;
+    iframe.setAttribute("allowfullscreen", "true");
+    iframe.setAttribute("allow", "fullscreen");
+    Object.assign(iframe.style, {
+      position: "fixed",
+      top: "0",
+      left: "0",
+      width: "100%",
+      height: "100%",
+      border: "none",
+      zIndex: "2147483647",
+      background: "rgba(0,0,0,0.5)",
+    });
 
     function onMessage(event: MessageEvent) {
       if (event.data?.type === "plaid_success") {
@@ -84,21 +87,13 @@ function openPlaidPopup(
       }
     }
 
-    // Detect if user closes popup without completing
-    const pollTimer = setInterval(() => {
-      if (popup.closed) {
-        cleanup();
-        reject(new Error("exit"));
-      }
-    }, 500);
-
     function cleanup() {
       window.removeEventListener("message", onMessage);
-      clearInterval(pollTimer);
-      try { popup.close(); } catch {}
+      iframe.remove();
     }
 
     window.addEventListener("message", onMessage);
+    document.body.appendChild(iframe);
   });
 }
 
@@ -157,8 +152,8 @@ export default function PlaidLinkModal({ onClose }: { onClose: () => void }) {
 
       const linkToken = tokenData.link_token as string;
 
-      // 2. Open Plaid Link in a popup window (avoids iframe CSP restrictions)
-      const { publicToken } = await openPlaidPopup(linkToken, apiBase);
+      // 2. Open Plaid Link as a full-screen iframe overlay
+      const { publicToken } = await openPlaidIframe(linkToken, apiBase);
       await handlePublicToken(publicToken, bank);
     } catch (err: unknown) {
       const msg = err instanceof Error ? err.message : "Unknown error";
