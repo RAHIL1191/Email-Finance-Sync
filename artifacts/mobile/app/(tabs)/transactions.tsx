@@ -6,6 +6,7 @@ import {
   Platform,
   ScrollView,
   StyleSheet,
+  Switch,
   Text,
   TouchableOpacity,
   View,
@@ -618,94 +619,198 @@ function DonutRing({ segments, size = 110, stroke = 18 }: {
   );
 }
 
-function SpendingTab({ transactions, colors, currentMonth }: { transactions: Transaction[]; colors: any; currentMonth: number }) {
+const CATEGORY_ICONS: Record<string, string> = {
+  Food: "coffee",
+  Shopping: "shopping-bag",
+  Groceries: "shopping-cart",
+  Entertainment: "film",
+  Transport: "navigation",
+  Housing: "home",
+  Utilities: "zap",
+  Health: "heart",
+  Insurance: "shield",
+  Education: "book-open",
+  Income: "trending-up",
+  Bills: "file-text",
+  Other: "more-horizontal",
+};
+
+const SPEND_VIEWS = ["Category", "Merchant", "Income"] as const;
+type SpendView = (typeof SPEND_VIEWS)[number];
+
+function SpendingTab({
+  transactions,
+  bills,
+  colors,
+  currentMonth,
+  setCurrentMonth,
+}: {
+  transactions: Transaction[];
+  bills: Bill[];
+  colors: any;
+  currentMonth: number;
+  setCurrentMonth: (m: number) => void;
+}) {
   const year = new Date().getFullYear();
   const monthStr = new Date(year, currentMonth, 1).toISOString().slice(0, 7);
+  const [spendView, setSpendView] = useState<SpendView>("Category");
+  const [includeBills, setIncludeBills] = useState(false);
 
-  const categorySpend = useMemo(() => {
+  const expenseTxs = useMemo(() =>
+    transactions.filter((t) => t.type === "expense" && t.date.startsWith(monthStr)),
+    [transactions, monthStr]
+  );
+
+  const billsTotal = useMemo(() => {
+    if (!includeBills) return 0;
+    return bills
+      .filter((b) => {
+        const d = new Date(b.dueDate);
+        return d.getFullYear() === year && d.getMonth() === currentMonth;
+      })
+      .reduce((s, b) => s + b.amount, 0);
+  }, [bills, includeBills, year, currentMonth]);
+
+  const categoryItems = useMemo(() => {
+    const totals: Record<string, number> = {};
+    expenseTxs.forEach((t) => {
+      totals[t.category] = (totals[t.category] || 0) + t.amount;
+    });
+    if (includeBills && billsTotal > 0) {
+      totals["Bills"] = (totals["Bills"] || 0) + billsTotal;
+    }
+    return Object.entries(totals).sort((a, b) => b[1] - a[1]);
+  }, [expenseTxs, includeBills, billsTotal]);
+
+  const merchantItems = useMemo(() => {
+    const totals: Record<string, number> = {};
+    expenseTxs.forEach((t) => {
+      const key = t.title || t.category;
+      totals[key] = (totals[key] || 0) + t.amount;
+    });
+    return Object.entries(totals).sort((a, b) => b[1] - a[1]).slice(0, 10);
+  }, [expenseTxs]);
+
+  const incomeItems = useMemo(() => {
     const totals: Record<string, number> = {};
     transactions
-      .filter((t) => t.type === "expense" && t.date.startsWith(monthStr))
+      .filter((t) => t.type === "income" && t.date.startsWith(monthStr))
       .forEach((t) => {
         totals[t.category] = (totals[t.category] || 0) + t.amount;
       });
     return Object.entries(totals).sort((a, b) => b[1] - a[1]);
   }, [transactions, monthStr]);
 
-  const total = categorySpend.reduce((s, [, v]) => s + v, 0);
+  const activeItems =
+    spendView === "Category" ? categoryItems :
+    spendView === "Merchant" ? merchantItems :
+    incomeItems;
 
-  const donutSegments = categorySpend.map(([cat, amt]) => ({
-    color: CATEGORY_COLORS[cat] || colors.primary,
+  const total = activeItems.reduce((s, [, v]) => s + v, 0);
+
+  const donutSegments = activeItems.map(([key, amt]) => ({
+    color: CATEGORY_COLORS[key] || colors.primary,
     pct: total > 0 ? (amt / total) * 100 : 0,
   }));
 
-  return (
-    <ScrollView showsVerticalScrollIndicator={false} contentContainerStyle={{ padding: 16, paddingBottom: 120, gap: 12 }}>
-      {categorySpend.length === 0 ? (
-        <View style={[styles.emptyBox, { backgroundColor: colors.card }]}>
-          <Feather name="pie-chart" size={36} color={colors.mutedForeground} />
-          <Text style={[styles.emptyText, { color: colors.mutedForeground }]}>No spending this month</Text>
-        </View>
-      ) : (
-        <>
-          {/* Donut summary card */}
-          <View style={[styles.spendCard, { backgroundColor: colors.card }]}>
-            <Text style={[styles.spendCardTitle, { color: colors.foreground }]}>
-              {MONTHS[currentMonth]} Overview
-            </Text>
-            <View style={styles.donutRow}>
-              <View style={styles.donutWrap}>
-                <DonutRing segments={donutSegments} size={120} stroke={20} />
-                <View style={styles.donutCenter}>
-                  <Text style={[styles.donutTotal, { color: colors.foreground }]}>${total >= 1000 ? `${(total / 1000).toFixed(1)}k` : total.toFixed(0)}</Text>
-                  <Text style={[styles.donutLabel, { color: colors.mutedForeground }]}>spent</Text>
-                </View>
-              </View>
-              <View style={styles.donutLegend}>
-                {categorySpend.slice(0, 5).map(([cat, amt]) => {
-                  const pct = total > 0 ? (amt / total) * 100 : 0;
-                  const color = CATEGORY_COLORS[cat] || colors.primary;
-                  return (
-                    <View key={cat} style={styles.legendRow}>
-                      <View style={[styles.catDot, { backgroundColor: color }]} />
-                      <Text style={[styles.legendCat, { color: colors.foreground }]} numberOfLines={1}>{cat}</Text>
-                      <Text style={[styles.legendPct, { color: colors.mutedForeground }]}>{pct.toFixed(0)}%</Text>
-                    </View>
-                  );
-                })}
-              </View>
-            </View>
-          </View>
+  const DONUT_SIZE = 200;
+  const DONUT_STROKE = 36;
 
-          {/* Category breakdown bars */}
-          <View style={[styles.spendCard, { backgroundColor: colors.card }]}>
-            <Text style={[styles.spendCardTitle, { color: colors.foreground }]}>Breakdown</Text>
-            {categorySpend.map(([cat, amt]) => {
-              const pct = total > 0 ? (amt / total) * 100 : 0;
-              const color = CATEGORY_COLORS[cat] || colors.primary;
-              return (
-                <View key={cat} style={styles.catRow}>
-                  <View style={styles.catLabel}>
-                    <View style={[styles.catDot, { backgroundColor: color }]} />
-                    <Text style={[styles.catName, { color: colors.foreground }]}>{cat}</Text>
-                  </View>
-                  <View style={styles.catBarContainer}>
-                    <View style={[styles.catBarBg, { backgroundColor: color + "25" }]}>
-                      <View style={[styles.catBarFill, { backgroundColor: color, width: `${Math.min(pct, 100)}%` as any }]} />
-                    </View>
-                  </View>
-                  <Text style={[styles.catAmount, { color: colors.foreground }]}>${amt.toFixed(0)}</Text>
-                </View>
-              );
-            })}
-            <View style={[styles.totalRow, { borderTopColor: colors.border }]}>
-              <Text style={[styles.totalLabel, { color: colors.mutedForeground }]}>Total</Text>
-              <Text style={[styles.totalAmount, { color: colors.foreground }]}>${total.toFixed(2)}</Text>
+  return (
+    <View style={{ flex: 1 }}>
+      {/* Month navigation */}
+      <View style={styles.monthNav}>
+        <TouchableOpacity onPress={() => setCurrentMonth(Math.max(0, currentMonth - 1))}>
+          <Feather name="chevron-left" size={22} color={colors.foreground} />
+        </TouchableOpacity>
+        <View style={styles.monthCenter}>
+          <Text style={[styles.monthName, { color: colors.foreground }]}>{FULL_MONTHS[currentMonth]}</Text>
+          <Text style={[styles.monthSub, { color: colors.mutedForeground }]}>Monthly</Text>
+        </View>
+        <TouchableOpacity onPress={() => setCurrentMonth(Math.min(11, currentMonth + 1))}>
+          <Feather name="chevron-right" size={22} color={colors.foreground} />
+        </TouchableOpacity>
+      </View>
+
+      <ScrollView showsVerticalScrollIndicator={false} contentContainerStyle={{ paddingHorizontal: 16, paddingBottom: 120, gap: 14 }}>
+        {/* View pills: Category / Merchant / Income */}
+        <View style={[styles.spendPillRow, { backgroundColor: colors.card, borderColor: colors.border }]}>
+          {SPEND_VIEWS.map((v) => (
+            <TouchableOpacity
+              key={v}
+              style={[styles.spendPill, spendView === v && { backgroundColor: colors.background, shadowColor: "#000", shadowOpacity: 0.08, shadowRadius: 4, elevation: 2 }]}
+              onPress={() => setSpendView(v)}
+            >
+              <Text style={[styles.spendPillText, { color: spendView === v ? colors.foreground : colors.mutedForeground, fontFamily: spendView === v ? "Inter_600SemiBold" : "Inter_400Regular" }]}>
+                {v}
+              </Text>
+            </TouchableOpacity>
+          ))}
+        </View>
+
+        {/* Donut chart card */}
+        <View style={[styles.spendDonutCard, { backgroundColor: colors.card }]}>
+          {total === 0 ? (
+            <View style={styles.spendEmpty}>
+              <Feather name="pie-chart" size={40} color={colors.mutedForeground} />
+              <Text style={[styles.emptyText, { color: colors.mutedForeground }]}>
+                {spendView === "Income" ? "No income this month" : "No spending this month"}
+              </Text>
             </View>
+          ) : (
+            <View style={styles.donutCenterWrap}>
+              <DonutRing segments={donutSegments} size={DONUT_SIZE} stroke={DONUT_STROKE} />
+              <View style={styles.donutCenterAbs}>
+                <Text style={[styles.donutCenterLabel, { color: colors.mutedForeground }]}>Total</Text>
+                <Text style={[styles.donutCenterAmount, { color: colors.foreground }]}>
+                  ${total >= 1000 ? `${(total / 1000).toFixed(1)}k` : total.toFixed(2)}
+                </Text>
+              </View>
+            </View>
+          )}
+        </View>
+
+        {/* Include Bills toggle (only in Category view) */}
+        {spendView === "Category" && (
+          <View style={[styles.includeBillsRow, { backgroundColor: colors.card, borderColor: colors.border }]}>
+            <View style={[styles.includeBillsIcon, { backgroundColor: colors.muted }]}>
+              <Feather name="info" size={14} color={colors.mutedForeground} />
+            </View>
+            <Text style={[styles.includeBillsText, { color: colors.foreground }]}>Include Bills</Text>
+            <Switch
+              value={includeBills}
+              onValueChange={setIncludeBills}
+              trackColor={{ false: colors.muted, true: colors.primary + "80" }}
+              thumbColor={includeBills ? colors.primary : colors.mutedForeground}
+            />
           </View>
-        </>
-      )}
-    </ScrollView>
+        )}
+
+        {/* Category / Merchant / Income rows */}
+        {activeItems.map(([key, amt]) => {
+          const pct = total > 0 ? (amt / total) * 100 : 0;
+          const color = CATEGORY_COLORS[key] || colors.primary;
+          const icon = (CATEGORY_ICONS[key] || "circle") as any;
+          return (
+            <View key={key} style={styles.spendItemRow}>
+              <View style={[styles.spendItemIcon, { backgroundColor: color + "20" }]}>
+                <Feather name={icon} size={18} color={color} />
+              </View>
+              <View style={styles.spendItemInfo}>
+                <Text style={[styles.spendItemName, { color: colors.foreground }]}>{key}</Text>
+                <Text style={[styles.spendItemPct, { color: colors.mutedForeground }]}>{pct.toFixed(1)} %</Text>
+              </View>
+              <View style={styles.spendItemRight}>
+                <Text style={[styles.spendItemAmt, { color: colors.foreground }]}>
+                  ${amt.toFixed(2)}
+                </Text>
+                <View style={[styles.spendItemBar, { backgroundColor: color }]} />
+              </View>
+            </View>
+          );
+        })}
+      </ScrollView>
+    </View>
   );
 }
 
@@ -939,7 +1044,7 @@ export default function InsightsScreen() {
           />
         )}
         {activeTab === "SPENDING" && (
-          <SpendingTab transactions={transactions} colors={colors} currentMonth={currentMonth} />
+          <SpendingTab transactions={transactions} bills={bills} colors={colors} currentMonth={currentMonth} setCurrentMonth={setCurrentMonth} />
         )}
         {activeTab === "TRENDS" && (
           <TrendsTab transactions={transactions} colors={colors} />
@@ -1414,6 +1519,113 @@ const styles = StyleSheet.create({
   emptyText: {
     fontSize: 15,
     fontFamily: "Inter_400Regular",
+  },
+
+  spendPillRow: {
+    flexDirection: "row",
+    borderRadius: 24,
+    padding: 4,
+    borderWidth: 1,
+    alignSelf: "center",
+  },
+  spendPill: {
+    paddingHorizontal: 22,
+    paddingVertical: 8,
+    borderRadius: 20,
+  },
+  spendPillText: {
+    fontSize: 14,
+  },
+
+  spendDonutCard: {
+    borderRadius: 16,
+    padding: 20,
+    alignItems: "center",
+    justifyContent: "center",
+    minHeight: 240,
+  },
+  spendEmpty: {
+    alignItems: "center",
+    gap: 12,
+    paddingVertical: 20,
+  },
+  donutCenterWrap: {
+    alignItems: "center",
+    justifyContent: "center",
+  },
+  donutCenterAbs: {
+    position: "absolute",
+    alignItems: "center",
+    justifyContent: "center",
+  },
+  donutCenterLabel: {
+    fontSize: 14,
+    fontFamily: "Inter_400Regular",
+    marginBottom: 2,
+  },
+  donutCenterAmount: {
+    fontSize: 22,
+    fontFamily: "Inter_700Bold",
+  },
+
+  includeBillsRow: {
+    flexDirection: "row",
+    alignItems: "center",
+    borderRadius: 12,
+    padding: 12,
+    borderWidth: 1,
+    gap: 10,
+  },
+  includeBillsIcon: {
+    width: 28,
+    height: 28,
+    borderRadius: 6,
+    alignItems: "center",
+    justifyContent: "center",
+  },
+  includeBillsText: {
+    flex: 1,
+    fontSize: 15,
+    fontFamily: "Inter_500Medium",
+  },
+
+  spendItemRow: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 14,
+    paddingVertical: 4,
+  },
+  spendItemIcon: {
+    width: 44,
+    height: 44,
+    borderRadius: 22,
+    alignItems: "center",
+    justifyContent: "center",
+  },
+  spendItemInfo: {
+    flex: 1,
+    gap: 3,
+  },
+  spendItemName: {
+    fontSize: 15,
+    fontFamily: "Inter_500Medium",
+  },
+  spendItemPct: {
+    fontSize: 12,
+    fontFamily: "Inter_400Regular",
+  },
+  spendItemRight: {
+    alignItems: "flex-end",
+    gap: 4,
+  },
+  spendItemAmt: {
+    fontSize: 15,
+    fontFamily: "Inter_600SemiBold",
+  },
+  spendItemBar: {
+    width: 44,
+    height: 3,
+    borderRadius: 2,
   },
 
   fab: {
