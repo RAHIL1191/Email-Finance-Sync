@@ -147,7 +147,7 @@ function CalendarView({
     [transactions, year, currentMonth]
   );
   const prevData = useMemo(
-    () => getMonthDataForYearMonth(transactions, year, currentMonth - 1 < 0 ? year - 1 : year, currentMonth - 1 < 0 ? 11 : currentMonth - 1),
+    () => getMonthDataForYearMonth(transactions, currentMonth - 1 < 0 ? year - 1 : year, currentMonth - 1 < 0 ? 11 : currentMonth - 1),
     [transactions, year, currentMonth]
   );
 

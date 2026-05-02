@@ -90,7 +90,8 @@ router.post("/email/sync", async (req, res) => {
       emailCount++;
 
       try {
-        const parsed = await simpleParser(message.source);
+        if (!message.source) continue;
+        const parsed = await (simpleParser(message.source) as unknown as Promise<any>);
         const from = parsed.from?.text || "";
         const subject = parsed.subject || "";
         const text = parsed.text || "";

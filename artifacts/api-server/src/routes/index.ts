@@ -1,10 +1,31 @@
 import { Router, type IRouter } from "express";
-import healthRouter from "./health";
+import { strictRateLimit } from "../middlewares/security.js";
+import { features } from "../config/features.js";
+import healthRouter from "./health.js";
+import configRouter from "./config.js";
+import accountsRouter from "./accounts.js";
+import transactionsRouter from "./transactions.js";
+import billsRouter from "./bills.js";
 import emailRouter from "./email.js";
 
 const router: IRouter = Router();
 
+// Public routes
 router.use(healthRouter);
-router.use(emailRouter);
+router.use(configRouter);
+
+// Data CRUD routes
+router.use(accountsRouter);
+router.use(transactionsRouter);
+router.use(billsRouter);
+
+// Feature-flagged: email sync (apply strict rate limit)
+if (features.emailSync) {
+  router.use(strictRateLimit, emailRouter);
+} else {
+  router.all("/email/*", (_req, res) => {
+    res.status(403).json({ error: "Email sync feature is currently disabled." });
+  });
+}
 
 export default router;
