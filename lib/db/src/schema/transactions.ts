@@ -3,7 +3,8 @@ import { z } from "zod";
 
 export const transactionsTable = pgTable("transactions", {
   id: text("id").primaryKey(),
-  deviceId: text("device_id").notNull(),
+  householdId: text("household_id").notNull(),
+  deviceId: text("device_id").notNull(), // attribution: which device created this
   accountId: text("account_id").notNull(),
   title: text("title").notNull(),
   amount: real("amount").notNull(),
@@ -19,6 +20,7 @@ export const transactionsTable = pgTable("transactions", {
 
 export const insertTransactionSchema = z.object({
   id: z.string(),
+  householdId: z.string(),
   deviceId: z.string(),
   accountId: z.string(),
   title: z.string().min(1),
@@ -32,7 +34,7 @@ export const insertTransactionSchema = z.object({
 });
 
 export const updateTransactionSchema = insertTransactionSchema
-  .omit({ id: true, deviceId: true })
+  .omit({ id: true, householdId: true, deviceId: true })
   .partial();
 
 export type Transaction = typeof transactionsTable.$inferSelect;

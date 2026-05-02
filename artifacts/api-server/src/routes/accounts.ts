@@ -1,19 +1,19 @@
 import { Router } from "express";
 import { eq, and } from "drizzle-orm";
 import { db, accountsTable, insertAccountSchema, updateAccountSchema } from "@workspace/db";
-import { validate, requireDeviceId } from "../middlewares/validate.js";
+import { validate, requireHouseholdId } from "../middlewares/validate.js";
 
 const router = Router();
 
-router.use(requireDeviceId);
+router.use(requireHouseholdId);
 
-/** GET /api/accounts — list all accounts for this device */
+/** GET /api/accounts — list all accounts for this household */
 router.get("/accounts", async (req, res) => {
   try {
     const rows = await db
       .select()
       .from(accountsTable)
-      .where(eq(accountsTable.deviceId, res.locals.deviceId));
+      .where(eq(accountsTable.householdId, res.locals.householdId));
     res.json(rows);
   } catch (err) {
     req.log.error({ err }, "Failed to fetch accounts");
@@ -24,7 +24,11 @@ router.get("/accounts", async (req, res) => {
 /** POST /api/accounts — create a new account */
 router.post("/accounts", validate(insertAccountSchema), async (req, res) => {
   try {
-    const payload = { ...req.body, deviceId: res.locals.deviceId };
+    const payload = {
+      ...req.body,
+      householdId: res.locals.householdId,
+      deviceId: res.locals.deviceId,
+    };
     const [row] = await db.insert(accountsTable).values(payload).returning();
     res.status(201).json(row);
   } catch (err) {
@@ -42,7 +46,7 @@ router.put("/accounts/:id", validate(updateAccountSchema), async (req, res) => {
       .where(
         and(
           eq(accountsTable.id, String(req.params.id)),
-          eq(accountsTable.deviceId, res.locals.deviceId)
+          eq(accountsTable.householdId, res.locals.householdId)
         )
       )
       .returning();
@@ -65,7 +69,7 @@ router.delete("/accounts/:id", async (req, res) => {
       .where(
         and(
           eq(accountsTable.id, String(req.params.id)),
-          eq(accountsTable.deviceId, res.locals.deviceId)
+          eq(accountsTable.householdId, res.locals.householdId)
         )
       )
       .returning();
