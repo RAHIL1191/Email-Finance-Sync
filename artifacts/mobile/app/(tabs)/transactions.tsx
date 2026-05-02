@@ -23,6 +23,8 @@ const CHART_VIEWS = ["Chart", "Calendar", "Monthly"] as const;
 type ChartView = (typeof CHART_VIEWS)[number];
 
 const MONTHS = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
+const FULL_MONTHS = ["January", "February", "March", "April", "May", "June", "July", "August", "September", "October", "November", "December"];
+const DAY_HEADERS = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"];
 
 function getMonthData(transactions: Transaction[], year: number) {
   return MONTHS.map((label, idx) => {
@@ -35,6 +37,359 @@ function getMonthData(transactions: Transaction[], year: number) {
       .reduce((s, t) => s + t.amount, 0);
     return { label, income, expense };
   });
+}
+
+function getMonthDataForYearMonth(transactions: Transaction[], year: number, month: number) {
+  const monthStart = new Date(year, month, 1).toISOString().slice(0, 7);
+  const income = transactions
+    .filter((t) => t.type === "income" && t.date.startsWith(monthStart))
+    .reduce((s, t) => s + t.amount, 0);
+  const expense = transactions
+    .filter((t) => t.type === "expense" && t.date.startsWith(monthStart))
+    .reduce((s, t) => s + t.amount, 0);
+  return { income, expense };
+}
+
+function ProjectedSection({
+  colors,
+  monthLabel,
+  income,
+  expense,
+  prevExpense,
+}: {
+  colors: any;
+  monthLabel: string;
+  income: number;
+  expense: number;
+  prevExpense: number;
+}) {
+  const projected = income - expense;
+  const expensePct = income > 0 ? Math.min((expense / income) * 100, 100) : expense > 0 ? 100 : 0;
+  const balancePctChange = prevExpense > 0 ? Math.abs(((expense - prevExpense) / prevExpense) * 100) : 0;
+  const balanceUp = expense >= prevExpense;
+
+  return (
+    <View style={[styles.projectedCard, { backgroundColor: colors.card }]}>
+      <View style={styles.projectedHeader}>
+        <Text style={[styles.projectedTitle, { color: colors.foreground }]}>Projected</Text>
+        <TouchableOpacity style={styles.moreBtn}>
+          <Text style={[styles.moreText, { color: colors.primary }]}>More</Text>
+          <Feather name="chevron-right" size={14} color={colors.primary} />
+        </TouchableOpacity>
+      </View>
+
+      <View style={styles.projectedRow}>
+        <Text style={[styles.projectedMonth, { color: colors.foreground }]}>{monthLabel}</Text>
+        <View style={styles.projectedRight}>
+          <Text style={[styles.projectedPct, { color: colors.mutedForeground }]}>0.0%</Text>
+          <Text style={[styles.projectedAmount, { color: "#4caf50" }]}>
+            + ${projected >= 0 ? projected.toFixed(0) : "0"}
+          </Text>
+        </View>
+      </View>
+
+      <View style={[styles.progressTrack, { backgroundColor: colors.muted }]}>
+        <View
+          style={[
+            styles.progressFill,
+            { backgroundColor: "#f97316", width: `${expensePct}%` as any },
+          ]}
+        />
+      </View>
+
+      <View style={styles.balanceRow}>
+        <View style={styles.balanceLeft}>
+          <Text style={[styles.balanceLabel, { color: colors.foreground }]}>Balance</Text>
+          <Text style={[styles.balanceAmount, { color: "#f97316" }]}>
+            - ${expense.toFixed(0)}
+          </Text>
+        </View>
+        <View style={styles.balanceRight}>
+          <View style={styles.balancePctBadge}>
+            <Feather name={balanceUp ? "arrow-up" : "arrow-down"} size={10} color="#f97316" />
+            <Text style={[styles.balancePct, { color: "#f97316" }]}>
+              {balancePctChange.toFixed(1)}%
+            </Text>
+          </View>
+          <Text style={[styles.balanceFinal, { color: colors.foreground }]}>
+            - ${expense.toFixed(0)}
+          </Text>
+        </View>
+      </View>
+    </View>
+  );
+}
+
+function CalendarView({
+  colors,
+  currentMonth,
+  setCurrentMonth,
+  transactions,
+  setChartView,
+}: {
+  colors: any;
+  currentMonth: number;
+  setCurrentMonth: (m: number) => void;
+  transactions: Transaction[];
+  setChartView: (v: ChartView) => void;
+}) {
+  const today = new Date();
+  const year = today.getFullYear();
+  const todayDay = today.getDate();
+  const todayMonth = today.getMonth();
+  const todayYear = today.getFullYear();
+
+  const firstDayOfMonth = new Date(year, currentMonth, 1).getDay();
+  const daysInMonth = new Date(year, currentMonth + 1, 0).getDate();
+
+  const { income, expense } = useMemo(
+    () => getMonthDataForYearMonth(transactions, year, currentMonth),
+    [transactions, year, currentMonth]
+  );
+  const prevData = useMemo(
+    () => getMonthDataForYearMonth(transactions, year, currentMonth - 1 < 0 ? year - 1 : year, currentMonth - 1 < 0 ? 11 : currentMonth - 1),
+    [transactions, year, currentMonth]
+  );
+
+  const txDays = useMemo(() => {
+    const monthStr = new Date(year, currentMonth, 1).toISOString().slice(0, 7);
+    const days = new Set<number>();
+    transactions
+      .filter((t) => t.date.startsWith(monthStr))
+      .forEach((t) => {
+        const d = new Date(t.date).getDate();
+        days.add(d);
+      });
+    return days;
+  }, [transactions, year, currentMonth]);
+
+  const cells: (number | null)[] = [];
+  for (let i = 0; i < firstDayOfMonth; i++) cells.push(null);
+  for (let d = 1; d <= daysInMonth; d++) cells.push(d);
+
+  const rows: (number | null)[][] = [];
+  for (let i = 0; i < cells.length; i += 7) rows.push(cells.slice(i, i + 7));
+
+  const monthLabel = MONTHS[currentMonth];
+
+  return (
+    <ScrollView showsVerticalScrollIndicator={false} contentContainerStyle={{ paddingBottom: 120 }}>
+      <View style={styles.monthNav}>
+        <TouchableOpacity onPress={() => setCurrentMonth(Math.max(0, currentMonth - 1))}>
+          <Feather name="chevron-left" size={22} color={colors.foreground} />
+        </TouchableOpacity>
+        <View style={styles.monthCenter}>
+          <Text style={[styles.monthName, { color: colors.foreground }]}>{monthLabel}</Text>
+          <Text style={[styles.monthSub, { color: colors.mutedForeground }]}>Monthly</Text>
+        </View>
+        <TouchableOpacity onPress={() => setCurrentMonth(Math.min(11, currentMonth + 1))}>
+          <Feather name="chevron-right" size={22} color={colors.foreground} />
+        </TouchableOpacity>
+      </View>
+
+      <View style={[styles.chartCard, { backgroundColor: colors.card }]}>
+        {/* Toggle */}
+        <View style={[styles.toggleRow, { backgroundColor: colors.muted }]}>
+          {CHART_VIEWS.map((v) => (
+            <TouchableOpacity
+              key={v}
+              style={[styles.toggleBtn, v === "Calendar" && { backgroundColor: colors.background }]}
+              onPress={() => setChartView(v)}
+            >
+              <Text style={[styles.toggleText, { color: v === "Calendar" ? colors.foreground : colors.mutedForeground }]}>
+                {v}
+              </Text>
+            </TouchableOpacity>
+          ))}
+        </View>
+
+        {/* Day headers */}
+        <View style={styles.calDayHeaders}>
+          {DAY_HEADERS.map((d) => (
+            <Text key={d} style={[styles.calDayHeader, { color: colors.mutedForeground }]}>{d}</Text>
+          ))}
+        </View>
+
+        {/* Calendar rows */}
+        {rows.map((row, ri) => (
+          <View key={ri} style={styles.calRow}>
+            {row.map((day, di) => {
+              const isToday =
+                day !== null &&
+                day === todayDay &&
+                currentMonth === todayMonth &&
+                year === todayYear;
+              const hasTx = day !== null && txDays.has(day);
+              return (
+                <View key={di} style={styles.calCell}>
+                  {day !== null ? (
+                    <View
+                      style={[
+                        styles.calDayCircle,
+                        isToday && { backgroundColor: "#1e90ff" },
+                      ]}
+                    >
+                      <Text
+                        style={[
+                          styles.calDayText,
+                          { color: isToday ? "#fff" : colors.foreground },
+                        ]}
+                      >
+                        {day}
+                      </Text>
+                      {hasTx && !isToday && (
+                        <View style={[styles.calDot, { backgroundColor: "#f59e0b" }]} />
+                      )}
+                    </View>
+                  ) : null}
+                </View>
+              );
+            })}
+            {/* fill remaining cells in last row */}
+            {row.length < 7 && Array.from({ length: 7 - row.length }).map((_, i) => (
+              <View key={`empty-${i}`} style={styles.calCell} />
+            ))}
+          </View>
+        ))}
+      </View>
+
+      <ProjectedSection
+        colors={colors}
+        monthLabel={monthLabel}
+        income={income}
+        expense={expense}
+        prevExpense={prevData.expense}
+      />
+    </ScrollView>
+  );
+}
+
+function MonthlyView({
+  colors,
+  transactions,
+  setChartView,
+}: {
+  colors: any;
+  transactions: Transaction[];
+  setChartView: (v: ChartView) => void;
+}) {
+  const today = new Date();
+  const currentYear = today.getFullYear();
+  const currentMonthIdx = today.getMonth();
+
+  const monthList = useMemo(() => {
+    const list: { year: number; month: number; label: string }[] = [];
+    for (let i = 0; i < 18; i++) {
+      let m = currentMonthIdx - i;
+      let y = currentYear;
+      if (m < 0) { m += 12; y -= 1; }
+      const isCurrentYear = y === currentYear;
+      const label = isCurrentYear ? FULL_MONTHS[m] : `${FULL_MONTHS[m]} ${y}`;
+      list.push({ year: y, month: m, label });
+    }
+    return list;
+  }, [currentYear, currentMonthIdx]);
+
+  const monthDataList = useMemo(() => {
+    return monthList.map(({ year, month, label }, idx) => {
+      const cur = getMonthDataForYearMonth(transactions, year, month);
+      const prevIdx = idx + 1 < monthList.length ? idx + 1 : null;
+      const prev = prevIdx !== null
+        ? getMonthDataForYearMonth(transactions, monthList[prevIdx].year, monthList[prevIdx].month)
+        : { income: 0, expense: 0 };
+      const netIncome = cur.income - cur.expense;
+      const incomeChangePct = prev.income > 0
+        ? ((cur.income - prev.income) / prev.income) * 100
+        : cur.income > 0 ? 100 : 0;
+      const balancePct = prev.expense > 0
+        ? Math.abs(((cur.expense - prev.expense) / prev.expense) * 100)
+        : cur.expense > 0 ? 100 : 0;
+      const incomeUp = cur.income >= prev.income;
+      const balanceUp = cur.expense >= prev.expense;
+      const expensePct = cur.income > 0
+        ? Math.min((cur.expense / cur.income) * 100, 100)
+        : cur.expense > 0 ? 100 : 0;
+      return { label, ...cur, netIncome, incomeChangePct, balancePct, incomeUp, balanceUp, expensePct };
+    });
+  }, [transactions, monthList]);
+
+  return (
+    <ScrollView showsVerticalScrollIndicator={false} contentContainerStyle={{ paddingHorizontal: 12, paddingBottom: 120, gap: 10, paddingTop: 10 }}>
+      {/* Toggle */}
+      <View style={[styles.toggleRow, { backgroundColor: colors.muted, alignSelf: "center" }]}>
+        {CHART_VIEWS.map((v) => (
+          <TouchableOpacity
+            key={v}
+            style={[styles.toggleBtn, v === "Monthly" && { backgroundColor: colors.background }]}
+            onPress={() => setChartView(v)}
+          >
+            <Text style={[styles.toggleText, { color: v === "Monthly" ? colors.foreground : colors.mutedForeground }]}>
+              {v}
+            </Text>
+          </TouchableOpacity>
+        ))}
+      </View>
+
+      {monthDataList.map((m, idx) => (
+        <View key={idx} style={[styles.monthlyCard, { backgroundColor: colors.card }]}>
+          {/* Top row: month name | pct | income */}
+          <View style={styles.monthlyTopRow}>
+            <Text style={[styles.monthlyLabel, { color: colors.foreground }]}>{m.label}</Text>
+            <View style={styles.monthlyRight}>
+              <View style={styles.monthlyPctBadge}>
+                <Feather
+                  name={m.incomeUp ? "arrow-up" : "arrow-down"}
+                  size={10}
+                  color={m.incomeUp ? "#4caf50" : "#f97316"}
+                />
+                <Text style={[styles.monthlyPct, { color: m.incomeUp ? "#4caf50" : "#f97316" }]}>
+                  {m.incomeChangePct.toFixed(1)}%
+                </Text>
+              </View>
+              <Text style={[styles.monthlyIncome, { color: "#4caf50" }]}>
+                + ${m.netIncome >= 0 ? m.netIncome.toFixed(0) : "0"}
+              </Text>
+            </View>
+          </View>
+
+          {/* Progress bar */}
+          <View style={[styles.monthlyProgressTrack, { backgroundColor: "#f9731630" }]}>
+            <View
+              style={[
+                styles.monthlyProgressFill,
+                { width: `${m.expensePct}%` as any },
+              ]}
+            />
+          </View>
+
+          {/* Balance row */}
+          <View style={styles.monthlyBalanceRow}>
+            <View style={styles.monthlyBalanceLeft}>
+              <Text style={[styles.monthlyBalanceLabel, { color: colors.mutedForeground }]}>Balance</Text>
+              <Text style={[styles.monthlyBalanceAmt, { color: "#f97316" }]}>
+                - ${m.expense.toFixed(0)}
+              </Text>
+            </View>
+            <View style={styles.monthlyBalanceRight}>
+              <View style={styles.monthlyPctBadge}>
+                <Feather
+                  name={m.balanceUp ? "arrow-up" : "arrow-down"}
+                  size={10}
+                  color={m.balanceUp ? "#f97316" : "#4caf50"}
+                />
+                <Text style={[styles.monthlyPct, { color: m.balanceUp ? "#f97316" : "#4caf50" }]}>
+                  {m.balancePct.toFixed(1)}%
+                </Text>
+              </View>
+              <Text style={[styles.monthlyBalanceFinal, { color: colors.foreground }]}>
+                - ${m.expense.toFixed(0)}
+              </Text>
+            </View>
+          </View>
+        </View>
+      ))}
+    </ScrollView>
+  );
 }
 
 function CashFlowTab({
@@ -63,10 +418,47 @@ function CashFlowTab({
   const visibleMonths = monthData.slice(0, 7);
 
   const thisMonthData = monthData[currentMonth];
-  const projected = thisMonthData.income - thisMonthData.expense;
-  const balance = -thisMonthData.expense;
+  const prevMonthData = currentMonth > 0 ? monthData[currentMonth - 1] : { income: 0, expense: 0 };
 
   const monthName = MONTHS[currentMonth];
+
+  const Toggle = () => (
+    <View style={[styles.toggleRow, { backgroundColor: colors.muted }]}>
+      {CHART_VIEWS.map((v) => (
+        <TouchableOpacity
+          key={v}
+          style={[styles.toggleBtn, chartView === v && { backgroundColor: colors.background }]}
+          onPress={() => setChartView(v)}
+        >
+          <Text style={[styles.toggleText, { color: chartView === v ? colors.foreground : colors.mutedForeground }]}>
+            {v}
+          </Text>
+        </TouchableOpacity>
+      ))}
+    </View>
+  );
+
+  if (chartView === "Calendar") {
+    return (
+      <View style={{ flex: 1 }}>
+        <CalendarView
+          colors={colors}
+          currentMonth={currentMonth}
+          setCurrentMonth={setCurrentMonth}
+          transactions={transactions}
+          setChartView={setChartView}
+        />
+      </View>
+    );
+  }
+
+  if (chartView === "Monthly") {
+    return (
+      <View style={{ flex: 1 }}>
+        <MonthlyView colors={colors} transactions={transactions} setChartView={setChartView} />
+      </View>
+    );
+  }
 
   return (
     <ScrollView showsVerticalScrollIndicator={false} contentContainerStyle={{ paddingBottom: 120 }}>
@@ -86,28 +478,7 @@ function CashFlowTab({
 
       {/* Chart card */}
       <View style={[styles.chartCard, { backgroundColor: colors.card }]}>
-        {/* Chart/Calendar/Monthly toggle */}
-        <View style={[styles.toggleRow, { backgroundColor: colors.muted }]}>
-          {CHART_VIEWS.map((v) => (
-            <TouchableOpacity
-              key={v}
-              style={[
-                styles.toggleBtn,
-                chartView === v && { backgroundColor: colors.background },
-              ]}
-              onPress={() => setChartView(v)}
-            >
-              <Text
-                style={[
-                  styles.toggleText,
-                  { color: chartView === v ? colors.foreground : colors.mutedForeground },
-                ]}
-              >
-                {v}
-              </Text>
-            </TouchableOpacity>
-          ))}
-        </View>
+        <Toggle />
 
         {/* Expand icon */}
         <View style={styles.expandRow}>
@@ -123,16 +494,13 @@ function CashFlowTab({
 
             return (
               <View key={m.label} style={styles.barColumn}>
-                {/* Income value above */}
                 <Text style={[styles.barValue, { color: colors.mutedForeground }]}>
                   {m.income > 0 ? Math.round(m.income) : "0"}
                 </Text>
-                {/* Expense value */}
                 <Text style={[styles.barValue, { color: colors.mutedForeground }]}>
                   {m.expense > 0 ? `-${Math.round(m.expense)}` : "0"}
                 </Text>
 
-                {/* The stacked bar */}
                 <View
                   style={[
                     styles.barWrapper,
@@ -143,32 +511,14 @@ function CashFlowTab({
                     },
                   ]}
                 >
-                  {/* Income bar (top, green) */}
                   <View style={{ flex: 1, justifyContent: "flex-end" }}>
                     {m.income > 0 && (
-                      <View
-                        style={[
-                          styles.incomeBar,
-                          {
-                            height: incomeH,
-                            backgroundColor: "#4caf50",
-                          },
-                        ]}
-                      />
+                      <View style={[styles.incomeBar, { height: incomeH, backgroundColor: "#4caf50" }]} />
                     )}
                   </View>
-                  {/* Expense bar (bottom, orange) */}
                   <View style={{ flex: 1, justifyContent: "flex-start" }}>
                     {m.expense > 0 && (
-                      <View
-                        style={[
-                          styles.expenseBar,
-                          {
-                            height: expenseH,
-                            backgroundColor: "#f97316",
-                          },
-                        ]}
-                      />
+                      <View style={[styles.expenseBar, { height: expenseH, backgroundColor: "#f97316" }]} />
                     )}
                   </View>
                 </View>
@@ -180,61 +530,13 @@ function CashFlowTab({
         </View>
       </View>
 
-      {/* Projected section */}
-      <View style={[styles.projectedCard, { backgroundColor: colors.card }]}>
-        <View style={styles.projectedHeader}>
-          <Text style={[styles.projectedTitle, { color: colors.foreground }]}>Projected</Text>
-          <TouchableOpacity style={styles.moreBtn}>
-            <Text style={[styles.moreText, { color: colors.primary }]}>More</Text>
-            <Feather name="chevron-right" size={14} color={colors.primary} />
-          </TouchableOpacity>
-        </View>
-
-        {/* May row */}
-        <View style={styles.projectedRow}>
-          <Text style={[styles.projectedMonth, { color: colors.foreground }]}>{monthName}</Text>
-          <View style={styles.projectedRight}>
-            <Text style={[styles.projectedPct, { color: colors.mutedForeground }]}>0.0%</Text>
-            <Text style={[styles.projectedAmount, { color: "#4caf50" }]}>
-              + ${projected >= 0 ? projected.toFixed(0) : "0"}
-            </Text>
-          </View>
-        </View>
-
-        {/* Progress bar */}
-        <View style={[styles.progressTrack, { backgroundColor: colors.muted }]}>
-          <View
-            style={[
-              styles.progressFill,
-              {
-                backgroundColor: "#f97316",
-                width: `${thisMonthData.income > 0
-                  ? Math.min((thisMonthData.expense / thisMonthData.income) * 100, 100)
-                  : thisMonthData.expense > 0 ? 100 : 0}%` as any,
-              },
-            ]}
-          />
-        </View>
-
-        {/* Balance row */}
-        <View style={styles.balanceRow}>
-          <View style={styles.balanceLeft}>
-            <Text style={[styles.balanceLabel, { color: colors.foreground }]}>Balance</Text>
-            <Text style={[styles.balanceAmount, { color: "#f97316" }]}>
-              - ${thisMonthData.expense.toFixed(0)}
-            </Text>
-          </View>
-          <View style={styles.balanceRight}>
-            <View style={styles.balancePctBadge}>
-              <Feather name="arrow-up" size={10} color="#f97316" />
-              <Text style={[styles.balancePct, { color: "#f97316" }]}>11.1%</Text>
-            </View>
-            <Text style={[styles.balanceFinal, { color: colors.foreground }]}>
-              - ${thisMonthData.expense.toFixed(0)}
-            </Text>
-          </View>
-        </View>
-      </View>
+      <ProjectedSection
+        colors={colors}
+        monthLabel={monthName}
+        income={thisMonthData.income}
+        expense={thisMonthData.expense}
+        prevExpense={prevMonthData.expense}
+      />
     </ScrollView>
   );
 }
@@ -883,5 +1185,114 @@ const styles = StyleSheet.create({
     alignItems: "center",
     justifyContent: "center",
     backgroundColor: "transparent",
+  },
+
+  calDayHeaders: {
+    flexDirection: "row",
+    marginBottom: 6,
+    marginTop: 8,
+  },
+  calDayHeader: {
+    flex: 1,
+    textAlign: "center",
+    fontSize: 12,
+    fontFamily: "Inter_500Medium",
+  },
+  calRow: {
+    flexDirection: "row",
+    marginBottom: 2,
+  },
+  calCell: {
+    flex: 1,
+    alignItems: "center",
+    paddingVertical: 4,
+  },
+  calDayCircle: {
+    width: 34,
+    height: 34,
+    borderRadius: 17,
+    alignItems: "center",
+    justifyContent: "center",
+  },
+  calDayText: {
+    fontSize: 15,
+    fontFamily: "Inter_400Regular",
+  },
+  calDot: {
+    position: "absolute",
+    bottom: 2,
+    width: 5,
+    height: 5,
+    borderRadius: 2.5,
+  },
+
+  monthlyCard: {
+    borderRadius: 14,
+    padding: 14,
+    gap: 8,
+  },
+  monthlyTopRow: {
+    flexDirection: "row",
+    justifyContent: "space-between",
+    alignItems: "center",
+  },
+  monthlyLabel: {
+    fontSize: 16,
+    fontFamily: "Inter_700Bold",
+  },
+  monthlyRight: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 8,
+  },
+  monthlyPctBadge: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 2,
+  },
+  monthlyPct: {
+    fontSize: 11,
+    fontFamily: "Inter_500Medium",
+  },
+  monthlyIncome: {
+    fontSize: 15,
+    fontFamily: "Inter_700Bold",
+  },
+  monthlyProgressTrack: {
+    height: 5,
+    borderRadius: 3,
+    overflow: "hidden",
+  },
+  monthlyProgressFill: {
+    height: 5,
+    borderRadius: 3,
+    backgroundColor: "#f97316",
+  },
+  monthlyBalanceRow: {
+    flexDirection: "row",
+    justifyContent: "space-between",
+    alignItems: "center",
+  },
+  monthlyBalanceLeft: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 6,
+  },
+  monthlyBalanceLabel: {
+    fontSize: 13,
+    fontFamily: "Inter_400Regular",
+  },
+  monthlyBalanceAmt: {
+    fontSize: 14,
+    fontFamily: "Inter_600SemiBold",
+  },
+  monthlyBalanceRight: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 8,
+  },
+  monthlyBalanceFinal: {
+    fontSize: 14,
+    fontFamily: "Inter_600SemiBold",
   },
 });
