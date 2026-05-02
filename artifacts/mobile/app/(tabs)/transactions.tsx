@@ -14,6 +14,7 @@ import { useSafeAreaInsets } from "react-native-safe-area-context";
 
 import AddTransactionModal from "@/components/AddTransactionModal";
 import MonthDetailModal from "@/components/MonthDetailModal";
+import TransactionDetailModal from "@/components/TransactionDetailModal";
 import TransactionItem from "@/components/TransactionItem";
 import { Account, Bill, Transaction, useApp } from "@/context/AppContext";
 import { useColors } from "@/hooks/useColors";
@@ -567,6 +568,56 @@ const CATEGORY_COLORS: Record<string, string> = {
   Other: "#94a3b8",
 };
 
+function DonutRing({ segments, size = 110, stroke = 18 }: {
+  segments: { color: string; pct: number }[];
+  size?: number;
+  stroke?: number;
+}) {
+  const r = (size - stroke) / 2;
+  const circ = 2 * Math.PI * r;
+  let offset = 0;
+  const gap = 2;
+  return (
+    <View style={{ width: size, height: size }}>
+      {/* eslint-disable-next-line @typescript-eslint/no-var-requires */}
+      {(() => {
+        try {
+          const Svg = require("react-native-svg").Svg;
+          const Circle = require("react-native-svg").Circle;
+          return (
+            <Svg width={size} height={size} viewBox={`0 0 ${size} ${size}`}>
+              <Circle cx={size / 2} cy={size / 2} r={r} fill="none" stroke="#e5e7eb22" strokeWidth={stroke} />
+              {segments.map((seg, i) => {
+                const dash = Math.max((seg.pct / 100) * circ - gap, 0);
+                const el = (
+                  <Circle
+                    key={i}
+                    cx={size / 2}
+                    cy={size / 2}
+                    r={r}
+                    fill="none"
+                    stroke={seg.color}
+                    strokeWidth={stroke}
+                    strokeDasharray={`${dash} ${circ}`}
+                    strokeDashoffset={-offset}
+                    strokeLinecap="round"
+                    rotation={-90}
+                    origin={`${size / 2}, ${size / 2}`}
+                  />
+                );
+                offset += (seg.pct / 100) * circ;
+                return el;
+              })}
+            </Svg>
+          );
+        } catch {
+          return null;
+        }
+      })()}
+    </View>
+  );
+}
+
 function SpendingTab({ transactions, colors, currentMonth }: { transactions: Transaction[]; colors: any; currentMonth: number }) {
   const year = new Date().getFullYear();
   const monthStr = new Date(year, currentMonth, 1).toISOString().slice(0, 7);
@@ -583,6 +634,11 @@ function SpendingTab({ transactions, colors, currentMonth }: { transactions: Tra
 
   const total = categorySpend.reduce((s, [, v]) => s + v, 0);
 
+  const donutSegments = categorySpend.map(([cat, amt]) => ({
+    color: CATEGORY_COLORS[cat] || colors.primary,
+    pct: total > 0 ? (amt / total) * 100 : 0,
+  }));
+
   return (
     <ScrollView showsVerticalScrollIndicator={false} contentContainerStyle={{ padding: 16, paddingBottom: 120, gap: 12 }}>
       {categorySpend.length === 0 ? (
@@ -591,33 +647,63 @@ function SpendingTab({ transactions, colors, currentMonth }: { transactions: Tra
           <Text style={[styles.emptyText, { color: colors.mutedForeground }]}>No spending this month</Text>
         </View>
       ) : (
-        <View style={[styles.spendCard, { backgroundColor: colors.card }]}>
-          <Text style={[styles.spendCardTitle, { color: colors.foreground }]}>
-            {MONTHS[currentMonth]} Spending Breakdown
-          </Text>
-          {categorySpend.map(([cat, amt]) => {
-            const pct = total > 0 ? (amt / total) * 100 : 0;
-            const color = CATEGORY_COLORS[cat] || colors.primary;
-            return (
-              <View key={cat} style={styles.catRow}>
-                <View style={styles.catLabel}>
-                  <View style={[styles.catDot, { backgroundColor: color }]} />
-                  <Text style={[styles.catName, { color: colors.foreground }]}>{cat}</Text>
+        <>
+          {/* Donut summary card */}
+          <View style={[styles.spendCard, { backgroundColor: colors.card }]}>
+            <Text style={[styles.spendCardTitle, { color: colors.foreground }]}>
+              {MONTHS[currentMonth]} Overview
+            </Text>
+            <View style={styles.donutRow}>
+              <View style={styles.donutWrap}>
+                <DonutRing segments={donutSegments} size={120} stroke={20} />
+                <View style={styles.donutCenter}>
+                  <Text style={[styles.donutTotal, { color: colors.foreground }]}>${total >= 1000 ? `${(total / 1000).toFixed(1)}k` : total.toFixed(0)}</Text>
+                  <Text style={[styles.donutLabel, { color: colors.mutedForeground }]}>spent</Text>
                 </View>
-                <View style={styles.catBarContainer}>
-                  <View style={[styles.catBarBg, { backgroundColor: color + "25" }]}>
-                    <View style={[styles.catBarFill, { backgroundColor: color, width: `${Math.min(pct, 100)}%` as any }]} />
-                  </View>
-                </View>
-                <Text style={[styles.catAmount, { color: colors.foreground }]}>${amt.toFixed(0)}</Text>
               </View>
-            );
-          })}
-          <View style={[styles.totalRow, { borderTopColor: colors.border }]}>
-            <Text style={[styles.totalLabel, { color: colors.mutedForeground }]}>Total</Text>
-            <Text style={[styles.totalAmount, { color: colors.foreground }]}>${total.toFixed(2)}</Text>
+              <View style={styles.donutLegend}>
+                {categorySpend.slice(0, 5).map(([cat, amt]) => {
+                  const pct = total > 0 ? (amt / total) * 100 : 0;
+                  const color = CATEGORY_COLORS[cat] || colors.primary;
+                  return (
+                    <View key={cat} style={styles.legendRow}>
+                      <View style={[styles.catDot, { backgroundColor: color }]} />
+                      <Text style={[styles.legendCat, { color: colors.foreground }]} numberOfLines={1}>{cat}</Text>
+                      <Text style={[styles.legendPct, { color: colors.mutedForeground }]}>{pct.toFixed(0)}%</Text>
+                    </View>
+                  );
+                })}
+              </View>
+            </View>
           </View>
-        </View>
+
+          {/* Category breakdown bars */}
+          <View style={[styles.spendCard, { backgroundColor: colors.card }]}>
+            <Text style={[styles.spendCardTitle, { color: colors.foreground }]}>Breakdown</Text>
+            {categorySpend.map(([cat, amt]) => {
+              const pct = total > 0 ? (amt / total) * 100 : 0;
+              const color = CATEGORY_COLORS[cat] || colors.primary;
+              return (
+                <View key={cat} style={styles.catRow}>
+                  <View style={styles.catLabel}>
+                    <View style={[styles.catDot, { backgroundColor: color }]} />
+                    <Text style={[styles.catName, { color: colors.foreground }]}>{cat}</Text>
+                  </View>
+                  <View style={styles.catBarContainer}>
+                    <View style={[styles.catBarBg, { backgroundColor: color + "25" }]}>
+                      <View style={[styles.catBarFill, { backgroundColor: color, width: `${Math.min(pct, 100)}%` as any }]} />
+                    </View>
+                  </View>
+                  <Text style={[styles.catAmount, { color: colors.foreground }]}>${amt.toFixed(0)}</Text>
+                </View>
+              );
+            })}
+            <View style={[styles.totalRow, { borderTopColor: colors.border }]}>
+              <Text style={[styles.totalLabel, { color: colors.mutedForeground }]}>Total</Text>
+              <Text style={[styles.totalAmount, { color: colors.foreground }]}>${total.toFixed(2)}</Text>
+            </View>
+          </View>
+        </>
       )}
     </ScrollView>
   );
@@ -627,29 +713,67 @@ function TrendsTab({ transactions, colors }: { transactions: Transaction[]; colo
   const year = new Date().getFullYear();
   const monthData = useMemo(() => getMonthData(transactions, year), [transactions, year]);
 
+  const maxVal = useMemo(
+    () => Math.max(...monthData.map((m) => Math.max(m.income, m.expense)), 1),
+    [monthData]
+  );
+
+  const totalIncome = monthData.reduce((s, m) => s + m.income, 0);
+  const totalExpense = monthData.reduce((s, m) => s + m.expense, 0);
+  const netSavings = totalIncome - totalExpense;
+  const savingsRate = totalIncome > 0 ? (netSavings / totalIncome) * 100 : 0;
+
   return (
     <ScrollView showsVerticalScrollIndicator={false} contentContainerStyle={{ padding: 16, paddingBottom: 120, gap: 14 }}>
+      {/* Summary cards */}
+      <View style={styles.trendSummaryRow}>
+        <View style={[styles.trendSummaryCard, { backgroundColor: "#10b98115" }]}>
+          <Text style={[styles.trendSummaryLabel, { color: "#10b981" }]}>Income</Text>
+          <Text style={[styles.trendSummaryAmt, { color: "#10b981" }]}>${totalIncome >= 1000 ? `${(totalIncome / 1000).toFixed(1)}k` : totalIncome.toFixed(0)}</Text>
+        </View>
+        <View style={[styles.trendSummaryCard, { backgroundColor: "#f9731615" }]}>
+          <Text style={[styles.trendSummaryLabel, { color: "#f97316" }]}>Expense</Text>
+          <Text style={[styles.trendSummaryAmt, { color: "#f97316" }]}>${totalExpense >= 1000 ? `${(totalExpense / 1000).toFixed(1)}k` : totalExpense.toFixed(0)}</Text>
+        </View>
+        <View style={[styles.trendSummaryCard, { backgroundColor: colors.muted }]}>
+          <Text style={[styles.trendSummaryLabel, { color: colors.mutedForeground }]}>Saved</Text>
+          <Text style={[styles.trendSummaryAmt, { color: netSavings >= 0 ? "#10b981" : "#f97316" }]}>
+            {savingsRate.toFixed(0)}%
+          </Text>
+        </View>
+      </View>
+
+      {/* Monthly breakdown */}
       <View style={[styles.trendCard, { backgroundColor: colors.card }]}>
         <Text style={[styles.spendCardTitle, { color: colors.foreground }]}>Monthly Income vs Expense</Text>
-        {monthData.map((m, idx) => {
+        {/* Legend */}
+        <View style={styles.trendLegend}>
+          <View style={styles.trendLegendItem}>
+            <View style={[styles.trendLegendDot, { backgroundColor: "#10b981" }]} />
+            <Text style={[styles.trendLegendText, { color: colors.mutedForeground }]}>Income</Text>
+          </View>
+          <View style={styles.trendLegendItem}>
+            <View style={[styles.trendLegendDot, { backgroundColor: "#f97316" }]} />
+            <Text style={[styles.trendLegendText, { color: colors.mutedForeground }]}>Expense</Text>
+          </View>
+        </View>
+        {monthData.map((m) => {
           const net = m.income - m.expense;
           const isPositive = net >= 0;
+          const incomeW = maxVal > 0 ? (m.income / maxVal) * 100 : 0;
+          const expenseW = maxVal > 0 ? (m.expense / maxVal) * 100 : 0;
           return (
             <View key={m.label} style={styles.trendRow}>
               <Text style={[styles.trendMonth, { color: colors.mutedForeground }]}>{m.label}</Text>
               <View style={styles.trendBars}>
-                <View style={[styles.trendBar, { backgroundColor: "#4caf5040", flex: 1 }]}>
-                  {m.income > 0 && (
-                    <View style={[styles.trendBarFill, { backgroundColor: "#4caf50", width: "100%" }]} />
-                  )}
+                <View style={[styles.trendBarTrack, { backgroundColor: "#10b98118" }]}>
+                  <View style={[styles.trendBarFill, { backgroundColor: "#10b981", width: `${incomeW}%` as any }]} />
                 </View>
-                <View style={[styles.trendBar, { backgroundColor: "#f9731640", flex: 1 }]}>
-                  {m.expense > 0 && (
-                    <View style={[styles.trendBarFill, { backgroundColor: "#f97316", width: "100%" }]} />
-                  )}
+                <View style={[styles.trendBarTrack, { backgroundColor: "#f9731618" }]}>
+                  <View style={[styles.trendBarFill, { backgroundColor: "#f97316", width: `${expenseW}%` as any }]} />
                 </View>
               </View>
-              <Text style={[styles.trendNet, { color: isPositive ? "#4caf50" : "#f97316" }]}>
+              <Text style={[styles.trendNet, { color: isPositive ? "#10b981" : "#f97316" }]}>
                 {isPositive ? "+" : "-"}${Math.abs(net).toFixed(0)}
               </Text>
             </View>
@@ -665,6 +789,7 @@ const TX_FILTERS = ["All", "Income", "Expense"];
 function TransactionsTab({ transactions, colors }: { transactions: Transaction[]; colors: any }) {
   const [filter, setFilter] = useState("All");
   const [showAdd, setShowAdd] = useState(false);
+  const [selectedTx, setSelectedTx] = useState<Transaction | null>(null);
 
   const filtered = useMemo(() => {
     if (filter === "Income") return transactions.filter((t) => t.type === "income");
@@ -719,7 +844,7 @@ function TransactionsTab({ transactions, colors }: { transactions: Transaction[]
           if (item.type === "header") {
             return <Text style={[styles.dateHeader, { color: colors.mutedForeground }]}>{item.date}</Text>;
           }
-          return <TransactionItem transaction={item.transaction} onPress={() => {}} />;
+          return <TransactionItem transaction={item.transaction} onPress={() => setSelectedTx(item.transaction)} />;
         }}
         contentContainerStyle={{ paddingHorizontal: 16, paddingBottom: Platform.OS === "web" ? 34 + 84 : 120 }}
         showsVerticalScrollIndicator={false}
@@ -732,6 +857,11 @@ function TransactionsTab({ transactions, colors }: { transactions: Transaction[]
       />
 
       <AddTransactionModal visible={showAdd} onClose={() => setShowAdd(false)} />
+      <TransactionDetailModal
+        visible={!!selectedTx}
+        onClose={() => setSelectedTx(null)}
+        transaction={selectedTx}
+      />
     </View>
   );
 }
@@ -1129,6 +1259,92 @@ const styles = StyleSheet.create({
     fontFamily: "Inter_600SemiBold",
   },
 
+  donutRow: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 16,
+  },
+  donutWrap: {
+    width: 120,
+    height: 120,
+    alignItems: "center",
+    justifyContent: "center",
+  },
+  donutCenter: {
+    position: "absolute",
+    alignItems: "center",
+    justifyContent: "center",
+  },
+  donutTotal: {
+    fontSize: 18,
+    fontFamily: "Inter_700Bold",
+  },
+  donutLabel: {
+    fontSize: 11,
+    fontFamily: "Inter_400Regular",
+  },
+  donutLegend: {
+    flex: 1,
+    gap: 7,
+  },
+  legendRow: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 7,
+  },
+  legendCat: {
+    flex: 1,
+    fontSize: 12,
+    fontFamily: "Inter_500Medium",
+  },
+  legendPct: {
+    fontSize: 12,
+    fontFamily: "Inter_400Regular",
+    width: 32,
+    textAlign: "right",
+  },
+
+  trendSummaryRow: {
+    flexDirection: "row",
+    gap: 10,
+  },
+  trendSummaryCard: {
+    flex: 1,
+    borderRadius: 12,
+    padding: 12,
+    gap: 4,
+    alignItems: "center",
+  },
+  trendSummaryLabel: {
+    fontSize: 11,
+    fontFamily: "Inter_500Medium",
+    textTransform: "uppercase",
+    letterSpacing: 0.4,
+  },
+  trendSummaryAmt: {
+    fontSize: 18,
+    fontFamily: "Inter_700Bold",
+  },
+  trendLegend: {
+    flexDirection: "row",
+    gap: 16,
+    marginBottom: 4,
+  },
+  trendLegendItem: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 5,
+  },
+  trendLegendDot: {
+    width: 8,
+    height: 8,
+    borderRadius: 4,
+  },
+  trendLegendText: {
+    fontSize: 12,
+    fontFamily: "Inter_400Regular",
+  },
+
   trendCard: {
     borderRadius: 16,
     padding: 16,
@@ -1137,7 +1353,7 @@ const styles = StyleSheet.create({
   trendRow: {
     flexDirection: "row",
     alignItems: "center",
-    gap: 10,
+    gap: 8,
   },
   trendMonth: {
     fontSize: 12,
@@ -1146,23 +1362,21 @@ const styles = StyleSheet.create({
   },
   trendBars: {
     flex: 1,
-    flexDirection: "row",
-    gap: 4,
-    height: 12,
+    gap: 3,
   },
-  trendBar: {
-    borderRadius: 3,
+  trendBarTrack: {
+    height: 7,
+    borderRadius: 4,
     overflow: "hidden",
-    height: 12,
   },
   trendBarFill: {
-    height: 12,
-    borderRadius: 3,
+    height: 7,
+    borderRadius: 4,
   },
   trendNet: {
     fontSize: 12,
     fontFamily: "Inter_600SemiBold",
-    width: 56,
+    width: 52,
     textAlign: "right",
   },
 
