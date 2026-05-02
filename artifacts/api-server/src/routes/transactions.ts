@@ -1,19 +1,19 @@
 import { Router } from "express";
 import { eq, and, desc } from "drizzle-orm";
 import { db, transactionsTable, insertTransactionSchema, updateTransactionSchema } from "@workspace/db";
-import { validate, requireDeviceId } from "../middlewares/validate.js";
+import { validate, requireHouseholdId } from "../middlewares/validate.js";
 
 const router = Router();
 
-router.use(requireDeviceId);
+router.use(requireHouseholdId);
 
-/** GET /api/transactions — list all transactions for this device */
+/** GET /api/transactions — list all transactions for this household */
 router.get("/transactions", async (req, res) => {
   try {
     const rows = await db
       .select()
       .from(transactionsTable)
-      .where(eq(transactionsTable.deviceId, res.locals.deviceId))
+      .where(eq(transactionsTable.householdId, res.locals.householdId))
       .orderBy(desc(transactionsTable.date));
     res.json(rows);
   } catch (err) {
@@ -25,7 +25,11 @@ router.get("/transactions", async (req, res) => {
 /** POST /api/transactions — create a new transaction */
 router.post("/transactions", validate(insertTransactionSchema), async (req, res) => {
   try {
-    const payload = { ...req.body, deviceId: res.locals.deviceId };
+    const payload = {
+      ...req.body,
+      householdId: res.locals.householdId,
+      deviceId: res.locals.deviceId,
+    };
     const [row] = await db.insert(transactionsTable).values(payload).returning();
     res.status(201).json(row);
   } catch (err) {
@@ -34,7 +38,7 @@ router.post("/transactions", validate(insertTransactionSchema), async (req, res)
   }
 });
 
-/** POST /api/transactions/bulk — upsert many transactions at once (used for sync) */
+/** POST /api/transactions/bulk — upsert many transactions at once (used for email sync) */
 router.post("/transactions/bulk", async (req, res) => {
   try {
     const { transactions } = req.body as { transactions: any[] };
@@ -42,8 +46,11 @@ router.post("/transactions/bulk", async (req, res) => {
       res.status(400).json({ error: "transactions array is required" });
       return;
     }
-    const deviceId = res.locals.deviceId;
-    const payload = transactions.map((t) => ({ ...t, deviceId }));
+    const payload = transactions.map((t) => ({
+      ...t,
+      householdId: res.locals.householdId,
+      deviceId: res.locals.deviceId,
+    }));
     const rows = await db
       .insert(transactionsTable)
       .values(payload)
@@ -76,7 +83,7 @@ router.put("/transactions/:id", validate(updateTransactionSchema), async (req, r
       .where(
         and(
           eq(transactionsTable.id, String(req.params.id)),
-          eq(transactionsTable.deviceId, res.locals.deviceId)
+          eq(transactionsTable.householdId, res.locals.householdId)
         )
       )
       .returning();
@@ -99,7 +106,7 @@ router.delete("/transactions/:id", async (req, res) => {
       .where(
         and(
           eq(transactionsTable.id, String(req.params.id)),
-          eq(transactionsTable.deviceId, res.locals.deviceId)
+          eq(transactionsTable.householdId, res.locals.householdId)
         )
       )
       .returning();

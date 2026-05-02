@@ -16,6 +16,7 @@ import { useSafeAreaInsets } from "react-native-safe-area-context";
 
 import AddTransactionModal from "@/components/AddTransactionModal";
 import { useApp } from "@/context/AppContext";
+import { useDrawer } from "@/context/DrawerContext";
 import { useColors } from "@/hooks/useColors";
 
 // ─── Section card wrapper ─────────────────────────────────────────────────────
@@ -149,6 +150,7 @@ const TIPS = [
 export default function HomeScreen() {
   const colors = useColors();
   const insets = useSafeAreaInsets();
+  const { openDrawer } = useDrawer();
   const {
     accounts,
     transactions,
@@ -234,9 +236,18 @@ export default function HomeScreen() {
       >
         {/* ── Header ── */}
         <View style={styles.header}>
-          <View>
-            <Text style={[styles.greeting, { color: colors.mutedForeground }]}>{greeting}</Text>
-            <Text style={[styles.pageTitle, { color: colors.foreground }]}>My Finances</Text>
+          <View style={styles.headerLeft}>
+            <TouchableOpacity
+              style={[styles.hamburgerBtn, { backgroundColor: colors.card, borderColor: colors.border }]}
+              onPress={() => { Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light); openDrawer(); }}
+              hitSlop={8}
+            >
+              <Feather name="menu" size={20} color={colors.foreground} />
+            </TouchableOpacity>
+            <View>
+              <Text style={[styles.greeting, { color: colors.mutedForeground }]}>{greeting}</Text>
+              <Text style={[styles.pageTitle, { color: colors.foreground }]}>My Finances</Text>
+            </View>
           </View>
           <View style={styles.headerActions}>
             {emailSync.isConnected && (
@@ -473,7 +484,9 @@ export default function HomeScreen() {
 const styles = StyleSheet.create({
   container: { flex: 1 },
   scroll: { paddingHorizontal: 14, gap: 12 },
-  header: { flexDirection: "row", justifyContent: "space-between", alignItems: "flex-start" },
+  header: { flexDirection: "row", justifyContent: "space-between", alignItems: "center" },
+  headerLeft: { flexDirection: "row", alignItems: "center", gap: 10 },
+  hamburgerBtn: { width: 38, height: 38, borderRadius: 11, alignItems: "center", justifyContent: "center", borderWidth: 1 },
   greeting: { fontSize: 12, fontFamily: "Inter_400Regular" },
   pageTitle: { fontSize: 22, fontFamily: "Inter_700Bold", marginTop: 2 },
   headerActions: { flexDirection: "row", gap: 8, alignItems: "center" },

@@ -9,12 +9,15 @@ import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { Stack } from "expo-router";
 import * as SplashScreen from "expo-splash-screen";
 import React, { useEffect } from "react";
+import { View } from "react-native";
 import { GestureHandlerRootView } from "react-native-gesture-handler";
 import { KeyboardProvider } from "react-native-keyboard-controller";
 import { SafeAreaProvider } from "react-native-safe-area-context";
 
 import { ErrorBoundary } from "@/components/ErrorBoundary";
+import Drawer from "@/components/Drawer";
 import { AppProvider } from "@/context/AppContext";
+import { DrawerProvider } from "@/context/DrawerContext";
 import { FeatureFlagsProvider } from "@/context/FeatureFlagsContext";
 
 SplashScreen.preventAutoHideAsync();
@@ -51,11 +54,18 @@ export default function RootLayout() {
         <QueryClientProvider client={queryClient}>
           <FeatureFlagsProvider>
             <AppProvider>
-              <GestureHandlerRootView style={{ flex: 1 }}>
-                <KeyboardProvider>
-                  <RootLayoutNav />
-                </KeyboardProvider>
-              </GestureHandlerRootView>
+              <DrawerProvider>
+                <GestureHandlerRootView style={{ flex: 1 }}>
+                  <KeyboardProvider>
+                    {/* Root view that holds both the app content and the drawer overlay */}
+                    <View style={{ flex: 1 }}>
+                      <RootLayoutNav />
+                      {/* Drawer renders as an absolute overlay above all tab content */}
+                      <Drawer />
+                    </View>
+                  </KeyboardProvider>
+                </GestureHandlerRootView>
+              </DrawerProvider>
             </AppProvider>
           </FeatureFlagsProvider>
         </QueryClientProvider>

@@ -75,6 +75,10 @@ interface AppContextType {
   monthlyIncome: number;
   monthlyExpense: number;
   deviceId: string;
+  /** Shared household code — all family members using the same code see the same data */
+  householdId: string;
+  /** Change the household code (join a family or create a new one) */
+  changeHouseholdId: (code: string) => Promise<void>;
 }
 
 const AppContext = createContext<AppContextType | null>(null);
@@ -85,6 +89,7 @@ const STORAGE_KEYS = {
   bills: "@fintrack/bills",
   emailSync: "@fintrack/emailSync",
   deviceId: "@fintrack/deviceId",
+  householdId: "@fintrack/householdId",
 };
 
 const SAMPLE_ACCOUNTS: Account[] = [
@@ -109,12 +114,28 @@ const SAMPLE_BILLS: Bill[] = [
   { id: "b5", title: "Gym Membership", amount: 49.99, dueDate: new Date(Date.now() + 15 * 86400000).toISOString(), category: "Health", isPaid: false, isRecurring: true, frequency: "monthly" },
 ];
 
+// ── Helpers ──────────────────────────────────────────────────────────────────
+
 function genId() {
   return Date.now().toString(36) + Math.random().toString(36).slice(2, 9);
 }
 
+/** Generates a permanent per-device ID for attribution tracking */
 function generateDeviceId() {
   return "dev_" + genId() + "_" + Date.now().toString(36);
+}
+
+/**
+ * Generates a short 6-char household code (e.g. "X7K4NP").
+ * Avoids ambiguous chars: no 0/O or I/1.
+ * Easy to share verbally or via text.
+ */
+const HOUSEHOLD_CHARS = "ABCDEFGHJKLMNPQRSTUVWXYZ23456789";
+export function generateHouseholdCode(): string {
+  return Array.from(
+    { length: 6 },
+    () => HOUSEHOLD_CHARS[Math.floor(Math.random() * HOUSEHOLD_CHARS.length)]
+  ).join("");
 }
 
 export function getApiBase(): string {
@@ -123,10 +144,15 @@ export function getApiBase(): string {
   return "http://localhost:80";
 }
 
-/** Fire-and-forget API call — used to sync local changes to the backend */
+/**
+ * Fire-and-forget API call.
+ * Sends X-Household-ID (data scope) and X-Device-ID (attribution).
+ * Returns null silently on network failure — data is always in AsyncStorage.
+ */
 async function apiCall(
   path: string,
   method: string,
+  householdId: string,
   deviceId: string,
   body?: unknown
 ): Promise<Response | null> {
@@ -137,6 +163,7 @@ async function apiCall(
       method,
       headers: {
         "Content-Type": "application/json",
+        "X-Household-ID": householdId,
         "X-Device-ID": deviceId,
       },
       body: body ? JSON.stringify(body) : undefined,
@@ -145,9 +172,11 @@ async function apiCall(
     clearTimeout(timeout);
     return res;
   } catch {
-    return null; // Network unavailable — data still saved locally
+    return null;
   }
 }
+
+// ── Provider ─────────────────────────────────────────────────────────────────
 
 export function AppProvider({ children }: { children: React.ReactNode }) {
   const [transactions, setTransactions] = useState<Transaction[]>([]);
@@ -157,95 +186,117 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
   const [isSyncing, setIsSyncing] = useState(false);
   const [initialized, setInitialized] = useState(false);
   const [deviceId, setDeviceId] = useState<string>("");
+  const [householdId, setHouseholdId] = useState<string>("");
   const deviceIdRef = useRef<string>("");
+  const householdIdRef = useRef<string>("");
 
-  // ── Initialization: load from AsyncStorage, then sync from backend ──────────
+  // ── Init: load from AsyncStorage (fast, works offline) ───────────────────
   useEffect(() => {
     (async () => {
       try {
-        const [txRaw, accRaw, billRaw, emailRaw, storedDeviceId] = await Promise.all([
-          AsyncStorage.getItem(STORAGE_KEYS.transactions),
-          AsyncStorage.getItem(STORAGE_KEYS.accounts),
-          AsyncStorage.getItem(STORAGE_KEYS.bills),
-          AsyncStorage.getItem(STORAGE_KEYS.emailSync),
-          AsyncStorage.getItem(STORAGE_KEYS.deviceId),
-        ]);
+        const [txRaw, accRaw, billRaw, emailRaw, storedDeviceId, storedHouseholdId] =
+          await Promise.all([
+            AsyncStorage.getItem(STORAGE_KEYS.transactions),
+            AsyncStorage.getItem(STORAGE_KEYS.accounts),
+            AsyncStorage.getItem(STORAGE_KEYS.bills),
+            AsyncStorage.getItem(STORAGE_KEYS.emailSync),
+            AsyncStorage.getItem(STORAGE_KEYS.deviceId),
+            AsyncStorage.getItem(STORAGE_KEYS.householdId),
+          ]);
 
-        // Device ID — generate once, persist forever
-        let dId = storedDeviceId || generateDeviceId();
-        if (!storedDeviceId) {
-          await AsyncStorage.setItem(STORAGE_KEYS.deviceId, dId);
-        }
+        // Device ID — unique per device, never changes, used for attribution
+        const dId = storedDeviceId || generateDeviceId();
+        if (!storedDeviceId) await AsyncStorage.setItem(STORAGE_KEYS.deviceId, dId);
         deviceIdRef.current = dId;
         setDeviceId(dId);
 
-        // Load local data first (fast)
+        // Household ID — shared among family, starts as a solo code
+        const hId = storedHouseholdId || generateHouseholdCode();
+        if (!storedHouseholdId) await AsyncStorage.setItem(STORAGE_KEYS.householdId, hId);
+        householdIdRef.current = hId;
+        setHouseholdId(hId);
+
         setTransactions(txRaw ? JSON.parse(txRaw) : SAMPLE_TRANSACTIONS);
         setAccounts(accRaw ? JSON.parse(accRaw) : SAMPLE_ACCOUNTS);
         setBills(billRaw ? JSON.parse(billRaw) : SAMPLE_BILLS);
         if (emailRaw) setEmailSync(JSON.parse(emailRaw));
       } catch {}
-
       setInitialized(true);
     })();
   }, []);
 
-  // ── Persist to AsyncStorage on every change ──────────────────────────────────
+  // ── Persist to AsyncStorage on every change ──────────────────────────────
   useEffect(() => { if (initialized) AsyncStorage.setItem(STORAGE_KEYS.transactions, JSON.stringify(transactions)); }, [transactions, initialized]);
   useEffect(() => { if (initialized) AsyncStorage.setItem(STORAGE_KEYS.accounts, JSON.stringify(accounts)); }, [accounts, initialized]);
   useEffect(() => { if (initialized) AsyncStorage.setItem(STORAGE_KEYS.bills, JSON.stringify(bills)); }, [bills, initialized]);
   useEffect(() => { if (initialized) AsyncStorage.setItem(STORAGE_KEYS.emailSync, JSON.stringify(emailSync)); }, [emailSync, initialized]);
 
-  // ── CRUD: Transactions ────────────────────────────────────────────────────────
+  // ── Household ID management ───────────────────────────────────────────────
+  const changeHouseholdId = useCallback(async (code: string) => {
+    const normalized = code.trim().toUpperCase();
+    householdIdRef.current = normalized;
+    setHouseholdId(normalized);
+    await AsyncStorage.setItem(STORAGE_KEYS.householdId, normalized);
+    // Clear local data so the new household's data loads fresh on next pull
+    setTransactions([]);
+    setAccounts([]);
+    setBills([]);
+    await Promise.all([
+      AsyncStorage.removeItem(STORAGE_KEYS.transactions),
+      AsyncStorage.removeItem(STORAGE_KEYS.accounts),
+      AsyncStorage.removeItem(STORAGE_KEYS.bills),
+    ]);
+  }, []);
+
+  // ── CRUD: Transactions ────────────────────────────────────────────────────
   const addTransaction = useCallback((t: Omit<Transaction, "id">) => {
     const newT: Transaction = { ...t, id: genId() };
     setTransactions((prev) => [newT, ...prev]);
-    // Sync to backend (fire-and-forget)
-    apiCall("/api/transactions", "POST", deviceIdRef.current, newT);
+    apiCall("/api/transactions", "POST", householdIdRef.current, deviceIdRef.current, newT);
   }, []);
 
   const updateTransaction = useCallback((id: string, updates: Partial<Transaction>) => {
     setTransactions((prev) => prev.map((t) => (t.id === id ? { ...t, ...updates } : t)));
-    apiCall(`/api/transactions/${id}`, "PUT", deviceIdRef.current, updates);
+    apiCall(`/api/transactions/${id}`, "PUT", householdIdRef.current, deviceIdRef.current, updates);
   }, []);
 
   const deleteTransaction = useCallback((id: string) => {
     setTransactions((prev) => prev.filter((t) => t.id !== id));
-    apiCall(`/api/transactions/${id}`, "DELETE", deviceIdRef.current);
+    apiCall(`/api/transactions/${id}`, "DELETE", householdIdRef.current, deviceIdRef.current);
   }, []);
 
-  // ── CRUD: Accounts ────────────────────────────────────────────────────────────
+  // ── CRUD: Accounts ────────────────────────────────────────────────────────
   const addAccount = useCallback((a: Omit<Account, "id">) => {
     const newA: Account = { ...a, id: genId() };
     setAccounts((prev) => [...prev, newA]);
-    apiCall("/api/accounts", "POST", deviceIdRef.current, newA);
+    apiCall("/api/accounts", "POST", householdIdRef.current, deviceIdRef.current, newA);
   }, []);
 
   const updateAccount = useCallback((id: string, updates: Partial<Account>) => {
     setAccounts((prev) => prev.map((a) => (a.id === id ? { ...a, ...updates } : a)));
-    apiCall(`/api/accounts/${id}`, "PUT", deviceIdRef.current, updates);
+    apiCall(`/api/accounts/${id}`, "PUT", householdIdRef.current, deviceIdRef.current, updates);
   }, []);
 
   const deleteAccount = useCallback((id: string) => {
     setAccounts((prev) => prev.filter((a) => a.id !== id));
-    apiCall(`/api/accounts/${id}`, "DELETE", deviceIdRef.current);
+    apiCall(`/api/accounts/${id}`, "DELETE", householdIdRef.current, deviceIdRef.current);
   }, []);
 
-  // ── CRUD: Bills ───────────────────────────────────────────────────────────────
+  // ── CRUD: Bills ───────────────────────────────────────────────────────────
   const addBill = useCallback((b: Omit<Bill, "id">) => {
     const newB: Bill = { ...b, id: genId() };
     setBills((prev) => [...prev, newB]);
-    apiCall("/api/bills", "POST", deviceIdRef.current, newB);
+    apiCall("/api/bills", "POST", householdIdRef.current, deviceIdRef.current, newB);
   }, []);
 
   const updateBill = useCallback((id: string, updates: Partial<Bill>) => {
     setBills((prev) => prev.map((b) => (b.id === id ? { ...b, ...updates } : b)));
-    apiCall(`/api/bills/${id}`, "PUT", deviceIdRef.current, updates);
+    apiCall(`/api/bills/${id}`, "PUT", householdIdRef.current, deviceIdRef.current, updates);
   }, []);
 
   const deleteBill = useCallback((id: string) => {
     setBills((prev) => prev.filter((b) => b.id !== id));
-    apiCall(`/api/bills/${id}`, "DELETE", deviceIdRef.current);
+    apiCall(`/api/bills/${id}`, "DELETE", householdIdRef.current, deviceIdRef.current);
   }, []);
 
   const markBillPaid = useCallback(
@@ -253,7 +304,7 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
       const bill = bills.find((b) => b.id === id);
       if (!bill) return;
       setBills((prev) => prev.map((b) => (b.id === id ? { ...b, isPaid: true } : b)));
-      apiCall(`/api/bills/${id}/pay`, "POST", deviceIdRef.current);
+      apiCall(`/api/bills/${id}/pay`, "POST", householdIdRef.current, deviceIdRef.current);
       addTransaction({
         title: bill.title,
         amount: bill.amount,
@@ -267,22 +318,29 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
     [bills, accounts, addTransaction]
   );
 
-  // ── Email sync ────────────────────────────────────────────────────────────────
-  const connectEmail = useCallback(async (email: string, appPassword: string): Promise<{ success: boolean; error?: string }> => {
-    try {
-      const res = await fetch(`${getApiBase()}/api/email/test`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json", "X-Device-ID": deviceIdRef.current },
-        body: JSON.stringify({ email, appPassword }),
-      });
-      const data = await res.json();
-      if (!res.ok) return { success: false, error: data.error || "Connection failed" };
-      setEmailSync({ email, appPassword, isConnected: true, lastSynced: undefined });
-      return { success: true };
-    } catch {
-      return { success: false, error: "Network error. Make sure the app is connected." };
-    }
-  }, []);
+  // ── Email sync ────────────────────────────────────────────────────────────
+  const connectEmail = useCallback(
+    async (email: string, appPassword: string): Promise<{ success: boolean; error?: string }> => {
+      try {
+        const res = await fetch(`${getApiBase()}/api/email/test`, {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json",
+            "X-Household-ID": householdIdRef.current,
+            "X-Device-ID": deviceIdRef.current,
+          },
+          body: JSON.stringify({ email, appPassword }),
+        });
+        const data = await res.json();
+        if (!res.ok) return { success: false, error: data.error || "Connection failed" };
+        setEmailSync({ email, appPassword, isConnected: true, lastSynced: undefined });
+        return { success: true };
+      } catch {
+        return { success: false, error: "Network error. Make sure the app is connected." };
+      }
+    },
+    []
+  );
 
   const disconnectEmail = useCallback(() => {
     setEmailSync({ email: "", appPassword: "", isConnected: false });
@@ -296,7 +354,11 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
     try {
       const res = await fetch(`${getApiBase()}/api/email/sync`, {
         method: "POST",
-        headers: { "Content-Type": "application/json", "X-Device-ID": deviceIdRef.current },
+        headers: {
+          "Content-Type": "application/json",
+          "X-Household-ID": householdIdRef.current,
+          "X-Device-ID": deviceIdRef.current,
+        },
         body: JSON.stringify({ email: emailSync.email, appPassword: emailSync.appPassword, daysBack: 30 }),
       });
       const data = await res.json();
@@ -318,18 +380,24 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
           bank: t.bank || "Bank",
         }));
         setTransactions((prev) => {
-          const existingKeys = new Set(prev.filter((t) => t.fromEmail).map((t) => `${t.amount}-${t.title}-${t.date.slice(0, 10)}`));
+          const existingKeys = new Set(
+            prev.filter((t) => t.fromEmail).map((t) => `${t.amount}-${t.title}-${t.date.slice(0, 10)}`)
+          );
           const fresh = newTxs.filter((t) => !existingKeys.has(`${t.amount}-${t.title}-${t.date.slice(0, 10)}`));
           imported = fresh.length;
           if (fresh.length > 0) {
-            // Bulk sync fresh transactions to backend
-            apiCall("/api/transactions/bulk", "POST", deviceIdRef.current, { transactions: fresh });
+            apiCall("/api/transactions/bulk", "POST", householdIdRef.current, deviceIdRef.current, { transactions: fresh });
           }
           return [...fresh, ...prev];
         });
       }
 
-      setEmailSync((prev) => ({ ...prev, lastSynced: new Date().toISOString(), lastEmailsScanned: data.emailsScanned, lastImported: data.transactionsFound }));
+      setEmailSync((prev) => ({
+        ...prev,
+        lastSynced: new Date().toISOString(),
+        lastEmailsScanned: data.emailsScanned,
+        lastImported: data.transactionsFound,
+      }));
       setIsSyncing(false);
       return { imported };
     } catch {
@@ -338,7 +406,7 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
     }
   }, [emailSync, accounts]);
 
-  // ── Computed values ───────────────────────────────────────────────────────────
+  // ── Computed values ───────────────────────────────────────────────────────
   const now = new Date();
   const monthStart = new Date(now.getFullYear(), now.getMonth(), 1).toISOString();
   const thisMonthTx = transactions.filter((t) => t.date >= monthStart);
@@ -355,7 +423,7 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
         addBill, updateBill, deleteBill, markBillPaid,
         connectEmail, disconnectEmail, syncEmailTransactions,
         isSyncing, totalBalance, monthlyIncome, monthlyExpense,
-        deviceId,
+        deviceId, householdId, changeHouseholdId,
       }}
     >
       {children}

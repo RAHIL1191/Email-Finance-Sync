@@ -1,19 +1,19 @@
 import { Router } from "express";
 import { eq, and } from "drizzle-orm";
 import { db, billsTable, insertBillSchema, updateBillSchema } from "@workspace/db";
-import { validate, requireDeviceId } from "../middlewares/validate.js";
+import { validate, requireHouseholdId } from "../middlewares/validate.js";
 
 const router = Router();
 
-router.use(requireDeviceId);
+router.use(requireHouseholdId);
 
-/** GET /api/bills — list all bills for this device */
+/** GET /api/bills — list all bills for this household */
 router.get("/bills", async (req, res) => {
   try {
     const rows = await db
       .select()
       .from(billsTable)
-      .where(eq(billsTable.deviceId, res.locals.deviceId));
+      .where(eq(billsTable.householdId, res.locals.householdId));
     res.json(rows);
   } catch (err) {
     req.log.error({ err }, "Failed to fetch bills");
@@ -24,7 +24,11 @@ router.get("/bills", async (req, res) => {
 /** POST /api/bills — create a new bill */
 router.post("/bills", validate(insertBillSchema), async (req, res) => {
   try {
-    const payload = { ...req.body, deviceId: res.locals.deviceId };
+    const payload = {
+      ...req.body,
+      householdId: res.locals.householdId,
+      deviceId: res.locals.deviceId,
+    };
     const [row] = await db.insert(billsTable).values(payload).returning();
     res.status(201).json(row);
   } catch (err) {
@@ -42,7 +46,7 @@ router.put("/bills/:id", validate(updateBillSchema), async (req, res) => {
       .where(
         and(
           eq(billsTable.id, String(req.params.id)),
-          eq(billsTable.deviceId, res.locals.deviceId)
+          eq(billsTable.householdId, res.locals.householdId)
         )
       )
       .returning();
@@ -66,7 +70,7 @@ router.post("/bills/:id/pay", async (req, res) => {
       .where(
         and(
           eq(billsTable.id, String(req.params.id)),
-          eq(billsTable.deviceId, res.locals.deviceId)
+          eq(billsTable.householdId, res.locals.householdId)
         )
       )
       .returning();
@@ -89,7 +93,7 @@ router.delete("/bills/:id", async (req, res) => {
       .where(
         and(
           eq(billsTable.id, String(req.params.id)),
-          eq(billsTable.deviceId, res.locals.deviceId)
+          eq(billsTable.householdId, res.locals.householdId)
         )
       )
       .returning();
