@@ -94,7 +94,7 @@ function ClassicTabLayout() {
       <Tabs.Screen
         name="transactions"
         options={{
-          title: "Transactions",
+          title: "Insights",
           tabBarIcon: ({ color }) =>
             isIOS ? (
               <SymbolView name="arrow.left.arrow.right" tintColor={color} size={22} />
