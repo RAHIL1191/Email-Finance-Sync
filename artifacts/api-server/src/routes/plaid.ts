@@ -1,4 +1,4 @@
-import { Router } from "express";
+import { Router, type Request, type Response } from "express";
 import {
   Configuration,
   PlaidApi,
@@ -11,6 +11,8 @@ import { db, plaidItemsTable } from "@workspace/db";
 import { requireHouseholdId } from "../middlewares/validate.js";
 
 const router = Router();
+
+// ── All routes in this router require X-Household-ID header ───────────────
 router.use(requireHouseholdId);
 
 // ── Plaid client factory ───────────────────────────────────────────────────
@@ -260,82 +262,6 @@ router.delete("/plaid/disconnect/:itemId", async (req, res) => {
   res.json({ success: true });
 });
 
-// ── GET /api/plaid/link-page ──────────────────────────────────────────────
-// Serves a standalone HTML page that opens Plaid Link.
-// Used by the WebView on native (iOS/Android).
-
-router.get("/plaid/link-page", (req, res) => {
-  const token = req.query.token as string;
-  if (!token) {
-    res.status(400).send("token query param is required");
-    return;
-  }
-
-  res.setHeader("Content-Type", "text/html; charset=utf-8");
-  res.setHeader("X-Frame-Options", "SAMEORIGIN");
-  res.send(`<!DOCTYPE html>
-<html lang="en">
-<head>
-  <meta charset="UTF-8" />
-  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-  <title>Connect Bank</title>
-  <style>
-    * { box-sizing: border-box; margin: 0; padding: 0; }
-    body {
-      font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
-      background: #f9fafb;
-      display: flex;
-      align-items: center;
-      justify-content: center;
-      height: 100vh;
-      flex-direction: column;
-      gap: 16px;
-      color: #374151;
-    }
-    .spinner {
-      width: 44px; height: 44px;
-      border: 3px solid #e5e7eb;
-      border-top-color: #1a56db;
-      border-radius: 50%;
-      animation: spin 0.75s linear infinite;
-    }
-    @keyframes spin { to { transform: rotate(360deg); } }
-    p { font-size: 15px; color: #6b7280; }
-  </style>
-</head>
-<body>
-  <div class="spinner"></div>
-  <p>Opening secure bank link…</p>
-  <script src="https://cdn.plaid.com/link/v2/stable/link.js"></script>
-  <script>
-    function postMsg(data) {
-      var msg = JSON.stringify(data);
-      if (window.ReactNativeWebView) {
-        window.ReactNativeWebView.postMessage(msg);
-      } else {
-        window.parent.postMessage(data, '*');
-      }
-    }
-
-    var handler = Plaid.create({
-      token: ${JSON.stringify(token)},
-      onSuccess: function(publicToken, metadata) {
-        postMsg({ type: 'success', publicToken: publicToken, metadata: metadata });
-      },
-      onExit: function(err, metadata) {
-        postMsg({ type: 'exit', error: err, metadata: metadata });
-      },
-      onEvent: function(eventName, metadata) {
-        postMsg({ type: 'event', eventName: eventName, metadata: metadata });
-      }
-    });
-
-    handler.open();
-  </script>
-</body>
-</html>`);
-});
-
 // ── Helpers ───────────────────────────────────────────────────────────────
 
 function mapAccountType(
@@ -387,6 +313,79 @@ const CATEGORY_MAP: Record<string, string> = {
 
 function humanCategory(raw: string): string {
   return CATEGORY_MAP[raw] ?? raw.replace(/_/g, " ").replace(/\b\w/g, (c) => c.toUpperCase());
+}
+
+// ── GET /api/plaid/link-page (exported for public registration in routes/index.ts) ──
+// Served as a popup window — no household auth needed since the browser
+// opens it directly without custom headers.
+export function plaidLinkPageHandler(req: Request, res: Response): void {
+  const token = req.query.token as string;
+  if (!token) {
+    res.status(400).send("token query param is required");
+    return;
+  }
+
+  res.setHeader("Content-Type", "text/html; charset=utf-8");
+  res.removeHeader("X-Frame-Options");
+  res.send(`<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Connect Bank</title>
+  <style>
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+    body {
+      font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+      background: #f9fafb;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      height: 100vh;
+      flex-direction: column;
+      gap: 16px;
+      color: #374151;
+    }
+    .spinner {
+      width: 44px; height: 44px;
+      border: 3px solid #e5e7eb;
+      border-top-color: #1a56db;
+      border-radius: 50%;
+      animation: spin 0.75s linear infinite;
+    }
+    @keyframes spin { to { transform: rotate(360deg); } }
+    p { font-size: 15px; color: #6b7280; }
+  </style>
+</head>
+<body>
+  <div class="spinner"></div>
+  <p>Opening secure bank link…</p>
+  <script src="https://cdn.plaid.com/link/v2/stable/link.js"></script>
+  <script>
+    function postMsg(data) {
+      var target = window.opener || window.parent;
+      if (target) target.postMessage(data, '*');
+    }
+
+    var handler = Plaid.create({
+      token: ${JSON.stringify(token)},
+      onSuccess: function(publicToken, metadata) {
+        postMsg({ type: 'plaid_success', publicToken: publicToken, metadata: metadata });
+        setTimeout(function() { window.close(); }, 300);
+      },
+      onExit: function(err, metadata) {
+        postMsg({ type: 'plaid_exit', error: err, metadata: metadata });
+        setTimeout(function() { window.close(); }, 300);
+      },
+      onEvent: function(eventName, metadata) {
+        postMsg({ type: 'plaid_event', eventName: eventName, metadata: metadata });
+      }
+    });
+
+    handler.open();
+  </script>
+</body>
+</html>`);
 }
 
 export default router;

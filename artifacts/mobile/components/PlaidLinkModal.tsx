@@ -1,6 +1,6 @@
 import { Feather } from "@expo/vector-icons";
 import * as Haptics from "expo-haptics";
-import React, { useEffect, useRef, useState } from "react";
+import React, { useState } from "react";
 import {
   ActivityIndicator,
   Modal,
@@ -52,30 +52,53 @@ const ACCOUNT_COLORS: Record<string, string> = {
   investment: "#8b5cf6",
 };
 
-// Plaid JS SDK on web
-declare global {
-  interface Window {
-    Plaid?: {
-      create(opts: {
-        token: string;
-        onSuccess: (publicToken: string, metadata: unknown) => void;
-        onExit: (err: unknown, metadata: unknown) => void;
-      }): { open(): void; destroy?(): void };
-    };
-  }
-}
-
-function loadPlaidScript(): Promise<void> {
+// Opens Plaid Link in a popup window and resolves with the public token.
+function openPlaidPopup(
+  linkToken: string,
+  apiBase: string
+): Promise<{ publicToken: string; metadata: unknown }> {
   return new Promise((resolve, reject) => {
-    if (window.Plaid) { resolve(); return; }
-    const existing = document.getElementById("plaid-link-script");
-    if (existing) { existing.addEventListener("load", () => resolve()); return; }
-    const script = document.createElement("script");
-    script.id = "plaid-link-script";
-    script.src = "https://cdn.plaid.com/link/v2/stable/link.js";
-    script.onload = () => resolve();
-    script.onerror = () => reject(new Error("Failed to load Plaid Link SDK"));
-    document.head.appendChild(script);
+    const url = `${apiBase}/api/plaid/link-page?token=${encodeURIComponent(linkToken)}`;
+    const width = 500;
+    const height = 700;
+    const left = Math.max(0, (window.screen.width - width) / 2);
+    const top = Math.max(0, (window.screen.height - height) / 2);
+    const popup = window.open(
+      url,
+      "plaid_link",
+      `width=${width},height=${height},left=${left},top=${top},resizable=yes,scrollbars=yes`
+    );
+
+    if (!popup) {
+      reject(new Error("Popup was blocked. Please allow popups for this site and try again."));
+      return;
+    }
+
+    function onMessage(event: MessageEvent) {
+      if (event.data?.type === "plaid_success") {
+        cleanup();
+        resolve({ publicToken: event.data.publicToken as string, metadata: event.data.metadata });
+      } else if (event.data?.type === "plaid_exit") {
+        cleanup();
+        reject(new Error("exit"));
+      }
+    }
+
+    // Detect if user closes popup without completing
+    const pollTimer = setInterval(() => {
+      if (popup.closed) {
+        cleanup();
+        reject(new Error("exit"));
+      }
+    }, 500);
+
+    function cleanup() {
+      window.removeEventListener("message", onMessage);
+      clearInterval(pollTimer);
+      try { popup.close(); } catch {}
+    }
+
+    window.addEventListener("message", onMessage);
   });
 }
 
@@ -93,18 +116,11 @@ export default function PlaidLinkModal({ onClose }: { onClose: () => void }) {
   const [serverTransactions, setServerTransactions] = useState<ServerTransaction[]>([]);
   const [importResult, setImportResult] = useState<{ accounts: number; transactions: number } | null>(null);
   const [plaidItemId, setPlaidItemId] = useState("");
-  const plaidHandlerRef = useRef<ReturnType<NonNullable<Window["Plaid"]>["create"]> | null>(null);
-
   const filteredBanks = query.trim()
     ? PLAID_BANKS.filter((b) => b.name.toLowerCase().includes(query.toLowerCase()))
     : PLAID_BANKS;
 
-  // On unmount destroy Plaid handler
-  useEffect(() => {
-    return () => { plaidHandlerRef.current?.destroy?.(); };
-  }, []);
-
-  // ── Bank selection → create link token → open Plaid Link ─────────────────
+  // ── Bank selection → create link token → open Plaid Link popup ───────────
   const handleBankSelect = async (bank: (typeof PLAID_BANKS)[0]) => {
     if (Platform.OS !== "web") {
       setErrorMsg("Bank linking via Plaid is available in the web version of the app.");
@@ -119,9 +135,11 @@ export default function PlaidLinkModal({ onClose }: { onClose: () => void }) {
     setStep("opening");
     setConnectingMsg("Opening secure bank link…");
 
+    const apiBase = getApiBase();
+
     try {
       // 1. Get link token from server
-      const tokenRes = await fetch(`${getApiBase()}/api/plaid/create-link-token`, {
+      const tokenRes = await fetch(`${apiBase}/api/plaid/create-link-token`, {
         method: "POST",
         headers: {
           "Content-Type": "application/json",
@@ -139,30 +157,16 @@ export default function PlaidLinkModal({ onClose }: { onClose: () => void }) {
 
       const linkToken = tokenData.link_token as string;
 
-      // 2. Load Plaid JS SDK and open Link
-      await loadPlaidScript();
-
-      if (!window.Plaid) {
-        setErrorMsg("Plaid Link SDK failed to load. Check your internet connection.");
-        setStep("error");
-        return;
-      }
-
-      plaidHandlerRef.current = window.Plaid.create({
-        token: linkToken,
-        onSuccess: (publicToken) => {
-          handlePublicToken(publicToken, bank);
-        },
-        onExit: (_err) => {
-          // User closed Plaid Link without completing
-          setStep("search");
-        },
-      });
-
-      plaidHandlerRef.current.open();
-      // Plaid Link overlay is now visible — our modal stays beneath it
+      // 2. Open Plaid Link in a popup window (avoids iframe CSP restrictions)
+      const { publicToken } = await openPlaidPopup(linkToken, apiBase);
+      await handlePublicToken(publicToken, bank);
     } catch (err: unknown) {
       const msg = err instanceof Error ? err.message : "Unknown error";
+      if (msg === "exit") {
+        // User closed the popup without completing — go back to search
+        setStep("search");
+        return;
+      }
       setErrorMsg(msg);
       setStep("error");
     }

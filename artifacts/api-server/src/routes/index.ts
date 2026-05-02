@@ -7,13 +7,17 @@ import accountsRouter from "./accounts.js";
 import transactionsRouter from "./transactions.js";
 import billsRouter from "./bills.js";
 import emailRouter from "./email.js";
-import plaidRouter from "./plaid.js";
+import plaidRouter, { plaidLinkPageHandler } from "./plaid.js";
 
 const router: IRouter = Router();
 
-// Public routes
+// Public routes (no auth)
 router.use(healthRouter);
 router.use(configRouter);
+
+// Plaid Link popup page — must be registered before any household-auth middleware
+// so browser-opened popups (which carry no custom headers) can reach it.
+router.get("/plaid/link-page", plaidLinkPageHandler);
 
 // Data CRUD routes
 router.use(accountsRouter);
