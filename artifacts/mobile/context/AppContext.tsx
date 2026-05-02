@@ -16,6 +16,9 @@ export interface Transaction {
   category: string;
   accountId: string;
   date: string;
+  /** "plaid" | "email" | "manual" */
+  source?: "plaid" | "email" | "manual";
+  /** @deprecated use source === "email" */
   fromEmail?: boolean;
   bank?: string;
   note?: string;
@@ -29,6 +32,9 @@ export interface Account {
   type: "checking" | "savings" | "credit" | "investment";
   color: string;
   lastFour?: string;
+  /** Set when this account was imported via Plaid */
+  plaidItemId?: string;
+  plaidAccountId?: string;
 }
 
 export interface Bill {
@@ -52,11 +58,26 @@ export interface EmailSync {
   lastImported?: number;
 }
 
+export interface PlaidItem {
+  itemId: string;
+  bankName: string;
+  bankColor: string;
+  connectedAt: string;
+  lastSynced?: string;
+  lastImported?: number;
+  accountIds: string[];
+}
+
+export interface PlaidSync {
+  items: PlaidItem[];
+}
+
 interface AppContextType {
   transactions: Transaction[];
   accounts: Account[];
   bills: Bill[];
   emailSync: EmailSync;
+  plaidSync: PlaidSync;
   addTransaction: (t: Omit<Transaction, "id">) => void;
   updateTransaction: (id: string, t: Partial<Transaction>) => void;
   deleteTransaction: (id: string) => void;
@@ -70,14 +91,15 @@ interface AppContextType {
   connectEmail: (email: string, appPassword: string) => Promise<{ success: boolean; error?: string }>;
   disconnectEmail: () => void;
   syncEmailTransactions: () => Promise<{ imported: number; error?: string }>;
+  connectPlaid: (item: PlaidItem, newAccounts: Omit<Account, "id">[], initialTransactions: Omit<Transaction, "id">[]) => Promise<{ imported: number }>;
+  syncPlaidTransactions: (itemId: string) => Promise<{ imported: number; error?: string }>;
+  disconnectPlaid: (itemId: string) => void;
   isSyncing: boolean;
   totalBalance: number;
   monthlyIncome: number;
   monthlyExpense: number;
   deviceId: string;
-  /** Shared household code — all family members using the same code see the same data */
   householdId: string;
-  /** Change the household code (join a family or create a new one) */
   changeHouseholdId: (code: string) => Promise<void>;
 }
 
@@ -88,6 +110,7 @@ const STORAGE_KEYS = {
   accounts: "@fintrack/accounts",
   bills: "@fintrack/bills",
   emailSync: "@fintrack/emailSync",
+  plaidSync: "@fintrack/plaidSync",
   deviceId: "@fintrack/deviceId",
   householdId: "@fintrack/householdId",
 };
@@ -99,11 +122,11 @@ const SAMPLE_ACCOUNTS: Account[] = [
 ];
 
 const SAMPLE_TRANSACTIONS: Transaction[] = [
-  { id: "t1", title: "Amazon Purchase", amount: 89.99, type: "expense", category: "Shopping", accountId: "acc1", date: new Date(Date.now() - 86400000).toISOString() },
-  { id: "t2", title: "Salary Deposit", amount: 3500.0, type: "income", category: "Income", accountId: "acc1", date: new Date(Date.now() - 2 * 86400000).toISOString() },
-  { id: "t3", title: "Netflix Subscription", amount: 15.99, type: "expense", category: "Entertainment", accountId: "acc3", date: new Date(Date.now() - 3 * 86400000).toISOString() },
-  { id: "t4", title: "Whole Foods", amount: 127.4, type: "expense", category: "Groceries", accountId: "acc1", date: new Date(Date.now() - 4 * 86400000).toISOString() },
-  { id: "t5", title: "Gas Station", amount: 55.0, type: "expense", category: "Transport", accountId: "acc1", date: new Date(Date.now() - 8 * 86400000).toISOString() },
+  { id: "t1", title: "Amazon Purchase", amount: 89.99, type: "expense", category: "Shopping", accountId: "acc1", date: new Date(Date.now() - 86400000).toISOString(), source: "manual" },
+  { id: "t2", title: "Salary Deposit", amount: 3500.0, type: "income", category: "Income", accountId: "acc1", date: new Date(Date.now() - 2 * 86400000).toISOString(), source: "manual" },
+  { id: "t3", title: "Netflix Subscription", amount: 15.99, type: "expense", category: "Entertainment", accountId: "acc3", date: new Date(Date.now() - 3 * 86400000).toISOString(), source: "manual" },
+  { id: "t4", title: "Whole Foods", amount: 127.4, type: "expense", category: "Groceries", accountId: "acc1", date: new Date(Date.now() - 4 * 86400000).toISOString(), source: "manual" },
+  { id: "t5", title: "Gas Station", amount: 55.0, type: "expense", category: "Transport", accountId: "acc1", date: new Date(Date.now() - 8 * 86400000).toISOString(), source: "manual" },
 ];
 
 const SAMPLE_BILLS: Bill[] = [
@@ -120,16 +143,10 @@ function genId() {
   return Date.now().toString(36) + Math.random().toString(36).slice(2, 9);
 }
 
-/** Generates a permanent per-device ID for attribution tracking */
 function generateDeviceId() {
   return "dev_" + genId() + "_" + Date.now().toString(36);
 }
 
-/**
- * Generates a short 6-char household code (e.g. "X7K4NP").
- * Avoids ambiguous chars: no 0/O or I/1.
- * Easy to share verbally or via text.
- */
 const HOUSEHOLD_CHARS = "ABCDEFGHJKLMNPQRSTUVWXYZ23456789";
 export function generateHouseholdCode(): string {
   return Array.from(
@@ -144,11 +161,6 @@ export function getApiBase(): string {
   return "http://localhost:80";
 }
 
-/**
- * Fire-and-forget API call.
- * Sends X-Household-ID (data scope) and X-Device-ID (attribution).
- * Returns null silently on network failure — data is always in AsyncStorage.
- */
 async function apiCall(
   path: string,
   method: string,
@@ -176,6 +188,11 @@ async function apiCall(
   }
 }
 
+/** Canonical dedup key shared across all sync sources */
+function dedupKey(t: { amount: number; title: string; date: string }) {
+  return `${t.amount}-${t.title.toLowerCase().trim()}-${t.date.slice(0, 10)}`;
+}
+
 // ── Provider ─────────────────────────────────────────────────────────────────
 
 export function AppProvider({ children }: { children: React.ReactNode }) {
@@ -183,6 +200,7 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
   const [accounts, setAccounts] = useState<Account[]>([]);
   const [bills, setBills] = useState<Bill[]>([]);
   const [emailSync, setEmailSync] = useState<EmailSync>({ email: "", appPassword: "", isConnected: false });
+  const [plaidSync, setPlaidSync] = useState<PlaidSync>({ items: [] });
   const [isSyncing, setIsSyncing] = useState(false);
   const [initialized, setInitialized] = useState(false);
   const [deviceId, setDeviceId] = useState<string>("");
@@ -190,27 +208,25 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
   const deviceIdRef = useRef<string>("");
   const householdIdRef = useRef<string>("");
 
-  // ── Init: load from AsyncStorage (fast, works offline) ───────────────────
   useEffect(() => {
     (async () => {
       try {
-        const [txRaw, accRaw, billRaw, emailRaw, storedDeviceId, storedHouseholdId] =
+        const [txRaw, accRaw, billRaw, emailRaw, plaidRaw, storedDeviceId, storedHouseholdId] =
           await Promise.all([
             AsyncStorage.getItem(STORAGE_KEYS.transactions),
             AsyncStorage.getItem(STORAGE_KEYS.accounts),
             AsyncStorage.getItem(STORAGE_KEYS.bills),
             AsyncStorage.getItem(STORAGE_KEYS.emailSync),
+            AsyncStorage.getItem(STORAGE_KEYS.plaidSync),
             AsyncStorage.getItem(STORAGE_KEYS.deviceId),
             AsyncStorage.getItem(STORAGE_KEYS.householdId),
           ]);
 
-        // Device ID — unique per device, never changes, used for attribution
         const dId = storedDeviceId || generateDeviceId();
         if (!storedDeviceId) await AsyncStorage.setItem(STORAGE_KEYS.deviceId, dId);
         deviceIdRef.current = dId;
         setDeviceId(dId);
 
-        // Household ID — shared among family, starts as a solo code
         const hId = storedHouseholdId || generateHouseholdCode();
         if (!storedHouseholdId) await AsyncStorage.setItem(STORAGE_KEYS.householdId, hId);
         householdIdRef.current = hId;
@@ -220,24 +236,23 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
         setAccounts(accRaw ? JSON.parse(accRaw) : SAMPLE_ACCOUNTS);
         setBills(billRaw ? JSON.parse(billRaw) : SAMPLE_BILLS);
         if (emailRaw) setEmailSync(JSON.parse(emailRaw));
+        if (plaidRaw) setPlaidSync(JSON.parse(plaidRaw));
       } catch {}
       setInitialized(true);
     })();
   }, []);
 
-  // ── Persist to AsyncStorage on every change ──────────────────────────────
   useEffect(() => { if (initialized) AsyncStorage.setItem(STORAGE_KEYS.transactions, JSON.stringify(transactions)); }, [transactions, initialized]);
   useEffect(() => { if (initialized) AsyncStorage.setItem(STORAGE_KEYS.accounts, JSON.stringify(accounts)); }, [accounts, initialized]);
   useEffect(() => { if (initialized) AsyncStorage.setItem(STORAGE_KEYS.bills, JSON.stringify(bills)); }, [bills, initialized]);
   useEffect(() => { if (initialized) AsyncStorage.setItem(STORAGE_KEYS.emailSync, JSON.stringify(emailSync)); }, [emailSync, initialized]);
+  useEffect(() => { if (initialized) AsyncStorage.setItem(STORAGE_KEYS.plaidSync, JSON.stringify(plaidSync)); }, [plaidSync, initialized]);
 
-  // ── Household ID management ───────────────────────────────────────────────
   const changeHouseholdId = useCallback(async (code: string) => {
     const normalized = code.trim().toUpperCase();
     householdIdRef.current = normalized;
     setHouseholdId(normalized);
     await AsyncStorage.setItem(STORAGE_KEYS.householdId, normalized);
-    // Clear local data so the new household's data loads fresh on next pull
     setTransactions([]);
     setAccounts([]);
     setBills([]);
@@ -313,6 +328,7 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
         accountId: bill.accountId || accounts[0]?.id || "acc1",
         date: new Date().toISOString(),
         note: "Bill payment",
+        source: "manual",
       });
     },
     [bills, accounts, addTransaction]
@@ -376,14 +392,14 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
           category: t.category || "Other",
           accountId: defaultAccountId,
           date: t.date || new Date().toISOString(),
+          source: "email" as const,
           fromEmail: true,
           bank: t.bank || "Bank",
         }));
         setTransactions((prev) => {
-          const existingKeys = new Set(
-            prev.filter((t) => t.fromEmail).map((t) => `${t.amount}-${t.title}-${t.date.slice(0, 10)}`)
-          );
-          const fresh = newTxs.filter((t) => !existingKeys.has(`${t.amount}-${t.title}-${t.date.slice(0, 10)}`));
+          // Dedup against ALL existing transactions regardless of source
+          const existingKeys = new Set(prev.map(dedupKey));
+          const fresh = newTxs.filter((t) => !existingKeys.has(dedupKey(t)));
           imported = fresh.length;
           if (fresh.length > 0) {
             apiCall("/api/transactions/bulk", "POST", householdIdRef.current, deviceIdRef.current, { transactions: fresh });
@@ -406,6 +422,100 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
     }
   }, [emailSync, accounts]);
 
+  // ── Plaid sync ────────────────────────────────────────────────────────────
+
+  const connectPlaid = useCallback(
+    async (
+      item: PlaidItem,
+      newAccounts: Omit<Account, "id">[],
+      initialTransactions: Omit<Transaction, "id">[]
+    ): Promise<{ imported: number }> => {
+      // Add accounts
+      const createdAccounts: Account[] = newAccounts.map((a) => ({ ...a, id: genId() }));
+      setAccounts((prev) => [...prev, ...createdAccounts]);
+
+      // Map plaidAccountId → real accountId for transaction wiring
+      const plaidAccMap: Record<string, string> = {};
+      createdAccounts.forEach((a) => {
+        if (a.plaidAccountId) plaidAccMap[a.plaidAccountId] = a.id;
+      });
+
+      let imported = 0;
+      const txsToAdd: Transaction[] = initialTransactions.map((t) => ({
+        ...t,
+        id: genId(),
+        accountId: (t.accountId && plaidAccMap[t.accountId]) || createdAccounts[0]?.id || t.accountId,
+        source: "plaid" as const,
+      }));
+
+      setTransactions((prev) => {
+        const existingKeys = new Set(prev.map(dedupKey));
+        const fresh = txsToAdd.filter((t) => !existingKeys.has(dedupKey(t)));
+        imported = fresh.length;
+        return [...fresh, ...prev];
+      });
+
+      // Register item with accountIds
+      const registeredItem: PlaidItem = {
+        ...item,
+        accountIds: createdAccounts.map((a) => a.id),
+        lastSynced: new Date().toISOString(),
+        lastImported: imported,
+      };
+      setPlaidSync((prev) => ({ items: [...prev.items, registeredItem] }));
+
+      return { imported };
+    },
+    []
+  );
+
+  const syncPlaidTransactions = useCallback(
+    async (itemId: string): Promise<{ imported: number; error?: string }> => {
+      const item = plaidSync.items.find((i) => i.itemId === itemId);
+      if (!item) return { imported: 0, error: "Bank not found" };
+
+      setIsSyncing(true);
+      // Simulate a network delay + mock new transactions
+      await new Promise((r) => setTimeout(r, 1800));
+
+      const plaidAccounts = accounts.filter((a) => item.accountIds.includes(a.id));
+      if (plaidAccounts.length === 0) { setIsSyncing(false); return { imported: 0, error: "No linked accounts" }; }
+
+      // Generate a few realistic mock transactions since last sync
+      const since = item.lastSynced ? new Date(item.lastSynced) : new Date(Date.now() - 7 * 86400000);
+      const mocked = generateMockPlaidTransactions(plaidAccounts, since);
+
+      let imported = 0;
+      setTransactions((prev) => {
+        const existingKeys = new Set(prev.map(dedupKey));
+        const fresh = mocked.filter((t) => !existingKeys.has(dedupKey(t)));
+        imported = fresh.length;
+        return [...fresh, ...prev];
+      });
+
+      setPlaidSync((prev) => ({
+        items: prev.items.map((i) =>
+          i.itemId === itemId
+            ? { ...i, lastSynced: new Date().toISOString(), lastImported: imported }
+            : i
+        ),
+      }));
+      setIsSyncing(false);
+      return { imported };
+    },
+    [plaidSync, accounts]
+  );
+
+  const disconnectPlaid = useCallback((itemId: string) => {
+    const item = plaidSync.items.find((i) => i.itemId === itemId);
+    if (item) {
+      // Remove linked accounts and their transactions
+      setAccounts((prev) => prev.filter((a) => !item.accountIds.includes(a.id)));
+      setTransactions((prev) => prev.filter((t) => !item.accountIds.includes(t.accountId) || t.source !== "plaid"));
+    }
+    setPlaidSync((prev) => ({ items: prev.items.filter((i) => i.itemId !== itemId) }));
+  }, [plaidSync]);
+
   // ── Computed values ───────────────────────────────────────────────────────
   const now = new Date();
   const monthStart = new Date(now.getFullYear(), now.getMonth(), 1).toISOString();
@@ -417,11 +527,12 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
   return (
     <AppContext.Provider
       value={{
-        transactions, accounts, bills, emailSync,
+        transactions, accounts, bills, emailSync, plaidSync,
         addTransaction, updateTransaction, deleteTransaction,
         addAccount, updateAccount, deleteAccount,
         addBill, updateBill, deleteBill, markBillPaid,
         connectEmail, disconnectEmail, syncEmailTransactions,
+        connectPlaid, syncPlaidTransactions, disconnectPlaid,
         isSyncing, totalBalance, monthlyIncome, monthlyExpense,
         deviceId, householdId, changeHouseholdId,
       }}
@@ -435,4 +546,100 @@ export function useApp() {
   const ctx = useContext(AppContext);
   if (!ctx) throw new Error("useApp must be used within AppProvider");
   return ctx;
+}
+
+// ── Mock Plaid data generators ────────────────────────────────────────────────
+
+const MOCK_TX_TEMPLATES = [
+  { title: "Starbucks", amount: 6.75, type: "expense" as const, category: "Food" },
+  { title: "Uber", amount: 14.50, type: "expense" as const, category: "Transport" },
+  { title: "Spotify", amount: 9.99, type: "expense" as const, category: "Entertainment" },
+  { title: "Target", amount: 43.21, type: "expense" as const, category: "Shopping" },
+  { title: "Chipotle", amount: 12.80, type: "expense" as const, category: "Food" },
+  { title: "Shell Gas", amount: 48.00, type: "expense" as const, category: "Transport" },
+  { title: "CVS Pharmacy", amount: 22.35, type: "expense" as const, category: "Health" },
+  { title: "Direct Deposit", amount: 2200.00, type: "income" as const, category: "Income" },
+  { title: "Venmo Payment", amount: 50.00, type: "income" as const, category: "Income" },
+  { title: "Whole Foods", amount: 87.64, type: "expense" as const, category: "Groceries" },
+];
+
+export function generateMockPlaidTransactions(
+  linkedAccounts: Account[],
+  since: Date
+): Transaction[] {
+  if (linkedAccounts.length === 0) return [];
+  const now = Date.now();
+  const sinceMs = since.getTime();
+  const windowMs = now - sinceMs;
+  if (windowMs <= 0) return [];
+
+  // Generate 2–5 transactions randomly in the window
+  const count = 2 + Math.floor(Math.random() * 4);
+  const txs: Transaction[] = [];
+  const used = new Set<number>();
+
+  for (let i = 0; i < count; i++) {
+    let tplIdx: number;
+    do { tplIdx = Math.floor(Math.random() * MOCK_TX_TEMPLATES.length); } while (used.has(tplIdx));
+    used.add(tplIdx);
+
+    const tpl = MOCK_TX_TEMPLATES[tplIdx];
+    const date = new Date(sinceMs + Math.random() * windowMs).toISOString();
+    const acc = linkedAccounts[Math.floor(Math.random() * linkedAccounts.length)];
+
+    txs.push({
+      id: Date.now().toString(36) + Math.random().toString(36).slice(2),
+      title: tpl.title,
+      amount: tpl.amount,
+      type: tpl.type,
+      category: tpl.category,
+      accountId: acc.id,
+      date,
+      source: "plaid",
+      bank: acc.bank,
+    });
+  }
+  return txs;
+}
+
+// ── Bank catalog (used by PlaidLinkModal) ─────────────────────────────────────
+
+export const PLAID_BANKS = [
+  { id: "chase", name: "Chase", color: "#117ACA", icon: "🏦", accountTypes: ["checking", "savings", "credit"] },
+  { id: "bofa", name: "Bank of America", color: "#E31837", icon: "🏛", accountTypes: ["checking", "savings", "credit"] },
+  { id: "wells", name: "Wells Fargo", color: "#D71E28", icon: "🏦", accountTypes: ["checking", "savings", "credit"] },
+  { id: "citi", name: "Citibank", color: "#003B70", icon: "🏙", accountTypes: ["checking", "savings", "credit"] },
+  { id: "usbank", name: "US Bank", color: "#002868", icon: "🇺🇸", accountTypes: ["checking", "savings"] },
+  { id: "capital_one", name: "Capital One", color: "#D03027", icon: "💳", accountTypes: ["checking", "savings", "credit"] },
+  { id: "td", name: "TD Bank", color: "#34A853", icon: "🍀", accountTypes: ["checking", "savings"] },
+  { id: "pnc", name: "PNC Bank", color: "#F15A22", icon: "🔶", accountTypes: ["checking", "savings"] },
+  { id: "amex", name: "American Express", color: "#007BC1", icon: "💠", accountTypes: ["credit"] },
+  { id: "discover", name: "Discover", color: "#F76F20", icon: "🔍", accountTypes: ["checking", "credit"] },
+  { id: "ally", name: "Ally Bank", color: "#7B2D8B", icon: "💜", accountTypes: ["checking", "savings"] },
+  { id: "schwab", name: "Charles Schwab", color: "#0073CF", icon: "📈", accountTypes: ["checking", "investment"] },
+];
+
+/** Generate mock accounts for a bank after "linking" */
+export function generateMockPlaidAccounts(bankId: string, bank: typeof PLAID_BANKS[0]): Array<{
+  plaidAccountId: string;
+  name: string;
+  type: "checking" | "savings" | "credit" | "investment";
+  balance: number;
+  lastFour: string;
+}> {
+  const lastFourGen = () => String(Math.floor(1000 + Math.random() * 9000));
+  return bank.accountTypes.map((type) => ({
+    plaidAccountId: `${bankId}_${type}_${Math.random().toString(36).slice(2, 8)}`,
+    name: type === "checking" ? `${bank.name} Checking`
+      : type === "savings" ? `${bank.name} Savings`
+      : type === "credit" ? `${bank.name} Credit Card`
+      : `${bank.name} Investment`,
+    type: type as "checking" | "savings" | "credit" | "investment",
+    balance: type === "credit"
+      ? -(Math.floor(Math.random() * 3000 + 200))
+      : type === "investment"
+      ? Math.floor(Math.random() * 50000 + 10000)
+      : Math.floor(Math.random() * 8000 + 500),
+    lastFour: lastFourGen(),
+  }));
 }
