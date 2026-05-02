@@ -1,4 +1,5 @@
 import { Feather } from "@expo/vector-icons";
+import * as Haptics from "expo-haptics";
 import React, { useMemo, useState } from "react";
 import {
   FlatList,
@@ -12,8 +13,9 @@ import {
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 
 import AddTransactionModal from "@/components/AddTransactionModal";
+import MonthDetailModal from "@/components/MonthDetailModal";
 import TransactionItem from "@/components/TransactionItem";
-import { Transaction, useApp } from "@/context/AppContext";
+import { Account, Bill, Transaction, useApp } from "@/context/AppContext";
 import { useColors } from "@/hooks/useColors";
 
 const SUBTABS = ["CASH FLOW", "SPENDING", "TRENDS", "TRANSACTIONS"] as const;
@@ -126,12 +128,14 @@ function CalendarView({
   setCurrentMonth,
   transactions,
   setChartView,
+  onMonthPress,
 }: {
   colors: any;
   currentMonth: number;
   setCurrentMonth: (m: number) => void;
   transactions: Transaction[];
   setChartView: (v: ChartView) => void;
+  onMonthPress: (year: number, month: number) => void;
 }) {
   const today = new Date();
   const year = today.getFullYear();
@@ -178,10 +182,10 @@ function CalendarView({
         <TouchableOpacity onPress={() => setCurrentMonth(Math.max(0, currentMonth - 1))}>
           <Feather name="chevron-left" size={22} color={colors.foreground} />
         </TouchableOpacity>
-        <View style={styles.monthCenter}>
+        <TouchableOpacity style={styles.monthCenter} onPress={() => onMonthPress(year, currentMonth)} activeOpacity={0.7}>
           <Text style={[styles.monthName, { color: colors.foreground }]}>{monthLabel}</Text>
           <Text style={[styles.monthSub, { color: colors.mutedForeground }]}>Monthly</Text>
-        </View>
+        </TouchableOpacity>
         <TouchableOpacity onPress={() => setCurrentMonth(Math.min(11, currentMonth + 1))}>
           <Feather name="chevron-right" size={22} color={colors.foreground} />
         </TouchableOpacity>
@@ -268,10 +272,12 @@ function MonthlyView({
   colors,
   transactions,
   setChartView,
+  onMonthPress,
 }: {
   colors: any;
   transactions: Transaction[];
   setChartView: (v: ChartView) => void;
+  onMonthPress: (year: number, month: number) => void;
 }) {
   const today = new Date();
   const currentYear = today.getFullYear();
@@ -331,7 +337,7 @@ function MonthlyView({
       </View>
 
       {monthDataList.map((m, idx) => (
-        <View key={idx} style={[styles.monthlyCard, { backgroundColor: colors.card }]}>
+        <TouchableOpacity key={idx} onPress={() => onMonthPress(monthList[idx].year, monthList[idx].month)} activeOpacity={0.82} style={[styles.monthlyCard, { backgroundColor: colors.card }]}>
           {/* Top row: month name | pct | income */}
           <View style={styles.monthlyTopRow}>
             <Text style={[styles.monthlyLabel, { color: colors.foreground }]}>{m.label}</Text>
@@ -386,7 +392,7 @@ function MonthlyView({
               </Text>
             </View>
           </View>
-        </View>
+        </TouchableOpacity>
       ))}
     </ScrollView>
   );
@@ -408,6 +414,26 @@ function CashFlowTab({
   setChartView: (v: ChartView) => void;
 }) {
   const year = new Date().getFullYear();
+  const { bills, accounts } = useApp();
+  const [selectedMonth, setSelectedMonth] = useState<{ year: number; month: number } | null>(null);
+
+  const handleMonthPress = (y: number, m: number) => {
+    Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
+    setSelectedMonth({ year: y, month: m });
+  };
+
+  const monthModal = selectedMonth ? (
+    <MonthDetailModal
+      visible
+      onClose={() => setSelectedMonth(null)}
+      year={selectedMonth.year}
+      month={selectedMonth.month}
+      transactions={transactions}
+      bills={bills}
+      accounts={accounts}
+    />
+  ) : null;
+
   const monthData = useMemo(() => getMonthData(transactions, year), [transactions, year]);
 
   const maxVal = useMemo(() => {
@@ -447,7 +473,9 @@ function CashFlowTab({
           setCurrentMonth={setCurrentMonth}
           transactions={transactions}
           setChartView={setChartView}
+          onMonthPress={handleMonthPress}
         />
+        {monthModal}
       </View>
     );
   }
@@ -455,7 +483,8 @@ function CashFlowTab({
   if (chartView === "Monthly") {
     return (
       <View style={{ flex: 1 }}>
-        <MonthlyView colors={colors} transactions={transactions} setChartView={setChartView} />
+        <MonthlyView colors={colors} transactions={transactions} setChartView={setChartView} onMonthPress={handleMonthPress} />
+        {monthModal}
       </View>
     );
   }
@@ -467,10 +496,10 @@ function CashFlowTab({
         <TouchableOpacity onPress={() => setCurrentMonth(Math.max(0, currentMonth - 1))}>
           <Feather name="chevron-left" size={22} color={colors.foreground} />
         </TouchableOpacity>
-        <View style={styles.monthCenter}>
+        <TouchableOpacity style={styles.monthCenter} onPress={() => handleMonthPress(year, currentMonth)} activeOpacity={0.7}>
           <Text style={[styles.monthName, { color: colors.foreground }]}>{monthName}</Text>
           <Text style={[styles.monthSub, { color: colors.mutedForeground }]}>Monthly</Text>
-        </View>
+        </TouchableOpacity>
         <TouchableOpacity onPress={() => setCurrentMonth(Math.min(11, currentMonth + 1))}>
           <Feather name="chevron-right" size={22} color={colors.foreground} />
         </TouchableOpacity>
@@ -537,6 +566,7 @@ function CashFlowTab({
         expense={thisMonthData.expense}
         prevExpense={prevMonthData.expense}
       />
+      {monthModal}
     </ScrollView>
   );
 }
