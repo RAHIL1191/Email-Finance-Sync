@@ -889,72 +889,124 @@ function TrendsTab({ transactions, colors }: { transactions: Transaction[]; colo
   );
 }
 
-const TX_FILTERS = ["All", "Income", "Expense"];
+const TX_FILTERS = ["All", "Expenses", "Income", "Transfer"] as const;
+type TxFilter = (typeof TX_FILTERS)[number];
 
 function TransactionsTab({ transactions, colors }: { transactions: Transaction[]; colors: any }) {
-  const [filter, setFilter] = useState("All");
+  const [filter, setFilter] = useState<TxFilter>("All");
   const [showAdd, setShowAdd] = useState(false);
   const [selectedTx, setSelectedTx] = useState<Transaction | null>(null);
 
   const filtered = useMemo(() => {
+    if (filter === "Expenses") return transactions.filter((t) => t.type === "expense" && t.category !== "Transfer");
     if (filter === "Income") return transactions.filter((t) => t.type === "income");
-    if (filter === "Expense") return transactions.filter((t) => t.type === "expense");
+    if (filter === "Transfer") return transactions.filter((t) => t.category === "Transfer");
     return transactions;
   }, [transactions, filter]);
 
   const grouped = useMemo(() => {
-    const groups: { date: string; items: Transaction[] }[] = [];
+    const groups: { dateKey: string; dateLabel: string; total: number; hasExpense: boolean; items: Transaction[] }[] = [];
+    const today = new Date();
+    const yesterday = new Date(today);
+    yesterday.setDate(today.getDate() - 1);
+
     filtered.forEach((t) => {
-      const date = new Date(t.date).toLocaleDateString("en-US", {
-        weekday: "short",
-        month: "short",
-        day: "numeric",
-      });
-      const existing = groups.find((g) => g.date === date);
-      if (existing) existing.items.push(t);
-      else groups.push({ date, items: [t] });
+      const d = new Date(t.date);
+      const dateKey = d.toDateString();
+      const isToday = dateKey === today.toDateString();
+      const isYesterday = dateKey === yesterday.toDateString();
+      const dateLabel = isToday
+        ? "Today"
+        : isYesterday
+        ? "Yesterday"
+        : d.toLocaleDateString("en-US", { weekday: "short", month: "short", day: "numeric" });
+
+      let group = groups.find((g) => g.dateKey === dateKey);
+      if (!group) {
+        group = { dateKey, dateLabel, total: 0, hasExpense: false, items: [] };
+        groups.push(group);
+      }
+      group.items.push(t);
+      if (t.type === "expense") {
+        group.total += t.amount;
+        group.hasExpense = true;
+      }
     });
     return groups;
   }, [filtered]);
 
-  type FlatItem = { type: "header"; date: string } | { type: "item"; transaction: Transaction };
+  type FlatItem =
+    | { type: "header"; dateLabel: string; total: number; hasExpense: boolean }
+    | { type: "item"; transaction: Transaction };
+
   const flatData: FlatItem[] = grouped.flatMap((g) => [
-    { type: "header" as const, date: g.date },
+    { type: "header" as const, dateLabel: g.dateLabel, total: g.total, hasExpense: g.hasExpense },
     ...g.items.map((t) => ({ type: "item" as const, transaction: t })),
   ]);
 
   return (
     <View style={{ flex: 1 }}>
+      {/* Filter pills */}
       <View style={styles.txFilterRow}>
         {TX_FILTERS.map((f) => (
           <TouchableOpacity
             key={f}
             style={[
               styles.txFilterChip,
-              { backgroundColor: filter === f ? colors.primary : colors.card, borderColor: filter === f ? colors.primary : colors.border },
+              filter === f
+                ? { backgroundColor: colors.primary, borderColor: colors.primary }
+                : { backgroundColor: colors.card, borderColor: colors.border },
             ]}
             onPress={() => setFilter(f)}
           >
-            <Text style={[styles.txFilterText, { color: filter === f ? "#fff" : colors.mutedForeground }]}>{f}</Text>
+            <Text style={[styles.txFilterText, { color: filter === f ? "#fff" : colors.mutedForeground }]}>
+              {f}
+            </Text>
           </TouchableOpacity>
         ))}
       </View>
 
+      {/* View Recurring Transactions */}
+      <TouchableOpacity style={[styles.recurringRow, { borderBottomColor: colors.border, borderTopColor: colors.border }]}>
+        <Text style={[styles.recurringText, { color: colors.foreground }]}>View Recurring Transactions</Text>
+        <Feather name="chevron-right" size={18} color={colors.mutedForeground} />
+      </TouchableOpacity>
+
       <FlatList
         data={flatData}
         keyExtractor={(item, i) =>
-          item.type === "header" ? `h-${item.date}` : `t-${item.transaction.id}`
+          item.type === "header"
+            ? `h-${item.dateLabel}-${i}`
+            : item.type === "item"
+            ? `t-${item.transaction.id}`
+            : `d-${i}`
         }
         renderItem={({ item }) => {
           if (item.type === "header") {
-            return <Text style={[styles.dateHeader, { color: colors.mutedForeground }]}>{item.date}</Text>;
+            return (
+              <View style={[styles.txDateHeader, { borderBottomColor: colors.border }]}>
+                <Text style={[styles.txDateLabel, { color: colors.foreground }]}>{item.dateLabel}</Text>
+                {item.hasExpense && item.total > 0 && (
+                  <Text style={[styles.txDateTotal, { color: colors.foreground }]}>
+                    - ${item.total.toFixed(2)}
+                  </Text>
+                )}
+              </View>
+            );
           }
-          return <TransactionItem transaction={item.transaction} onPress={() => setSelectedTx(item.transaction)} />;
+          return (
+            <View style={[styles.txItemWrap, { borderBottomColor: colors.border }]}>
+              <TransactionItem
+                transaction={item.transaction}
+                onPress={() => setSelectedTx(item.transaction)}
+              />
+            </View>
+          );
         }}
-        contentContainerStyle={{ paddingHorizontal: 16, paddingBottom: Platform.OS === "web" ? 34 + 84 : 120 }}
+        contentContainerStyle={{ paddingBottom: Platform.OS === "web" ? 34 + 84 : 120 }}
         showsVerticalScrollIndicator={false}
         ListEmptyComponent={
-          <View style={[styles.emptyBox, { backgroundColor: colors.card, marginTop: 24 }]}>
+          <View style={[styles.emptyBox, { backgroundColor: colors.card, margin: 16 }]}>
             <Feather name="inbox" size={36} color={colors.mutedForeground} />
             <Text style={[styles.emptyText, { color: colors.mutedForeground }]}>No transactions found</Text>
           </View>
@@ -1500,6 +1552,39 @@ const styles = StyleSheet.create({
   txFilterText: {
     fontSize: 13,
     fontFamily: "Inter_500Medium",
+  },
+  recurringRow: {
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "space-between",
+    paddingHorizontal: 16,
+    paddingVertical: 12,
+    borderTopWidth: 1,
+    borderBottomWidth: 1,
+  },
+  recurringText: {
+    fontSize: 14,
+    fontFamily: "Inter_400Regular",
+  },
+  txDateHeader: {
+    flexDirection: "row",
+    justifyContent: "space-between",
+    alignItems: "center",
+    paddingHorizontal: 16,
+    paddingTop: 16,
+    paddingBottom: 6,
+    borderBottomWidth: 1,
+  },
+  txDateLabel: {
+    fontSize: 14,
+    fontFamily: "Inter_700Bold",
+  },
+  txDateTotal: {
+    fontSize: 14,
+    fontFamily: "Inter_600SemiBold",
+  },
+  txItemWrap: {
+    borderBottomWidth: 1,
   },
   dateHeader: {
     fontSize: 12,

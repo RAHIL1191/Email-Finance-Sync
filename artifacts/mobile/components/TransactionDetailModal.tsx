@@ -17,25 +17,30 @@ import { useSafeAreaInsets } from "react-native-safe-area-context";
 
 import { Transaction, useApp } from "@/context/AppContext";
 import { useColors } from "@/hooks/useColors";
+import { CATEGORY_COLORS, CATEGORY_ICONS } from "./TransactionItem";
 
 const CATEGORIES = [
   "Income", "Food", "Groceries", "Shopping", "Transport",
-  "Entertainment", "Housing", "Utilities", "Health", "Insurance", "Other",
+  "Entertainment", "Housing", "Utilities", "Health", "Insurance",
+  "Education", "Transfer", "Bills", "Other",
 ];
 
-const CATEGORY_ICONS: Record<string, string> = {
-  Income: "arrow-down-circle",
-  Shopping: "shopping-bag",
-  Food: "coffee",
-  Groceries: "shopping-cart",
-  Entertainment: "play-circle",
-  Transport: "navigation",
-  Housing: "home",
-  Utilities: "zap",
-  Health: "activity",
-  Insurance: "shield",
-  Other: "circle",
-};
+type EditType = "EXPENSE" | "INCOME" | "TRANSFER" | "BILLS";
+const EDIT_TYPES: EditType[] = ["EXPENSE", "INCOME", "TRANSFER", "BILLS"];
+
+function typeToEditType(type: "income" | "expense", category: string): EditType {
+  if (type === "income") return "INCOME";
+  if (category === "Transfer") return "TRANSFER";
+  if (category === "Bills") return "BILLS";
+  return "EXPENSE";
+}
+
+function editTypeToFields(et: EditType): { type: "income" | "expense"; category?: string } {
+  if (et === "INCOME") return { type: "income" };
+  if (et === "TRANSFER") return { type: "expense", category: "Transfer" };
+  if (et === "BILLS") return { type: "expense", category: "Bills" };
+  return { type: "expense" };
+}
 
 interface Props {
   visible: boolean;
@@ -49,9 +54,9 @@ export default function TransactionDetailModal({ visible, onClose, transaction }
   const { accounts, updateTransaction, deleteTransaction } = useApp();
 
   const [editing, setEditing] = useState(false);
+  const [editType, setEditType] = useState<EditType>("EXPENSE");
   const [title, setTitle] = useState("");
   const [amount, setAmount] = useState("");
-  const [type, setType] = useState<"income" | "expense">("expense");
   const [category, setCategory] = useState("Other");
   const [accountId, setAccountId] = useState("");
   const [note, setNote] = useState("");
@@ -60,7 +65,7 @@ export default function TransactionDetailModal({ visible, onClose, transaction }
     if (transaction) {
       setTitle(transaction.title);
       setAmount(String(transaction.amount));
-      setType(transaction.type);
+      setEditType(typeToEditType(transaction.type, transaction.category));
       setCategory(transaction.category);
       setAccountId(transaction.accountId);
       setNote(transaction.note || "");
@@ -70,27 +75,27 @@ export default function TransactionDetailModal({ visible, onClose, transaction }
 
   if (!transaction) return null;
 
-  const account = accounts.find((a) => a.id === transaction.accountId);
-  const isIncome = transaction.type === "income";
-  const icon = CATEGORY_ICONS[transaction.category] || "circle";
+  const account = accounts.find((a) => a.id === (editing ? accountId : transaction.accountId));
+  const icon = (CATEGORY_ICONS[transaction.category] || "circle") as any;
+  const catColor = CATEGORY_COLORS[transaction.category] || colors.primary;
 
   const dateObj = new Date(transaction.date);
-  const dateStr = dateObj.toLocaleDateString("en-US", {
-    weekday: "long", year: "numeric", month: "long", day: "numeric",
-  });
-  const timeStr = dateObj.toLocaleTimeString("en-US", {
-    hour: "numeric", minute: "2-digit", hour12: true,
-  });
+  const isToday = new Date().toDateString() === dateObj.toDateString();
+  const timeStr = dateObj.toLocaleTimeString("en-US", { hour: "numeric", minute: "2-digit", hour12: true });
+  const dateLine = isToday ? `Today, ${timeStr}` : `${dateObj.toLocaleDateString("en-US", { weekday: "short", month: "short", day: "numeric" })}, ${timeStr}`;
+
+  const typeLabel = transaction.type === "income" ? "Income" : "Expense";
 
   const handleSave = () => {
     const parsed = parseFloat(amount);
     if (!title.trim() || isNaN(parsed) || parsed <= 0) return;
     Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
+    const fields = editTypeToFields(editType);
     updateTransaction(transaction.id, {
       title: title.trim(),
       amount: parsed,
-      type,
-      category,
+      type: fields.type,
+      category: editType === "TRANSFER" ? "Transfer" : editType === "BILLS" ? "Bills" : category,
       accountId,
       note: note.trim() || undefined,
     });
@@ -98,321 +103,461 @@ export default function TransactionDetailModal({ visible, onClose, transaction }
   };
 
   const handleDelete = () => {
-    Alert.alert(
-      "Delete Transaction",
-      `Remove "${transaction.title}"?`,
-      [
-        { text: "Cancel", style: "cancel" },
-        {
-          text: "Delete",
-          style: "destructive",
-          onPress: () => {
-            Haptics.notificationAsync(Haptics.NotificationFeedbackType.Warning);
-            deleteTransaction(transaction.id);
-            onClose();
-          },
+    Alert.alert("Delete Transaction", `Remove "${transaction.title}"?`, [
+      { text: "Cancel", style: "cancel" },
+      {
+        text: "Delete",
+        style: "destructive",
+        onPress: () => {
+          Haptics.notificationAsync(Haptics.NotificationFeedbackType.Warning);
+          deleteTransaction(transaction.id);
+          onClose();
         },
-      ]
-    );
+      },
+    ]);
   };
 
-  const pb = Platform.OS === "web" ? 24 : insets.bottom + 24;
+  const handleMarkTransfer = () => {
+    Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium);
+    updateTransaction(transaction.id, { category: "Transfer" });
+    onClose();
+  };
+
+  const pt = Platform.OS === "web" ? 16 : insets.top + 8;
+  const pb = Platform.OS === "web" ? 24 : insets.bottom + 16;
+
+  const editCatIcon = (CATEGORY_ICONS[category] || "circle") as any;
+  const editCatColor = CATEGORY_COLORS[category] || colors.primary;
+  const editAccount = accounts.find((a) => a.id === accountId);
+  const editTitleLabel =
+    editType === "INCOME" ? "Edit Income" :
+    editType === "TRANSFER" ? "Edit Transfer" :
+    editType === "BILLS" ? "Edit Bill" : "Edit Expense";
 
   return (
     <Modal
       visible={visible}
-      transparent
       animationType="slide"
-      onRequestClose={onClose}
+      presentationStyle={Platform.OS === "ios" ? "fullScreen" : "fullScreen"}
+      onRequestClose={() => editing ? setEditing(false) : onClose()}
     >
-      <View style={s.overlay}>
-        <TouchableOpacity style={StyleSheet.absoluteFill} onPress={onClose} activeOpacity={1} />
+      <View style={[s.screen, { backgroundColor: colors.background }]}>
         <KeyboardAvoidingView
+          style={{ flex: 1 }}
           behavior={Platform.OS === "ios" ? "padding" : undefined}
-          style={{ width: "100%" }}
         >
-          <View style={[s.sheet, { backgroundColor: colors.card, paddingBottom: pb }]}>
-            {/* Handle */}
-            <View style={[s.handle, { backgroundColor: colors.border }]} />
-
-            {/* Header */}
-            <View style={[s.header, { borderBottomColor: colors.border }]}>
-              <TouchableOpacity onPress={onClose} hitSlop={8}>
-                <Feather name="x" size={22} color={colors.mutedForeground} />
+          {/* Header */}
+          <View style={[s.header, { paddingTop: pt, borderBottomColor: colors.border }]}>
+            <TouchableOpacity onPress={() => editing ? setEditing(false) : onClose()} hitSlop={8} style={s.headerBtn}>
+              <Feather name="arrow-left" size={22} color={colors.primary} />
+            </TouchableOpacity>
+            <Text style={[s.headerTitle, { color: colors.foreground }]}>
+              {editing ? editTitleLabel : "Transaction"}
+            </Text>
+            {editing ? (
+              <TouchableOpacity onPress={handleSave} hitSlop={8} style={s.headerBtn}>
+                <Feather name="check" size={22} color={colors.primary} />
               </TouchableOpacity>
-              <Text style={[s.headerTitle, { color: colors.foreground }]}>
-                {editing ? "Edit Transaction" : "Transaction"}
-              </Text>
-              {editing ? (
-                <TouchableOpacity onPress={handleSave} hitSlop={8}>
-                  <Text style={[s.saveText, { color: colors.primary }]}>Save</Text>
+            ) : (
+              <View style={s.headerActions}>
+                <TouchableOpacity onPress={() => setEditing(true)} hitSlop={8}>
+                  <Feather name="edit-2" size={20} color={colors.primary} />
                 </TouchableOpacity>
-              ) : (
-                <View style={s.headerActions}>
-                  <TouchableOpacity onPress={() => setEditing(true)} hitSlop={8}>
-                    <Feather name="edit-2" size={18} color={colors.primary} />
-                  </TouchableOpacity>
-                  <TouchableOpacity onPress={handleDelete} hitSlop={8}>
-                    <Feather name="trash-2" size={18} color={colors.expense ?? "#ef4444"} />
-                  </TouchableOpacity>
-                </View>
-              )}
-            </View>
+                <TouchableOpacity onPress={handleDelete} hitSlop={8}>
+                  <Feather name="trash-2" size={20} color="#ef4444" />
+                </TouchableOpacity>
+              </View>
+            )}
+          </View>
 
+          {editing ? (
             <ScrollView
               showsVerticalScrollIndicator={false}
               keyboardShouldPersistTaps="handled"
-              contentContainerStyle={{ paddingHorizontal: 20, paddingTop: 20, gap: 20, paddingBottom: 8 }}
+              contentContainerStyle={[s.editScroll, { paddingBottom: pb }]}
             >
-              {editing ? (
-                <>
-                  {/* Type toggle */}
-                  <View style={s.typeRow}>
-                    {(["expense", "income"] as const).map((t) => (
-                      <TouchableOpacity
-                        key={t}
-                        style={[s.typeBtn, { backgroundColor: type === t ? (t === "income" ? "#10b981" : "#ef4444") : colors.muted }]}
-                        onPress={() => setType(t)}
-                      >
-                        <Text style={[s.typeBtnText, { color: type === t ? "#fff" : colors.mutedForeground }]}>
-                          {t.charAt(0).toUpperCase() + t.slice(1)}
-                        </Text>
-                      </TouchableOpacity>
-                    ))}
-                  </View>
+              {/* Type tabs */}
+              <View style={[s.typeTabs, { borderBottomColor: colors.border }]}>
+                {EDIT_TYPES.map((et) => (
+                  <TouchableOpacity
+                    key={et}
+                    style={[s.typeTab, editType === et && { borderBottomColor: colors.primary, borderBottomWidth: 2 }]}
+                    onPress={() => {
+                      setEditType(et);
+                      if (et === "TRANSFER") setCategory("Transfer");
+                      else if (et === "BILLS") setCategory("Bills");
+                      else if (et === "INCOME") setCategory("Income");
+                      else if (category === "Transfer" || category === "Bills" || category === "Income") setCategory("Other");
+                    }}
+                  >
+                    <Text style={[s.typeTabText, { color: editType === et ? colors.primary : colors.mutedForeground }]}>
+                      {et}
+                    </Text>
+                  </TouchableOpacity>
+                ))}
+              </View>
 
-                  {/* Amount */}
-                  <View style={s.amountRow}>
-                    <Text style={[s.currencySymbol, { color: colors.primary }]}>$</Text>
-                    <TextInput
-                      style={[s.amountInput, { color: colors.foreground }]}
-                      keyboardType="decimal-pad"
-                      value={amount}
-                      onChangeText={setAmount}
-                    />
-                  </View>
+              {/* Amount */}
+              <View style={s.amountRow}>
+                <TextInput
+                  style={[s.amountInput, { color: colors.foreground }]}
+                  keyboardType="decimal-pad"
+                  value={amount}
+                  onChangeText={setAmount}
+                  placeholder="0"
+                  placeholderTextColor={colors.mutedForeground}
+                />
+              </View>
 
-                  {/* Title */}
-                  <View style={s.field}>
-                    <Text style={[s.fieldLabel, { color: colors.mutedForeground }]}>Description</Text>
-                    <TextInput
-                      style={[s.input, { backgroundColor: colors.background, color: colors.foreground, borderColor: colors.border }]}
-                      value={title}
-                      onChangeText={setTitle}
-                      placeholder="What was this for?"
-                      placeholderTextColor={colors.mutedForeground}
-                    />
+              {/* Category row */}
+              {editType !== "TRANSFER" && editType !== "BILLS" && (
+                <View style={[s.editRow, { borderBottomColor: colors.border }]}>
+                  <View style={[s.editRowIcon, { backgroundColor: editCatColor + "20" }]}>
+                    <Feather name={editCatIcon} size={18} color={editCatColor} />
                   </View>
-
-                  {/* Category */}
-                  <View style={s.field}>
-                    <Text style={[s.fieldLabel, { color: colors.mutedForeground }]}>Category</Text>
-                    <ScrollView horizontal showsHorizontalScrollIndicator={false}>
-                      <View style={{ flexDirection: "row", gap: 8, paddingVertical: 2 }}>
-                        {CATEGORIES.map((c) => (
+                  <View style={s.editRowInfo}>
+                    <Text style={[s.editRowTitle, { color: colors.foreground }]}>{category}</Text>
+                    <ScrollView horizontal showsHorizontalScrollIndicator={false} style={{ marginTop: 6 }}>
+                      <View style={{ flexDirection: "row", gap: 6 }}>
+                        {CATEGORIES.filter(c => c !== "Transfer" && c !== "Bills").map((c) => (
                           <TouchableOpacity
                             key={c}
-                            style={[s.chip, { backgroundColor: category === c ? colors.primary : colors.muted }]}
+                            style={[s.catChip, { backgroundColor: category === c ? colors.primary : colors.muted }]}
                             onPress={() => setCategory(c)}
                           >
-                            <Text style={[s.chipText, { color: category === c ? "#fff" : colors.mutedForeground }]}>{c}</Text>
+                            <Text style={[s.catChipText, { color: category === c ? "#fff" : colors.mutedForeground }]}>{c}</Text>
                           </TouchableOpacity>
                         ))}
                       </View>
                     </ScrollView>
                   </View>
-
-                  {/* Account */}
-                  <View style={s.field}>
-                    <Text style={[s.fieldLabel, { color: colors.mutedForeground }]}>Account</Text>
-                    {accounts.map((a) => (
-                      <TouchableOpacity
-                        key={a.id}
-                        style={[s.accountOption, { backgroundColor: accountId === a.id ? colors.accent : colors.background, borderColor: accountId === a.id ? colors.primary : colors.border }]}
-                        onPress={() => setAccountId(a.id)}
-                      >
-                        <View style={[s.accountDot, { backgroundColor: a.color }]} />
-                        <Text style={[s.accountOptionText, { color: colors.foreground }]}>{a.name}</Text>
-                        {accountId === a.id && <Feather name="check" size={16} color={colors.primary} />}
-                      </TouchableOpacity>
-                    ))}
-                  </View>
-
-                  {/* Note */}
-                  <View style={s.field}>
-                    <Text style={[s.fieldLabel, { color: colors.mutedForeground }]}>Note (optional)</Text>
-                    <TextInput
-                      style={[s.input, { backgroundColor: colors.background, color: colors.foreground, borderColor: colors.border }]}
-                      value={note}
-                      onChangeText={setNote}
-                      placeholder="Add a note..."
-                      placeholderTextColor={colors.mutedForeground}
-                      multiline
-                      numberOfLines={2}
-                    />
-                  </View>
-                </>
-              ) : (
-                <>
-                  {/* Amount hero */}
-                  <View style={s.amountHero}>
-                    <View style={[s.iconCircle, { backgroundColor: isIncome ? "#10b98118" : "#ef444418" }]}>
-                      <Feather name={icon as any} size={28} color={isIncome ? "#10b981" : "#ef4444"} />
-                    </View>
-                    <Text style={[s.heroAmount, { color: isIncome ? "#10b981" : "#ef4444" }]}>
-                      {isIncome ? "+" : "-"}${transaction.amount.toFixed(2)}
-                    </Text>
-                    <Text style={[s.heroTitle, { color: colors.foreground }]}>{transaction.title}</Text>
-                  </View>
-
-                  {/* Details rows */}
-                  <View style={[s.detailCard, { backgroundColor: colors.background }]}>
-                    <DetailRow label="Category" value={transaction.category} colors={colors} />
-                    <View style={[s.rowDivider, { backgroundColor: colors.border }]} />
-                    <DetailRow label="Type" value={isIncome ? "Income" : "Expense"} colors={colors} />
-                    <View style={[s.rowDivider, { backgroundColor: colors.border }]} />
-                    <DetailRow label="Date" value={dateStr} colors={colors} />
-                    <View style={[s.rowDivider, { backgroundColor: colors.border }]} />
-                    <DetailRow label="Time" value={timeStr} colors={colors} />
-                    {account && (
-                      <>
-                        <View style={[s.rowDivider, { backgroundColor: colors.border }]} />
-                        <DetailRow label="Account" value={`${account.name} · ${account.bank}`} colors={colors} />
-                      </>
-                    )}
-                    {transaction.fromEmail && (
-                      <>
-                        <View style={[s.rowDivider, { backgroundColor: colors.border }]} />
-                        <DetailRow label="Source" value="Email import" colors={colors} icon="mail" />
-                      </>
-                    )}
-                    {transaction.note && (
-                      <>
-                        <View style={[s.rowDivider, { backgroundColor: colors.border }]} />
-                        <DetailRow label="Note" value={transaction.note} colors={colors} />
-                      </>
-                    )}
-                  </View>
-                </>
+                  <Feather name="chevron-right" size={16} color={colors.mutedForeground} />
+                </View>
               )}
+
+              {/* Title / Description */}
+              <View style={[s.editRow, { borderBottomColor: colors.border }]}>
+                <View style={[s.editRowIcon, { backgroundColor: colors.muted }]}>
+                  <Feather name="tag" size={18} color={colors.mutedForeground} />
+                </View>
+                <TextInput
+                  style={[s.editRowInput, { color: colors.foreground }]}
+                  value={title}
+                  onChangeText={setTitle}
+                  placeholder="Description"
+                  placeholderTextColor={colors.mutedForeground}
+                />
+              </View>
+
+              {/* Account */}
+              <View style={[s.editRow, { borderBottomColor: colors.border }]}>
+                {editAccount ? (
+                  <>
+                    <View style={[s.bankBadge, { backgroundColor: editAccount.color }]}>
+                      <Text style={s.bankBadgeText}>{editAccount.bank.slice(0, 2).toUpperCase()}</Text>
+                    </View>
+                    <View style={s.editRowInfo}>
+                      <Text style={[s.editRowTitle, { color: colors.foreground }]}>{editAccount.name}</Text>
+                      <Text style={[s.editRowSub, { color: colors.mutedForeground }]}>
+                        {`From: ${editAccount.type.charAt(0).toUpperCase() + editAccount.type.slice(1)} · ${editAccount.bank}`}
+                      </Text>
+                      <Text style={[s.editRowSub, { color: colors.mutedForeground }]}>
+                        {`Balance: $${editAccount.balance.toFixed(2)}`}
+                      </Text>
+                    </View>
+                    <TouchableOpacity onPress={() => setAccountId("")} hitSlop={8}>
+                      <Feather name="x" size={18} color={colors.mutedForeground} />
+                    </TouchableOpacity>
+                  </>
+                ) : (
+                  <>
+                    <View style={[s.editRowIcon, { backgroundColor: colors.muted }]}>
+                      <Feather name="credit-card" size={18} color={colors.mutedForeground} />
+                    </View>
+                    <ScrollView horizontal showsHorizontalScrollIndicator={false} style={{ flex: 1 }}>
+                      <View style={{ flexDirection: "row", gap: 8, paddingVertical: 4 }}>
+                        {accounts.map((a) => (
+                          <TouchableOpacity
+                            key={a.id}
+                            style={[s.catChip, { backgroundColor: accountId === a.id ? a.color : colors.muted }]}
+                            onPress={() => setAccountId(a.id)}
+                          >
+                            <Text style={[s.catChipText, { color: accountId === a.id ? "#fff" : colors.mutedForeground }]}>{a.name}</Text>
+                          </TouchableOpacity>
+                        ))}
+                      </View>
+                    </ScrollView>
+                  </>
+                )}
+              </View>
+
+              {/* Date */}
+              <View style={[s.editRow, { borderBottomColor: colors.border }]}>
+                <View style={[s.editRowIcon, { backgroundColor: colors.muted }]}>
+                  <Feather name="calendar" size={18} color={colors.mutedForeground} />
+                </View>
+                <View style={s.editRowInfo}>
+                  <Text style={[s.editRowTitle, { color: colors.foreground }]}>{dateLine}</Text>
+                </View>
+                <Feather name="chevron-right" size={16} color={colors.mutedForeground} />
+              </View>
+
+              {/* Notes */}
+              <View style={[s.editRow, { borderBottomColor: colors.border }]}>
+                <View style={[s.editRowIcon, { backgroundColor: colors.muted }]}>
+                  <Feather name="file-text" size={18} color={colors.mutedForeground} />
+                </View>
+                <TextInput
+                  style={[s.editRowInput, { color: colors.foreground }]}
+                  value={note}
+                  onChangeText={setNote}
+                  placeholder="Notes..."
+                  placeholderTextColor={colors.mutedForeground}
+                  multiline
+                />
+                <View style={[s.abcBadge, { borderColor: colors.border }]}>
+                  <Text style={[s.abcText, { color: colors.mutedForeground }]}>ABC</Text>
+                </View>
+              </View>
+
+              {/* Add Receipts */}
+              <TouchableOpacity style={[s.receiptsRow, { backgroundColor: colors.card, borderColor: colors.border }]}>
+                <View style={[s.editRowIcon, { backgroundColor: colors.muted }]}>
+                  <Feather name="camera" size={18} color={colors.mutedForeground} />
+                </View>
+                <Text style={[s.editRowTitle, { color: colors.foreground }]}>Add Receipts</Text>
+              </TouchableOpacity>
             </ScrollView>
-          </View>
+          ) : (
+            <ScrollView
+              showsVerticalScrollIndicator={false}
+              contentContainerStyle={[s.viewScroll, { paddingBottom: pb }]}
+            >
+              {/* Category icon + title */}
+              <View style={s.heroSection}>
+                <View style={[s.heroIcon, { backgroundColor: catColor + "20" }]}>
+                  <Feather name={icon} size={28} color={catColor} />
+                </View>
+                <Text style={[s.heroTitle, { color: colors.foreground }]}>{transaction.title}</Text>
+                <Text style={[s.heroAmount, { color: colors.foreground }]}>
+                  ${transaction.amount.toFixed(2)}
+                </Text>
+                <Text style={[s.heroMeta, { color: colors.mutedForeground }]}>
+                  {typeLabel} | {dateLine}
+                </Text>
+              </View>
+
+              {/* Account card */}
+              {account && (
+                <View style={[s.accountCard, { backgroundColor: colors.card, borderColor: colors.border }]}>
+                  <View style={[s.bankBadge, { backgroundColor: account.color }]}>
+                    <Text style={s.bankBadgeText}>{account.bank.slice(0, 2).toUpperCase()}</Text>
+                  </View>
+                  <View style={s.accountInfo}>
+                    <Text style={[s.accountName, { color: colors.foreground }]}>{account.name}</Text>
+                    <Text style={[s.accountSub, { color: colors.mutedForeground }]}>
+                      {account.type.charAt(0).toUpperCase() + account.type.slice(1)} · {account.bank}
+                    </Text>
+                  </View>
+                </View>
+              )}
+
+              {/* Mark as transfer */}
+              {transaction.category !== "Transfer" && (
+                <View style={[s.actionCard, { backgroundColor: colors.card, borderColor: colors.border }]}>
+                  <TouchableOpacity style={[s.actionPill, { backgroundColor: colors.muted }]} onPress={handleMarkTransfer}>
+                    <Text style={[s.actionPillText, { color: colors.foreground }]}>Mark as transfer?</Text>
+                  </TouchableOpacity>
+                  <Text style={[s.actionDesc, { color: colors.mutedForeground }]}>
+                    Then transaction will NOT be considered into expense / income calculations.
+                  </Text>
+                </View>
+              )}
+
+              {/* Notes */}
+              <View style={[s.notesCard, { backgroundColor: colors.card, borderColor: colors.border }]}>
+                <View style={[s.notesIconWrap, { backgroundColor: colors.muted }]}>
+                  <Feather name="file-text" size={16} color={colors.mutedForeground} />
+                </View>
+                <TextInput
+                  style={[s.notesInput, { color: transaction.note ? colors.foreground : colors.mutedForeground }]}
+                  value={note}
+                  onChangeText={(v) => {
+                    setNote(v);
+                    updateTransaction(transaction.id, { note: v || undefined });
+                  }}
+                  placeholder="Enter Notes"
+                  placeholderTextColor={colors.mutedForeground}
+                  multiline
+                />
+                <Feather name="edit-3" size={16} color={colors.primary} />
+              </View>
+
+              {/* Sync */}
+              <View style={[s.actionCard, { backgroundColor: colors.card, borderColor: colors.border }]}>
+                <TouchableOpacity style={[s.actionPill, { backgroundColor: colors.muted }]}>
+                  <Text style={[s.actionPillText, { color: colors.foreground }]}>Sync this transaction</Text>
+                </TouchableOpacity>
+                <Text style={[s.actionDesc, { color: colors.mutedForeground }]}>
+                  Use this option when transaction is not visible on your other devices, in case using the app on multiple devices.
+                </Text>
+              </View>
+
+              {/* Timestamps */}
+              <View style={[s.timestampCard, { backgroundColor: colors.card, borderColor: colors.border }]}>
+                <Text style={[s.timestampText, { color: colors.mutedForeground }]}>
+                  Created {dateObj.toLocaleDateString("en-US", { month: "short", day: "numeric" })},{" "}
+                  {timeStr.toLowerCase()}
+                </Text>
+                <Text style={[s.timestampText, { color: colors.mutedForeground }]}>
+                  Updated {dateObj.toLocaleDateString("en-US", { month: "short", day: "numeric" })},{" "}
+                  {timeStr.toLowerCase()}
+                </Text>
+              </View>
+            </ScrollView>
+          )}
         </KeyboardAvoidingView>
       </View>
     </Modal>
   );
 }
 
-function DetailRow({ label, value, colors, icon }: { label: string; value: string; colors: any; icon?: string }) {
-  return (
-    <View style={s.detailRow}>
-      <Text style={[s.detailLabel, { color: colors.mutedForeground }]}>{label}</Text>
-      <View style={{ flexDirection: "row", alignItems: "center", gap: 6 }}>
-        {icon && <Feather name={icon as any} size={13} color={colors.mutedForeground} />}
-        <Text style={[s.detailValue, { color: colors.foreground }]}>{value}</Text>
-      </View>
-    </View>
-  );
-}
-
 const s = StyleSheet.create({
-  overlay: {
-    flex: 1,
-    justifyContent: "flex-end",
-    backgroundColor: "rgba(0,0,0,0.45)",
-  },
-  sheet: {
-    borderTopLeftRadius: 24,
-    borderTopRightRadius: 24,
-    paddingTop: 10,
-    maxHeight: "90%",
-  },
-  handle: {
-    width: 40, height: 4, borderRadius: 2,
-    alignSelf: "center", marginBottom: 10,
-  },
+  screen: { flex: 1 },
+
   header: {
     flexDirection: "row",
     alignItems: "center",
     justifyContent: "space-between",
-    paddingHorizontal: 20,
-    paddingBottom: 14,
+    paddingHorizontal: 16,
+    paddingBottom: 12,
     borderBottomWidth: 1,
   },
-  headerTitle: {
-    fontSize: 16,
-    fontFamily: "Inter_600SemiBold",
-  },
-  headerActions: {
+  headerBtn: { padding: 4 },
+  headerTitle: { fontSize: 17, fontFamily: "Inter_600SemiBold" },
+  headerActions: { flexDirection: "row", gap: 18, alignItems: "center" },
+
+  viewScroll: { paddingHorizontal: 16, paddingTop: 8, gap: 14 },
+
+  heroSection: { alignItems: "center", paddingVertical: 20, gap: 6 },
+  heroIcon: { width: 60, height: 60, borderRadius: 16, alignItems: "center", justifyContent: "center" },
+  heroTitle: { fontSize: 20, fontFamily: "Inter_700Bold", marginTop: 4 },
+  heroAmount: { fontSize: 32, fontFamily: "Inter_700Bold" },
+  heroMeta: { fontSize: 13, fontFamily: "Inter_400Regular" },
+
+  accountCard: {
     flexDirection: "row",
-    gap: 14,
     alignItems: "center",
-  },
-  saveText: {
-    fontSize: 16,
-    fontFamily: "Inter_600SemiBold",
-  },
-  amountHero: {
-    alignItems: "center",
-    gap: 10,
-    paddingVertical: 8,
-  },
-  iconCircle: {
-    width: 64, height: 64, borderRadius: 32,
-    alignItems: "center", justifyContent: "center",
-  },
-  heroAmount: {
-    fontSize: 36,
-    fontFamily: "Inter_700Bold",
-    letterSpacing: -0.5,
-  },
-  heroTitle: {
-    fontSize: 17,
-    fontFamily: "Inter_500Medium",
-    textAlign: "center",
-  },
-  detailCard: {
+    gap: 12,
+    padding: 16,
     borderRadius: 14,
-    overflow: "hidden",
+    borderWidth: 1,
   },
-  detailRow: {
+  bankBadge: {
+    width: 44,
+    height: 44,
+    borderRadius: 22,
+    alignItems: "center",
+    justifyContent: "center",
+  },
+  bankBadgeText: { fontSize: 13, fontFamily: "Inter_700Bold", color: "#fff" },
+  accountInfo: { flex: 1, gap: 3 },
+  accountName: { fontSize: 15, fontFamily: "Inter_600SemiBold" },
+  accountSub: { fontSize: 12, fontFamily: "Inter_400Regular" },
+
+  actionCard: {
+    padding: 16,
+    borderRadius: 14,
+    borderWidth: 1,
+    gap: 10,
+    alignItems: "flex-start",
+  },
+  actionPill: {
+    paddingHorizontal: 16,
+    paddingVertical: 9,
+    borderRadius: 20,
+    alignSelf: "center",
+  },
+  actionPillText: { fontSize: 14, fontFamily: "Inter_500Medium" },
+  actionDesc: { fontSize: 12, fontFamily: "Inter_400Regular", lineHeight: 17, textAlign: "center", alignSelf: "center" },
+
+  notesCard: {
     flexDirection: "row",
-    justifyContent: "space-between",
+    alignItems: "flex-start",
+    gap: 10,
+    padding: 14,
+    borderRadius: 14,
+    borderWidth: 1,
+  },
+  notesIconWrap: { width: 32, height: 32, borderRadius: 8, alignItems: "center", justifyContent: "center" },
+  notesInput: { flex: 1, fontSize: 14, fontFamily: "Inter_400Regular", paddingTop: 0 },
+
+  timestampCard: {
+    padding: 16,
+    borderRadius: 14,
+    borderWidth: 1,
+    gap: 4,
+    alignItems: "center",
+  },
+  timestampText: { fontSize: 12, fontFamily: "Inter_400Regular" },
+
+  editScroll: { gap: 0 },
+
+  typeTabs: {
+    flexDirection: "row",
+    borderBottomWidth: 1,
+    paddingHorizontal: 16,
+  },
+  typeTab: {
+    flex: 1,
+    alignItems: "center",
+    paddingVertical: 12,
+    borderBottomWidth: 2,
+    borderBottomColor: "transparent",
+  },
+  typeTabText: { fontSize: 12, fontFamily: "Inter_600SemiBold", letterSpacing: 0.5 },
+
+  amountRow: {
+    alignItems: "flex-start",
+    paddingHorizontal: 20,
+    paddingVertical: 20,
+  },
+  amountInput: { fontSize: 48, fontFamily: "Inter_700Bold" },
+
+  editRow: {
+    flexDirection: "row",
     alignItems: "center",
     paddingHorizontal: 16,
-    paddingVertical: 13,
+    paddingVertical: 14,
+    borderBottomWidth: 1,
+    gap: 12,
+    minHeight: 64,
   },
-  detailLabel: {
-    fontSize: 14,
-    fontFamily: "Inter_400Regular",
+  editRowIcon: {
+    width: 36,
+    height: 36,
+    borderRadius: 10,
+    alignItems: "center",
+    justifyContent: "center",
   },
-  detailValue: {
-    fontSize: 14,
-    fontFamily: "Inter_500Medium",
-    textAlign: "right",
-    maxWidth: "60%",
+  editRowInfo: { flex: 1, gap: 3 },
+  editRowTitle: { fontSize: 15, fontFamily: "Inter_400Regular" },
+  editRowSub: { fontSize: 12, fontFamily: "Inter_400Regular" },
+  editRowInput: { flex: 1, fontSize: 15, fontFamily: "Inter_400Regular", paddingVertical: 0 },
+
+  catChip: { paddingHorizontal: 12, paddingVertical: 6, borderRadius: 16 },
+  catChipText: { fontSize: 12, fontFamily: "Inter_500Medium" },
+
+  abcBadge: { borderWidth: 1, borderRadius: 6, paddingHorizontal: 6, paddingVertical: 3 },
+  abcText: { fontSize: 11, fontFamily: "Inter_500Medium" },
+
+  receiptsRow: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 12,
+    margin: 16,
+    padding: 16,
+    borderRadius: 14,
+    borderWidth: 1,
   },
-  rowDivider: { height: 1, marginHorizontal: 16 },
-  typeRow: { flexDirection: "row", gap: 12 },
-  typeBtn: { flex: 1, paddingVertical: 12, borderRadius: 12, alignItems: "center" },
-  typeBtnText: { fontSize: 15, fontFamily: "Inter_600SemiBold" },
-  amountRow: { flexDirection: "row", alignItems: "center", justifyContent: "center", gap: 4 },
-  currencySymbol: { fontSize: 36, fontFamily: "Inter_700Bold" },
-  amountInput: { fontSize: 48, fontFamily: "Inter_700Bold", minWidth: 100 },
-  field: { gap: 10 },
-  fieldLabel: { fontSize: 13, fontFamily: "Inter_500Medium", textTransform: "uppercase", letterSpacing: 0.5 },
-  input: {
-    borderWidth: 1, borderRadius: 12,
-    paddingHorizontal: 14, paddingVertical: 12,
-    fontSize: 15, fontFamily: "Inter_400Regular",
-  },
-  chip: { paddingHorizontal: 14, paddingVertical: 8, borderRadius: 20 },
-  chipText: { fontSize: 13, fontFamily: "Inter_500Medium" },
-  accountOption: {
-    flexDirection: "row", alignItems: "center",
-    padding: 14, borderRadius: 12, borderWidth: 1.5, gap: 10,
-    marginBottom: 8,
-  },
-  accountDot: { width: 10, height: 10, borderRadius: 5 },
-  accountOptionText: { flex: 1, fontSize: 15, fontFamily: "Inter_400Regular" },
 });
