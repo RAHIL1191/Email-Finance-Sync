@@ -405,6 +405,7 @@ function CashFlowTab({
   setCurrentMonth,
   chartView,
   setChartView,
+  onMonthPress,
 }: {
   transactions: Transaction[];
   colors: any;
@@ -412,27 +413,9 @@ function CashFlowTab({
   setCurrentMonth: (m: number) => void;
   chartView: ChartView;
   setChartView: (v: ChartView) => void;
+  onMonthPress: (year: number, month: number) => void;
 }) {
   const year = new Date().getFullYear();
-  const { bills, accounts } = useApp();
-  const [selectedMonth, setSelectedMonth] = useState<{ year: number; month: number } | null>(null);
-
-  const handleMonthPress = (y: number, m: number) => {
-    Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
-    setSelectedMonth({ year: y, month: m });
-  };
-
-  const monthModal = selectedMonth ? (
-    <MonthDetailModal
-      visible
-      onClose={() => setSelectedMonth(null)}
-      year={selectedMonth.year}
-      month={selectedMonth.month}
-      transactions={transactions}
-      bills={bills}
-      accounts={accounts}
-    />
-  ) : null;
 
   const monthData = useMemo(() => getMonthData(transactions, year), [transactions, year]);
 
@@ -473,9 +456,8 @@ function CashFlowTab({
           setCurrentMonth={setCurrentMonth}
           transactions={transactions}
           setChartView={setChartView}
-          onMonthPress={handleMonthPress}
+          onMonthPress={onMonthPress}
         />
-        {monthModal}
       </View>
     );
   }
@@ -483,8 +465,7 @@ function CashFlowTab({
   if (chartView === "Monthly") {
     return (
       <View style={{ flex: 1 }}>
-        <MonthlyView colors={colors} transactions={transactions} setChartView={setChartView} onMonthPress={handleMonthPress} />
-        {monthModal}
+        <MonthlyView colors={colors} transactions={transactions} setChartView={setChartView} onMonthPress={onMonthPress} />
       </View>
     );
   }
@@ -496,7 +477,7 @@ function CashFlowTab({
         <TouchableOpacity onPress={() => setCurrentMonth(Math.max(0, currentMonth - 1))}>
           <Feather name="chevron-left" size={22} color={colors.foreground} />
         </TouchableOpacity>
-        <TouchableOpacity style={styles.monthCenter} onPress={() => handleMonthPress(year, currentMonth)} activeOpacity={0.7}>
+        <TouchableOpacity style={styles.monthCenter} onPress={() => onMonthPress(year, currentMonth)} activeOpacity={0.7}>
           <Text style={[styles.monthName, { color: colors.foreground }]}>{monthName}</Text>
           <Text style={[styles.monthSub, { color: colors.mutedForeground }]}>Monthly</Text>
         </TouchableOpacity>
@@ -566,7 +547,6 @@ function CashFlowTab({
         expense={thisMonthData.expense}
         prevExpense={prevMonthData.expense}
       />
-      {monthModal}
     </ScrollView>
   );
 }
@@ -757,12 +737,18 @@ function TransactionsTab({ transactions, colors }: { transactions: Transaction[]
 export default function InsightsScreen() {
   const colors = useColors();
   const insets = useSafeAreaInsets();
-  const { transactions } = useApp();
+  const { transactions, bills, accounts } = useApp();
   const [activeTab, setActiveTab] = useState<Subtab>("CASH FLOW");
   const [chartView, setChartView] = useState<ChartView>("Chart");
   const [showAdd, setShowAdd] = useState(false);
   const currentMonthIdx = new Date().getMonth();
   const [currentMonth, setCurrentMonth] = useState(currentMonthIdx);
+  const [selectedMonth, setSelectedMonth] = useState<{ year: number; month: number } | null>(null);
+
+  const handleMonthPress = (y: number, m: number) => {
+    Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
+    setSelectedMonth({ year: y, month: m });
+  };
 
   const topPaddingWeb = Platform.OS === "web" ? 67 : insets.top;
 
@@ -817,6 +803,7 @@ export default function InsightsScreen() {
             setCurrentMonth={setCurrentMonth}
             chartView={chartView}
             setChartView={setChartView}
+            onMonthPress={handleMonthPress}
           />
         )}
         {activeTab === "SPENDING" && (
@@ -839,6 +826,15 @@ export default function InsightsScreen() {
       </TouchableOpacity>
 
       <AddTransactionModal visible={showAdd} onClose={() => setShowAdd(false)} />
+      <MonthDetailModal
+        visible={!!selectedMonth}
+        onClose={() => setSelectedMonth(null)}
+        year={selectedMonth?.year ?? new Date().getFullYear()}
+        month={selectedMonth?.month ?? new Date().getMonth()}
+        transactions={transactions}
+        bills={bills}
+        accounts={accounts}
+      />
     </View>
   );
 }
