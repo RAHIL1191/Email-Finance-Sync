@@ -33,7 +33,7 @@ export const corsMiddleware = cors({
         }
       },
   methods: ["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"],
-  allowedHeaders: ["Content-Type", "Authorization", "X-Device-ID", "X-API-Key"],
+  allowedHeaders: ["Content-Type", "Authorization", "X-Device-ID", "X-API-Key", "X-Household-ID"],
   credentials: true,
   maxAge: 86400,
 });
