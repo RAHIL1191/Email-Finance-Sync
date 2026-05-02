@@ -225,7 +225,7 @@ export default function HomeScreen() {
   return (
     <SafeAreaView edges={["top"]} style={[styles.container, { backgroundColor: colors.background }]}>
       {/* ── Fixed Header ── */}
-      <View style={[styles.header, { backgroundColor: colors.background }]}>
+      <View style={[styles.header, { backgroundColor: colors.background, paddingTop: Platform.OS === "web" ? 52 : 8 }]}>
         <View style={styles.headerLeft}>
           <TouchableOpacity
             style={[styles.hamburgerBtn, { backgroundColor: colors.card, borderColor: colors.border }]}

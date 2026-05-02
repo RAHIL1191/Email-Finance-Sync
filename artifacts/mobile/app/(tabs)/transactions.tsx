@@ -1041,7 +1041,7 @@ export default function InsightsScreen() {
   return (
     <SafeAreaView edges={["top"]} style={[styles.container, { backgroundColor: colors.background }]}>
       {/* Header */}
-      <View style={[styles.header, { paddingTop: 8, backgroundColor: colors.background }]}>
+      <View style={[styles.header, { paddingTop: Platform.OS === "web" ? 60 : 8, backgroundColor: colors.background }]}>
         <TouchableOpacity style={styles.headerIcon}>
           <Feather name="menu" size={22} color={colors.foreground} />
         </TouchableOpacity>

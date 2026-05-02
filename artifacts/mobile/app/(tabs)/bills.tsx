@@ -437,7 +437,7 @@ export default function BillsScreen() {
   return (
     <SafeAreaView edges={["top"]} style={[styles.container, { backgroundColor: colors.background }]}>
       {/* Header */}
-      <View style={[styles.header, { paddingTop: 14, backgroundColor: colors.card, borderBottomColor: colors.border }]}>
+      <View style={[styles.header, { paddingTop: Platform.OS === "web" ? 64 : 14, backgroundColor: colors.card, borderBottomColor: colors.border }]}>
         <Text style={[styles.headerTitle, { color: colors.foreground }]}>Bills</Text>
         <View style={styles.headerIcons}>
           {/* Filter button — dot indicator when active */}

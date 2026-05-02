@@ -368,7 +368,7 @@ export default function AccountsScreen() {
         showsVerticalScrollIndicator={false}
         contentContainerStyle={[styles.scroll, { paddingBottom: Platform.OS === "web" ? 34 + 84 : 100 }]}
       >
-        <View style={[styles.header, { paddingTop: 12 }]}>
+        <View style={[styles.header, { paddingTop: Platform.OS === "web" ? 64 : 12 }]}>
           <Text style={[styles.title, { color: colors.foreground }]}>Accounts</Text>
           <TouchableOpacity
             style={[styles.addBtn, { backgroundColor: colors.primary }]}
