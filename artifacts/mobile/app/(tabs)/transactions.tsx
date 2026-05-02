@@ -177,7 +177,7 @@ function CalendarView({
   const monthLabel = MONTHS[currentMonth];
 
   return (
-    <ScrollView showsVerticalScrollIndicator={false} contentContainerStyle={{ paddingBottom: 120 }}>
+    <View style={{ flex: 1 }}>
       <View style={styles.monthNav}>
         <TouchableOpacity onPress={() => setCurrentMonth(Math.max(0, currentMonth - 1))}>
           <Feather name="chevron-left" size={22} color={colors.foreground} />
@@ -190,7 +190,7 @@ function CalendarView({
           <Feather name="chevron-right" size={22} color={colors.foreground} />
         </TouchableOpacity>
       </View>
-
+      <ScrollView showsVerticalScrollIndicator={false} contentContainerStyle={{ paddingBottom: 120 }}>
       <View style={[styles.chartCard, { backgroundColor: colors.card }]}>
         {/* Toggle */}
         <View style={[styles.toggleRow, { backgroundColor: colors.muted }]}>
@@ -264,7 +264,8 @@ function CalendarView({
         expense={expense}
         prevExpense={prevData.expense}
       />
-    </ScrollView>
+      </ScrollView>
+    </View>
   );
 }
 
@@ -471,7 +472,7 @@ function CashFlowTab({
   }
 
   return (
-    <ScrollView showsVerticalScrollIndicator={false} contentContainerStyle={{ paddingBottom: 120 }}>
+    <View style={{ flex: 1 }}>
       {/* Month navigation */}
       <View style={styles.monthNav}>
         <TouchableOpacity onPress={() => setCurrentMonth(Math.max(0, currentMonth - 1))}>
@@ -485,7 +486,7 @@ function CashFlowTab({
           <Feather name="chevron-right" size={22} color={colors.foreground} />
         </TouchableOpacity>
       </View>
-
+      <ScrollView showsVerticalScrollIndicator={false} contentContainerStyle={{ paddingBottom: 120 }}>
       {/* Chart card */}
       <View style={[styles.chartCard, { backgroundColor: colors.card }]}>
         <Toggle />
@@ -547,7 +548,8 @@ function CashFlowTab({
         expense={thisMonthData.expense}
         prevExpense={prevMonthData.expense}
       />
-    </ScrollView>
+      </ScrollView>
+    </View>
   );
 }
 
