@@ -184,8 +184,11 @@ async function apiCall(
 }
 
 /** Canonical dedup key shared across all sync sources */
-function dedupKey(t: { amount: number; title: string; date: string }) {
-  return `${t.amount}-${t.title.toLowerCase().trim()}-${t.date.slice(0, 10)}`;
+function dedupKey(t: { amount: number; title: string; date: string; bank?: string; accountId?: string; source?: string }) {
+  const bank = (t.bank ?? "").toLowerCase().trim();
+  const accountId = (t.accountId ?? "").toLowerCase().trim();
+  const source = (t.source ?? "").toLowerCase().trim();
+  return `${source}|${bank}|${accountId}|${t.amount}|${t.title.toLowerCase().trim()}|${t.date.slice(0, 10)}`;
 }
 
 /** Find the best matching account for a bank name and optional last-4 digits */

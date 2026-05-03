@@ -897,6 +897,13 @@ function TransactionsTab({ transactions, colors }: { transactions: Transaction[]
   const [showAdd, setShowAdd] = useState(false);
   const [selectedTx, setSelectedTx] = useState<Transaction | null>(null);
 
+  const dedupKey = useCallback((t: Transaction) => {
+    const bank = (t.bank ?? "").toLowerCase().trim();
+    const accountId = (t.accountId ?? "").toLowerCase().trim();
+    const source = (t.source ?? "").toLowerCase().trim();
+    return `${source}|${bank}|${accountId}|${t.amount}|${t.title.toLowerCase().trim()}|${t.date.slice(0, 10)}`;
+  }, []);
+
   const filtered = useMemo(() => {
     if (filter === "Expenses") return transactions.filter((t) => t.type === "expense" && t.category !== "Transfer");
     if (filter === "Income") return transactions.filter((t) => t.type === "income");
@@ -904,13 +911,23 @@ function TransactionsTab({ transactions, colors }: { transactions: Transaction[]
     return transactions;
   }, [transactions, filter]);
 
+  const uniqueFiltered = useMemo(() => {
+    const seen = new Set<string>();
+    return filtered.filter((t) => {
+      const key = dedupKey(t);
+      if (seen.has(key)) return false;
+      seen.add(key);
+      return true;
+    });
+  }, [filtered, dedupKey]);
+
   const grouped = useMemo(() => {
     const groups: { dateKey: string; dateLabel: string; total: number; hasExpense: boolean; items: Transaction[] }[] = [];
     const today = new Date();
     const yesterday = new Date(today);
     yesterday.setDate(today.getDate() - 1);
 
-    filtered.forEach((t) => {
+    uniqueFiltered.forEach((t) => {
       const d = new Date(t.date);
       const dateKey = d.toDateString();
       const isToday = dateKey === today.toDateString();
@@ -933,7 +950,7 @@ function TransactionsTab({ transactions, colors }: { transactions: Transaction[]
       }
     });
     return groups;
-  }, [filtered]);
+  }, [uniqueFiltered]);
 
   type FlatItem =
     | { type: "header"; dateLabel: string; total: number; hasExpense: boolean }
