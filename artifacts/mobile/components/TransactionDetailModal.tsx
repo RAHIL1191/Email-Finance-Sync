@@ -115,8 +115,10 @@ export default function TransactionDetailModal({ visible, onClose, transaction }
         style: "destructive",
         onPress: () => {
           Haptics.notificationAsync(Haptics.NotificationFeedbackType.Warning);
-          deleteTransaction(transaction.id);
-          onClose();
+          setTimeout(() => {
+            deleteTransaction(transaction.id);
+            onClose();
+          }, 0);
         },
       },
     ]);
@@ -164,11 +166,11 @@ export default function TransactionDetailModal({ visible, onClose, transaction }
                 <Feather name="check" size={22} color={colors.primary} />
               </TouchableOpacity>
             ) : (
-              <View style={s.headerActions}>
+              <View style={s.headerActions} pointerEvents="box-none">
                 <TouchableOpacity onPress={() => setEditing(true)} hitSlop={8}>
                   <Feather name="edit-2" size={20} color={colors.primary} />
                 </TouchableOpacity>
-                <TouchableOpacity onPress={handleDelete} hitSlop={8}>
+                <TouchableOpacity onPress={handleDelete} hitSlop={16} style={s.deleteBtn}>
                   <Feather name="trash-2" size={20} color="#ef4444" />
                 </TouchableOpacity>
               </View>
@@ -641,6 +643,10 @@ const s = StyleSheet.create({
     paddingHorizontal: 14,
     paddingVertical: 10,
     borderRadius: 12,
+  },
+  deleteBtn: {
+    padding: 8,
+    borderRadius: 999,
   },
   donePillText: {
     fontFamily: "Inter_600SemiBold",
