@@ -40,7 +40,6 @@ const INCOME_CATEGORIES = [
   { label: "Freelance", icon: "cpu" },
   { label: "Investment", icon: "trending-up" },
   { label: "Gift", icon: "gift" },
-  { label: "Refund", icon: "rotate-ccw" },
   { label: "Other", icon: "more-horizontal" },
 ];
 
@@ -787,6 +786,7 @@ function IncomeTab({ onSave }: { onSave: () => void }) {
       note: [notes, repeat !== "Never" ? `Repeats ${repeat}` : ""].filter(Boolean).join(" · ") || undefined,
       projectId: projectId || undefined,
       projectName: projectName || undefined,
+      isRefund: category === "Refund" ? true : undefined,
       source: "manual",
     });
     onSave();

@@ -26,88 +26,11 @@ import FamilySyncSection from "./drawer/FamilySyncSection";
 const DRAWER_WIDTH = 300;
 const { width: SCREEN_WIDTH } = Dimensions.get("window");
 
-const PROJECT_COLORS = [
-  "#6366f1", "#8b5cf6", "#ec4899", "#ef4444", "#f97316",
-  "#eab308", "#22c55e", "#14b8a6", "#3b82f6", "#64748b",
-];
-
-function NewProjectModal({ visible, onClose }: { visible: boolean; onClose: () => void }) {
-  const colors = useColors();
-  const insets = useSafeAreaInsets();
-  const { addProject } = useApp();
-
-  const [name, setName] = useState("");
-  const [desc, setDesc] = useState("");
-  const [color, setColor] = useState(PROJECT_COLORS[0]);
-
-  const reset = () => { setName(""); setDesc(""); setColor(PROJECT_COLORS[0]); };
-
-  const handleCreate = () => {
-    if (!name.trim()) return;
-    Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
-    addProject({ name: name.trim(), color, description: desc.trim() || undefined });
-    reset();
-    onClose();
-  };
-
-  return (
-    <Modal visible={visible} transparent animationType="slide" onRequestClose={() => { reset(); onClose(); }}>
-      <TouchableOpacity style={drawerStyles.overlay} activeOpacity={1} onPress={() => { reset(); onClose(); }} />
-      <View style={[drawerStyles.sheet, { backgroundColor: colors.card, paddingBottom: insets.bottom + 16 }]}>
-        <View style={[drawerStyles.sheetHeader, { borderBottomColor: colors.border }]}>
-          <Text style={[drawerStyles.sheetTitle, { color: colors.foreground }]}>New Project</Text>
-          <TouchableOpacity onPress={() => { reset(); onClose(); }}>
-            <Feather name="x" size={20} color={colors.foreground} />
-          </TouchableOpacity>
-        </View>
-        <ScrollView showsVerticalScrollIndicator={false} contentContainerStyle={{ padding: 16, gap: 14 }}>
-          <TextInput
-            style={[drawerStyles.input, { borderColor: colors.border, color: colors.foreground, backgroundColor: colors.accent }]}
-            placeholder="Project name (e.g. Europe Trip)"
-            placeholderTextColor={colors.mutedForeground}
-            value={name}
-            onChangeText={setName}
-            autoFocus
-            returnKeyType="next"
-          />
-          <TextInput
-            style={[drawerStyles.input, { borderColor: colors.border, color: colors.foreground, backgroundColor: colors.accent }]}
-            placeholder="Description (optional)"
-            placeholderTextColor={colors.mutedForeground}
-            value={desc}
-            onChangeText={setDesc}
-            returnKeyType="done"
-          />
-          <Text style={[drawerStyles.colorLabel, { color: colors.mutedForeground }]}>Color</Text>
-          <View style={drawerStyles.colorRow}>
-            {PROJECT_COLORS.map((c) => (
-              <TouchableOpacity
-                key={c}
-                style={[drawerStyles.colorSwatch, { backgroundColor: c, borderWidth: color === c ? 3 : 0, borderColor: "#fff" }]}
-                onPress={() => setColor(c)}
-              />
-            ))}
-          </View>
-          <TouchableOpacity
-            style={[drawerStyles.createBtn, { backgroundColor: name.trim() ? colors.primary : colors.border }]}
-            onPress={handleCreate}
-            activeOpacity={name.trim() ? 0.8 : 1}
-          >
-            <Text style={drawerStyles.createBtnText}>Create Project</Text>
-          </TouchableOpacity>
-        </ScrollView>
-      </View>
-    </Modal>
-  );
-}
-
 export default function Drawer() {
   const { isOpen, closeDrawer } = useDrawer();
   const { projects, transactions } = useApp();
   const colors = useColors();
   const insets = useSafeAreaInsets();
-
-  const [showNewProject, setShowNewProject] = useState(false);
 
   const translateX = useRef(new Animated.Value(-DRAWER_WIDTH)).current;
   const backdropOpacity = useRef(new Animated.Value(0)).current;
@@ -231,7 +154,7 @@ export default function Drawer() {
           <View style={styles.sectionHeader}>
             <Text style={[styles.sectionLabel, { color: colors.mutedForeground }]}>PROJECTS</Text>
             <TouchableOpacity
-              onPress={() => setShowNewProject(true)}
+              onPress={() => navigateTo("/project-detail?mode=create")}
               hitSlop={10}
               style={[styles.addBtn, { backgroundColor: colors.primary + "18" }]}
             >
@@ -242,7 +165,7 @@ export default function Drawer() {
           {projects.length === 0 ? (
             <TouchableOpacity
               style={[styles.emptyProjects, { borderColor: colors.border }]}
-              onPress={() => setShowNewProject(true)}
+              onPress={() => navigateTo("/project-detail?mode=create")}
               activeOpacity={0.7}
             >
               <Feather name="folder-plus" size={18} color={colors.mutedForeground} />
@@ -286,8 +209,6 @@ export default function Drawer() {
           </Text>
         </View>
       </Animated.View>
-
-      <NewProjectModal visible={showNewProject} onClose={() => setShowNewProject(false)} />
     </View>
   );
 }
@@ -378,30 +299,4 @@ const styles = StyleSheet.create({
 
 const drawerStyles = StyleSheet.create({
   overlay: { flex: 1, backgroundColor: "rgba(0,0,0,0.4)" },
-  sheet: {
-    borderTopLeftRadius: 20,
-    borderTopRightRadius: 20,
-    maxHeight: "75%",
-  },
-  sheetHeader: {
-    flexDirection: "row",
-    justifyContent: "space-between",
-    alignItems: "center",
-    padding: 18,
-    borderBottomWidth: StyleSheet.hairlineWidth,
-  },
-  sheetTitle: { fontSize: 16, fontFamily: "Inter_600SemiBold" },
-  input: {
-    borderWidth: 1,
-    borderRadius: 10,
-    paddingHorizontal: 14,
-    paddingVertical: 12,
-    fontSize: 15,
-    fontFamily: "Inter_400Regular",
-  },
-  colorLabel: { fontSize: 11, fontFamily: "Inter_600SemiBold", textTransform: "uppercase", letterSpacing: 0.6 },
-  colorRow: { flexDirection: "row", flexWrap: "wrap", gap: 10 },
-  colorSwatch: { width: 32, height: 32, borderRadius: 16 },
-  createBtn: { borderRadius: 12, paddingVertical: 14, alignItems: "center", marginTop: 4 },
-  createBtnText: { fontSize: 15, fontFamily: "Inter_600SemiBold", color: "#fff" },
 });

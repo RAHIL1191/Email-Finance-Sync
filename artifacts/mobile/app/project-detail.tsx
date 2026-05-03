@@ -30,10 +30,10 @@ function formatDate(iso: string) {
 }
 
 export default function ProjectDetailScreen() {
-  const { id } = useLocalSearchParams<{ id: string }>();
+  const { id, mode } = useLocalSearchParams<{ id?: string; mode?: string }>();
   const colors = useColors();
   const insets = useSafeAreaInsets();
-  const { projects, transactions, updateProject, deleteProject } = useApp();
+  const { projects, transactions, updateProject, deleteProject, addProject } = useApp();
 
   const project = projects.find((p) => p.id === id);
   const projectTxs = useMemo(
@@ -43,17 +43,53 @@ export default function ProjectDetailScreen() {
 
   const totalSpent = projectTxs.filter((t) => t.type === "expense").reduce((s, t) => s + t.amount, 0);
   const totalIncome = projectTxs.filter((t) => t.type === "income").reduce((s, t) => s + t.amount, 0);
+  const refunded = projectTxs.filter((t) => t.isRefund).reduce((s, t) => s + t.amount, 0);
 
   const [showEdit, setShowEdit] = useState(false);
   const [editName, setEditName] = useState(project?.name ?? "");
   const [editDesc, setEditDesc] = useState(project?.description ?? "");
   const [editColor, setEditColor] = useState(project?.color ?? PROJECT_COLORS[0]);
+  const [createName, setCreateName] = useState("");
+  const [createDesc, setCreateDesc] = useState("");
+  const [createColor, setCreateColor] = useState(PROJECT_COLORS[0]);
+
+  if (mode === "create" && !project) {
+    const handleCreate = () => {
+      if (!createName.trim()) return;
+      const createdId = addProject({ name: createName.trim(), description: createDesc.trim() || undefined, color: createColor });
+      Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
+      router.replace(`/project-detail?id=${createdId}`);
+    };
+    return (
+      <SafeAreaView style={[s.container, { backgroundColor: colors.background }]}>
+        <View style={[s.header, { paddingTop: insets.top + 8, backgroundColor: colors.card, borderBottomColor: colors.border }]}>
+          <TouchableOpacity onPress={() => router.back()} hitSlop={10} style={s.headerBtn}>
+            <Feather name="x" size={22} color={colors.foreground} />
+          </TouchableOpacity>
+          <Text style={[s.headerTitle, { color: colors.foreground }]}>New Project</Text>
+          <View style={{ width: 40 }} />
+        </View>
+        <ScrollView contentContainerStyle={{ padding: 16, gap: 14 }}>
+          <TextInput style={[s.input, { borderColor: colors.border, color: colors.foreground, backgroundColor: colors.accent }]} placeholder="Project name" placeholderTextColor={colors.mutedForeground} value={createName} onChangeText={setCreateName} />
+          <TextInput style={[s.input, { borderColor: colors.border, color: colors.foreground, backgroundColor: colors.accent }]} placeholder="Description (optional)" placeholderTextColor={colors.mutedForeground} value={createDesc} onChangeText={setCreateDesc} />
+          <View style={s.colorRow}>
+            {PROJECT_COLORS.map((c) => (
+              <TouchableOpacity key={c} style={[s.colorSwatch, { backgroundColor: c, borderWidth: createColor === c ? 3 : 0, borderColor: "#fff" }]} onPress={() => setCreateColor(c)} />
+            ))}
+          </View>
+          <TouchableOpacity style={[s.saveBtn, { backgroundColor: createName.trim() ? colors.primary : colors.border }]} onPress={handleCreate} activeOpacity={createName.trim() ? 0.8 : 1}>
+            <Text style={s.saveBtnText}>Create Project</Text>
+          </TouchableOpacity>
+        </ScrollView>
+      </SafeAreaView>
+    );
+  }
 
   if (!project) {
     return (
       <SafeAreaView style={[s.container, { backgroundColor: colors.background }]}>
         <View style={s.notFound}>
-          <Feather name="folder-x" size={48} color={colors.mutedForeground} />
+          <Feather name="folder" size={48} color={colors.mutedForeground} />
           <Text style={[s.notFoundText, { color: colors.mutedForeground }]}>Project not found</Text>
           <TouchableOpacity onPress={() => router.back()} style={[s.backBtn, { backgroundColor: colors.primary }]}>
             <Text style={s.backBtnText}>Go Back</Text>
@@ -123,6 +159,11 @@ export default function ProjectDetailScreen() {
           <Text style={[s.summaryLabel, { color: colors.mutedForeground }]}>Transactions</Text>
           <Text style={[s.summaryAmount, { color: colors.foreground }]}>{projectTxs.length}</Text>
         </View>
+        <View style={[s.summarySep, { backgroundColor: colors.border }]} />
+        <View style={s.summaryCard}>
+          <Text style={[s.summaryLabel, { color: colors.mutedForeground }]}>Refunds</Text>
+          <Text style={[s.summaryAmount, { color: colors.income }]}>${refunded.toFixed(2)}</Text>
+        </View>
       </View>
 
       {project.description ? (
@@ -160,6 +201,7 @@ export default function ProjectDetailScreen() {
                 <Text style={[s.txTitle, { color: colors.foreground }]} numberOfLines={1}>{item.title}</Text>
                 <Text style={[s.txSub, { color: colors.mutedForeground }]}>
                   {item.category}{item.bank ? ` · ${item.bank}` : ""}{" · "}{formatDate(item.date)}
+                  {item.isRefund ? " · Refund" : ""}
                 </Text>
               </View>
               <Text style={[s.txAmount, { color: item.type === "expense" ? colors.expense : colors.income }]}>
