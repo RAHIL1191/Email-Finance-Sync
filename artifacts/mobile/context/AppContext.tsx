@@ -225,7 +225,8 @@ function remapEmailTransactionsForAccount(
     if (t.source !== "email" || !t.bank) return t;
     const tb = t.bank.toLowerCase();
     const matchesBank = tb.includes(bankLower) || bankLower.includes(tb);
-    return matchesBank ? { ...t, accountId: account.id } : t;
+    const matchesLastFour = !!account.lastFour && t.note?.includes(account.lastFour);
+    return matchesBank || matchesLastFour ? { ...t, accountId: account.id } : t;
   });
 }
 
@@ -299,7 +300,7 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
           if (t.source !== "email" || !t.bank) return t;
           const accountMissing = !t.accountId || !validAccountIds.has(t.accountId);
           if (!accountMissing) return t;
-          const match = findAccountMatch(parsedAccounts, t.bank, undefined);
+          const match = findAccountMatch(parsedAccounts, t.bank, t.note?.match(/\b\d{4}\b/)?.[0]);
           return match ? { ...t, accountId: match.id } : { ...t, accountId: "" };
         });
 
@@ -503,6 +504,7 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
             source: "email" as const,
             fromEmail: true,
             bank: t.bank || "Bank",
+            note: t.lastFour ? `ending in ${t.lastFour}` : undefined,
           };
         });
         setTransactions((prev) => {
