@@ -206,17 +206,13 @@ function findAccountMatch(
   lastFour?: string
 ): Account | undefined {
   const bankLower = bank.trim().toLowerCase();
+  const bankMatches = (a: Account) =>
+    a.bank.toLowerCase().includes(bankLower) || bankLower.includes(a.bank.toLowerCase());
   if (lastFour) {
-    const strict = accounts.find(
-      (a) =>
-        a.lastFour === lastFour &&
-        (a.bank.toLowerCase().includes(bankLower) || bankLower.includes(a.bank.toLowerCase()))
-    );
+    const strict = accounts.find((a) => a.lastFour === lastFour && bankMatches(a));
     if (strict) return strict;
   }
-  return accounts.find(
-    (a) => a.bank.toLowerCase().includes(bankLower) || bankLower.includes(a.bank.toLowerCase())
-  );
+  return accounts.find(bankMatches);
 }
 
 // ── Provider ─────────────────────────────────────────────────────────────────
@@ -350,18 +346,7 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
     if (!a.forceCreate && a.lastFour && a.bank) {
       const existing = findAccountMatch(accountsRef.current, a.bank, a.lastFour);
       if (existing) {
-        // Still remap stale email transactions to the existing account
-        if (existing.bank) {
-          const pat = existing.bank.trim().toLowerCase();
-          setTransactions((prev) =>
-            prev.map((t) => {
-              if (t.source !== "email" || !t.bank) return t;
-              const tb = t.bank.toLowerCase();
-              if (tb.includes(pat) || pat.includes(tb)) return { ...t, accountId: existing.id };
-              return t;
-            })
-          );
-        }
+        if (existing.bank) remapEmailTransactions(existing.bank, existing.id);
         return existing.id;
       }
     }
@@ -369,17 +354,7 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
     setAccounts((prev) => [...prev, newA]);
     apiCall("/api/accounts", "POST", householdIdRef.current, deviceIdRef.current, newA);
     // Auto-remap any email transactions whose bank matches this new account
-    if (newA.bank) {
-      const pat = newA.bank.trim().toLowerCase();
-      setTransactions((prev) =>
-        prev.map((t) => {
-          if (t.source !== "email" || !t.bank) return t;
-          const tb = t.bank.toLowerCase();
-          if (tb.includes(pat) || pat.includes(tb)) return { ...t, accountId: newA.id };
-          return t;
-        })
-      );
-    }
+    if (newA.bank) remapEmailTransactions(newA.bank, newA.id);
     return newA.id;
   }, []);
 
