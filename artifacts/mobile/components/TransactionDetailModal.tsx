@@ -311,7 +311,7 @@ export default function TransactionDetailModal({ visible, onClose, transaction }
                   <DateTimePicker
                     value={editDate ?? dateObj}
                     mode="date"
-                    display="calendar"
+                    display="default"
                     onChange={(_, d) => {
                       setShowDatePicker(false);
                       if (d) setEditDate(d);
@@ -319,10 +319,10 @@ export default function TransactionDetailModal({ visible, onClose, transaction }
                   />
                 )
               ) : (
-                <Modal visible={showDatePicker} transparent animationType="slide" onRequestClose={() => setShowDatePicker(false)}>
+                <Modal visible={showDatePicker} transparent animationType="fade" onRequestClose={() => setShowDatePicker(false)}>
                   <TouchableOpacity style={s.overlay} activeOpacity={1} onPress={() => setShowDatePicker(false)} />
-                  <View style={[s.centerPicker, { justifyContent: "flex-end" }]}>
-                    <View style={[s.centerPickerCard, { backgroundColor: colors.card }]}>
+                  <View style={s.centerPicker}>
+                    <View style={[s.centerPickerCard, { backgroundColor: colors.card, minHeight: 260 }]}>
                       <View style={[s.pickerHandle, { backgroundColor: colors.border }]} />
                       <Text style={[s.pickerTitle, { color: colors.foreground }]}>Edit Date</Text>
                       <DateTimePicker

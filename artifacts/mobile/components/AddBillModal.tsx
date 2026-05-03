@@ -38,7 +38,7 @@ function BillDatePickerModal({
       <DateTimePicker
         value={date}
         mode="date"
-        display="calendar"
+        display="default"
         onChange={(_, d) => {
           onClose();
           if (d) onChange(d);
@@ -47,10 +47,10 @@ function BillDatePickerModal({
     );
   }
   return (
-    <Modal visible={visible} transparent animationType="slide" onRequestClose={onClose}>
+    <Modal visible={visible} transparent animationType="fade" onRequestClose={onClose}>
       <TouchableOpacity style={styles.overlay} activeOpacity={1} onPress={onClose} />
-      <View style={[styles.centerPicker, { justifyContent: "flex-end" }]}>
-        <View style={[styles.centerPickerCard, { backgroundColor: colors.card }]}>
+      <View style={styles.centerPicker}>
+        <View style={[styles.centerPickerCard, { backgroundColor: colors.card, minHeight: 260 }]}>
           <View style={[styles.pickerHandle, { backgroundColor: colors.border }]} />
           <Text style={[styles.pickerTitle, { color: colors.foreground }]}>Select Due Date</Text>
           <DateTimePicker

@@ -227,16 +227,13 @@ function DatePickerModal({
   const colors = useColors();
   const mode: "date" | "time" = title.toLowerCase().includes("time") ? "time" : "date";
 
-  // On Android the DateTimePicker itself renders as a native dialog —
-  // wrapping it in a custom Modal causes a modal-on-modal conflict that
-  // prevents it from opening. Render it directly instead.
   if (Platform.OS === "android") {
     if (!visible) return null;
     return (
       <DateTimePicker
         value={date}
         mode={mode}
-        display={mode === "date" ? "calendar" : "default"}
+        display="default"
         onChange={(_, d) => {
           onClose();
           if (d) onChange(d);
@@ -245,12 +242,11 @@ function DatePickerModal({
     );
   }
 
-  // iOS — bottom-sheet style modal with inline spinner
   return (
-    <Modal visible={visible} transparent animationType="slide" onRequestClose={onClose}>
+    <Modal visible={visible} transparent animationType="fade" onRequestClose={onClose}>
       <TouchableOpacity style={styles.overlay} activeOpacity={1} onPress={onClose} />
-      <View style={[styles.centerPicker, { justifyContent: "flex-end" }]}>
-        <View style={[styles.centerPickerCard, { backgroundColor: colors.card }]}>
+      <View style={styles.centerPicker}>
+        <View style={[styles.centerPickerCard, { backgroundColor: colors.card, minHeight: 380, width: "100%" }]}>
           <View style={[styles.pickerHandle, { backgroundColor: colors.border }]} />
           <Text style={[styles.pickerTitle, { color: colors.foreground }]}>{title}</Text>
           <DateTimePicker
@@ -1366,12 +1362,12 @@ const styles = StyleSheet.create({
   centerPicker: {
     flex: 1,
     alignItems: "center",
-    justifyContent: "flex-end",
+    justifyContent: "center",
     padding: 20,
   },
   centerPickerCard: {
     width: "100%",
-    maxWidth: 360,
+    maxWidth: 400,
     borderTopLeftRadius: 22,
     borderTopRightRadius: 22,
     padding: 16,
