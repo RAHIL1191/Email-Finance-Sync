@@ -412,12 +412,14 @@ const BANK_PATTERNS: BankPattern[] = [
           /(?:purchase|transaction|charge)\s+of\s+\$?([\d,]+\.?\d*)\s+(?:was made\s+)?(?:at|from|chez)\s+([^<\n\r,\.]+)/i,
           /CIBC[^$]*\$\s*([\d,]+\.?\d*)\s+(?:purchase\s+)?(?:at|from)\s+([^<\n\r,\.]+)/i,
           /\$\s*([\d,]+\.?\d*)\s+(?:purchase|transaction)\s+at\s+([^<\n\r,\.]+)/i,
+          /purchase\s+location[:\s]+([^<\n\r,\.]+)[\s\S]*?\$?([\d,]+\.?\d*)/i,
+          /location[:\s]+([^<\n\r,\.]+)[\s\S]*?(?:purchase|transaction|charge)[\s\S]*?\$?([\d,]+\.?\d*)/i,
         ];
         for (const pat of patterns) {
           const m = text.match(pat);
           if (m) {
-            const amount = parseFloat(m[1].replace(/,/g, ""));
-            const merchant = m[2].trim();
+            const merchant = m[2] ? m[2].trim() : m[1].trim();
+            const amount = parseFloat((m[1] || m[2] || "").replace(/,/g, ""));
             if (amount > 0) return { title: merchant, amount, type: "expense", category: categorizeFrom(merchant), bank: "CIBC", date: new Date().toISOString(), rawSubject: subject };
           }
         }
