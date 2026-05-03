@@ -129,14 +129,6 @@ const SAMPLE_ACCOUNTS: Account[] = [
   { id: "acc3", name: "Credit Card", bank: "Amex", balance: -1250.75, type: "credit", color: "#f59e0b", lastFour: "3301" },
 ];
 
-const SAMPLE_TRANSACTIONS: Transaction[] = [
-  { id: "t1", title: "Amazon Purchase", amount: 89.99, type: "expense", category: "Shopping", accountId: "acc1", date: new Date(Date.now() - 86400000).toISOString(), source: "manual" },
-  { id: "t2", title: "Salary Deposit", amount: 3500.0, type: "income", category: "Income", accountId: "acc1", date: new Date(Date.now() - 2 * 86400000).toISOString(), source: "manual" },
-  { id: "t3", title: "Netflix Subscription", amount: 15.99, type: "expense", category: "Entertainment", accountId: "acc3", date: new Date(Date.now() - 3 * 86400000).toISOString(), source: "manual" },
-  { id: "t4", title: "Whole Foods", amount: 127.4, type: "expense", category: "Groceries", accountId: "acc1", date: new Date(Date.now() - 4 * 86400000).toISOString(), source: "manual" },
-  { id: "t5", title: "Gas Station", amount: 55.0, type: "expense", category: "Transport", accountId: "acc1", date: new Date(Date.now() - 8 * 86400000).toISOString(), source: "manual" },
-];
-
 const SAMPLE_BILLS: Bill[] = [
   { id: "b1", title: "Rent", amount: 2200, dueDate: new Date(Date.now() + 5 * 86400000).toISOString(), category: "Housing", isPaid: false, isRecurring: true, frequency: "monthly", accountId: "acc1" },
   { id: "b2", title: "Electric Bill", amount: 145, dueDate: new Date(Date.now() + 10 * 86400000).toISOString(), category: "Utilities", isPaid: false, isRecurring: true, frequency: "monthly", accountId: "acc1" },
@@ -281,26 +273,9 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
         householdIdRef.current = hId;
         setHouseholdId(hId);
 
-        const MOCK_ACCOUNT_IDS = new Set(["acc1", "acc2", "acc3"]);
-        const MOCK_TX_IDS = new Set(["t1", "t2", "t3", "t4", "t5"]);
-
         let parsedAccounts: Account[] = accRaw ? JSON.parse(accRaw) : [];
         let parsedTx: Transaction[] = txRaw ? JSON.parse(txRaw) : [];
         let parsedBills: Bill[] = billRaw ? JSON.parse(billRaw) : [];
-
-        // Always strip mock accounts and their manual transactions
-        const hasMockAccounts = parsedAccounts.some((a) => MOCK_ACCOUNT_IDS.has(a.id));
-        if (hasMockAccounts) {
-          parsedAccounts = parsedAccounts.filter((a) => !MOCK_ACCOUNT_IDS.has(a.id));
-        }
-        // Always strip mock transactions by ID and any manual tx linked to mock accounts
-        parsedTx = parsedTx.filter(
-          (t) => !MOCK_TX_IDS.has(t.id) && !(MOCK_ACCOUNT_IDS.has(t.accountId ?? "") && t.source === "manual")
-        );
-
-        // Always strip mock bills by ID (independent of whether mock accounts still exist)
-        const MOCK_BILL_IDS = new Set(["b1", "b2", "b3", "b4", "b5"]);
-        parsedBills = parsedBills.filter((b) => !MOCK_BILL_IDS.has(b.id));
 
         // Build a set of valid account IDs for stale-reference cleanup
         const validAccountIds = new Set(parsedAccounts.map((a) => a.id));
