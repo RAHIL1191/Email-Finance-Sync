@@ -20,7 +20,7 @@ import TransactionItem from "@/components/TransactionItem";
 import { Account, Bill, Transaction, useApp } from "@/context/AppContext";
 import { useColors } from "@/hooks/useColors";
 
-const SUBTABS = ["CASH FLOW", "SPENDING", "TRENDS", "TRANSACTIONS"] as const;
+const SUBTABS = ["CASH FLOW", "SPENDING", "TRENDS", "TRANSACTIONS", "REVIEW"] as const;
 type Subtab = (typeof SUBTABS)[number];
 
 const CHART_VIEWS = ["Chart", "Calendar", "Monthly"] as const;
@@ -1023,9 +1023,73 @@ function TransactionsTab({ transactions, colors }: { transactions: Transaction[]
   );
 }
 
+function ReviewTab({
+  transactions,
+  colors,
+  addTransaction,
+}: {
+  transactions: Transaction[];
+  colors: any;
+  addTransaction: (t: Omit<Transaction, "id">) => void;
+}) {
+  const [reviewedIds, setReviewedIds] = useState<string[]>([]);
+  const reviewTxs = useMemo(() => transactions.filter((t) => t.fromEmail && !reviewedIds.includes(t.id)), [transactions, reviewedIds]);
+
+  const handleAdd = (tx: Transaction) => {
+    addTransaction({
+      title: tx.title,
+      merchant: tx.merchant,
+      amount: tx.amount,
+      type: tx.type,
+      category: tx.category,
+      accountId: tx.accountId,
+      date: tx.date,
+      source: "manual",
+      bank: tx.bank,
+      note: tx.note,
+    });
+    setReviewedIds((prev) => [...prev, tx.id]);
+  };
+
+  return (
+    <View style={{ flex: 1 }}>
+      <FlatList
+        data={reviewTxs}
+        keyExtractor={(item) => item.id}
+        contentContainerStyle={{ padding: 16, paddingBottom: 120 }}
+        showsVerticalScrollIndicator={false}
+        ListEmptyComponent={
+          <View style={[styles.emptyBox, { backgroundColor: colors.card, margin: 16 }]}>
+            <Feather name="mail" size={36} color={colors.mutedForeground} />
+            <Text style={[styles.emptyText, { color: colors.mutedForeground }]}>No email transactions to review</Text>
+          </View>
+        }
+        renderItem={({ item }) => (
+          <View style={[styles.reviewRow, { backgroundColor: colors.card, borderColor: colors.border }]}>
+            <View style={{ flex: 1, gap: 2 }}>
+              <Text style={[styles.reviewTitle, { color: colors.foreground }]} numberOfLines={1}>
+                {item.merchant || item.title}
+              </Text>
+              <Text style={[styles.reviewSub, { color: colors.mutedForeground }]} numberOfLines={1}>
+                {item.bank || "Email"} · {item.category} · {new Date(item.date).toLocaleDateString()}
+              </Text>
+            </View>
+            <Text style={[styles.reviewAmount, { color: item.type === "expense" ? colors.expense : colors.success }]}>
+              ${item.amount.toFixed(2)}
+            </Text>
+            <TouchableOpacity style={[styles.reviewAddBtn, { backgroundColor: colors.primary }]} onPress={() => handleAdd(item)}>
+              <Text style={styles.reviewAddText}>Add</Text>
+            </TouchableOpacity>
+          </View>
+        )}
+      />
+    </View>
+  );
+}
+
 export default function InsightsScreen() {
   const colors = useColors();
-  const { transactions, bills, accounts } = useApp();
+  const { transactions, bills, accounts, addTransaction } = useApp();
   const [activeTab, setActiveTab] = useState<Subtab>("CASH FLOW");
   const [chartView, setChartView] = useState<ChartView>("Chart");
   const [showAdd, setShowAdd] = useState(false);
@@ -1101,6 +1165,7 @@ export default function InsightsScreen() {
         {activeTab === "TRANSACTIONS" && (
           <TransactionsTab transactions={transactions} colors={colors} />
         )}
+        {activeTab === "REVIEW" && <ReviewTab transactions={transactions} colors={colors} addTransaction={addTransaction} />}
       </View>
 
       {/* FAB */}
@@ -1173,6 +1238,20 @@ const styles = StyleSheet.create({
     fontFamily: "Inter_600SemiBold",
     letterSpacing: 0.5,
   },
+  reviewRow: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 10,
+    padding: 14,
+    borderRadius: 14,
+    borderWidth: 1,
+    marginBottom: 10,
+  },
+  reviewTitle: { fontSize: 14, fontFamily: "Inter_600SemiBold" },
+  reviewSub: { fontSize: 12, fontFamily: "Inter_400Regular" },
+  reviewAmount: { fontSize: 14, fontFamily: "Inter_700Bold" },
+  reviewAddBtn: { paddingHorizontal: 12, paddingVertical: 8, borderRadius: 10 },
+  reviewAddText: { color: "#fff", fontSize: 13, fontFamily: "Inter_600SemiBold" },
 
   monthNav: {
     flexDirection: "row",

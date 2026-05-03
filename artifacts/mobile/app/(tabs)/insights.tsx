@@ -42,7 +42,6 @@ const CATEGORY_COLORS: Record<string, string> = {
 };
 
 type EntryTab = "EXPENSE" | "INCOME" | "TRANSFER" | "BILLS";
-type InsightsSection = "summary" | "review";
 
 // ── FAB ───────────────────────────────────────────────────────────────────────
 
@@ -166,11 +165,9 @@ function InsightsFAB({
 
 export default function InsightsScreen() {
   const colors = useColors();
-  const { transactions, accounts, bills, monthlyIncome, monthlyExpense, addTransaction } = useApp();
+  const { transactions, accounts, bills, monthlyIncome, monthlyExpense } = useApp();
   const [isGenerating, setIsGenerating] = useState(false);
   const [aiInsights, setAiInsights] = useState<string[]>([]);
-  const [section, setSection] = useState<InsightsSection>("summary");
-  const [reviewedIds, setReviewedIds] = useState<string[]>([]);
 
   const [sheetVisible, setSheetVisible] = useState(false);
   const [sheetTab, setSheetTab] = useState<EntryTab>("EXPENSE");
@@ -192,25 +189,6 @@ export default function InsightsScreen() {
   const totalSpend = categorySpend.reduce((s, [, v]) => s + v, 0);
   const savingsRate = monthlyIncome > 0 ? ((monthlyIncome - monthlyExpense) / monthlyIncome) * 100 : 0;
   const emailTxCount = transactions.filter((t) => t.fromEmail).length;
-  const reviewTxs = useMemo(() => transactions.filter((t) => t.fromEmail && !reviewedIds.includes(t.id)), [transactions, reviewedIds]);
-
-  const addFromReview = (txId: string) => {
-    const tx = transactions.find((t) => t.id === txId);
-    if (!tx) return;
-    addTransaction({
-      title: tx.title,
-      merchant: tx.merchant,
-      amount: tx.amount,
-      type: tx.type,
-      category: tx.category,
-      accountId: tx.accountId,
-      date: tx.date,
-      source: "manual",
-      bank: tx.bank,
-      note: tx.note,
-    });
-    setReviewedIds((prev) => [...prev, txId]);
-  };
 
   const insights: Insight[] = useMemo(() => {
     const result: Insight[] = [];
@@ -256,14 +234,6 @@ export default function InsightsScreen() {
       >
         <View style={[styles.header, { paddingTop: Platform.OS === "web" ? 64 : 12 }]}>
           <Text style={[styles.title, { color: colors.foreground }]}>AI Insights</Text>
-          <View style={[styles.segment, { backgroundColor: colors.card, borderColor: colors.border }]}>
-            <TouchableOpacity onPress={() => setSection("summary")} style={[styles.segmentBtn, section === "summary" && { backgroundColor: colors.primary }]}>
-              <Text style={[styles.segmentText, { color: section === "summary" ? "#fff" : colors.mutedForeground }]}>Summary</Text>
-            </TouchableOpacity>
-            <TouchableOpacity onPress={() => setSection("review")} style={[styles.segmentBtn, section === "review" && { backgroundColor: colors.primary }]}>
-              <Text style={[styles.segmentText, { color: section === "review" ? "#fff" : colors.mutedForeground }]}>Review</Text>
-            </TouchableOpacity>
-          </View>
           <TouchableOpacity
             style={[styles.genBtn, { backgroundColor: isGenerating ? colors.muted : colors.primary }]}
             onPress={generateAiInsights}
@@ -280,33 +250,6 @@ export default function InsightsScreen() {
           </TouchableOpacity>
         </View>
 
-        {section === "review" ? (
-          <View style={[styles.card, { backgroundColor: colors.card }]}>
-            <Text style={[styles.cardTitle, { color: colors.foreground }]}>Review Email Transactions</Text>
-            {reviewTxs.length === 0 ? (
-              <Text style={[styles.noData, { color: colors.mutedForeground }]}>No email transactions to review</Text>
-            ) : (
-              reviewTxs.map((tx) => (
-                <View key={tx.id} style={[styles.reviewRow, { borderColor: colors.border }]}>
-                  <View style={{ flex: 1, gap: 3 }}>
-                    <Text style={[styles.reviewTitle, { color: colors.foreground }]} numberOfLines={1}>
-                      {tx.merchant || tx.title}
-                    </Text>
-                    <Text style={[styles.reviewSub, { color: colors.mutedForeground }]} numberOfLines={1}>
-                      {tx.bank || "Email"} · {tx.category} · {new Date(tx.date).toLocaleDateString()}
-                    </Text>
-                  </View>
-                  <Text style={[styles.reviewAmt, { color: tx.type === "expense" ? colors.expense : colors.success }]}>
-                    ${tx.amount.toFixed(2)}
-                  </Text>
-                  <TouchableOpacity style={[styles.reviewBtn, { backgroundColor: colors.primary }]} onPress={() => addFromReview(tx.id)}>
-                    <Text style={styles.reviewBtnText}>Add</Text>
-                  </TouchableOpacity>
-                </View>
-              ))
-            )}
-          </View>
-        ) : (
           <>
             <View style={[styles.card, { backgroundColor: colors.card }]}>
               <Text style={[styles.cardTitle, { color: colors.foreground }]}>This Month's Spending</Text>
@@ -386,7 +329,6 @@ export default function InsightsScreen() {
               </View>
             ))}
           </>
-        )}
       </ScrollView>
 
       {/* FAB */}
@@ -410,9 +352,6 @@ const styles = StyleSheet.create({
   scroll: { paddingHorizontal: 16, gap: 14 },
   header: { flexDirection: "row", justifyContent: "space-between", alignItems: "center" },
   title: { fontSize: 24, fontFamily: "Inter_700Bold" },
-  segment: { flexDirection: "row", borderRadius: 12, overflow: "hidden", borderWidth: 1 },
-  segmentBtn: { paddingHorizontal: 12, paddingVertical: 8 },
-  segmentText: { fontSize: 13, fontFamily: "Inter_600SemiBold" },
   genBtn: { flexDirection: "row", alignItems: "center", gap: 6, paddingHorizontal: 14, paddingVertical: 9, borderRadius: 12 },
   genBtnText: { fontSize: 14, fontFamily: "Inter_600SemiBold" },
   card: { borderRadius: 16, padding: 18, gap: 14 },
@@ -443,12 +382,6 @@ const styles = StyleSheet.create({
   insightBadge: { paddingHorizontal: 8, paddingVertical: 3, borderRadius: 6 },
   insightBadgeText: { fontSize: 10, fontFamily: "Inter_500Medium", textTransform: "capitalize" },
   insightDesc: { fontSize: 13, fontFamily: "Inter_400Regular", lineHeight: 18 },
-  reviewRow: { flexDirection: "row", alignItems: "center", gap: 10, paddingVertical: 12, borderBottomWidth: 1 },
-  reviewTitle: { fontSize: 14, fontFamily: "Inter_600SemiBold" },
-  reviewSub: { fontSize: 12, fontFamily: "Inter_400Regular" },
-  reviewAmt: { fontSize: 14, fontFamily: "Inter_700Bold" },
-  reviewBtn: { paddingHorizontal: 12, paddingVertical: 8, borderRadius: 10 },
-  reviewBtnText: { color: "#fff", fontSize: 13, fontFamily: "Inter_600SemiBold" },
 
   // FAB
   fabContainer: {
