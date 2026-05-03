@@ -8,6 +8,7 @@ import {
   Platform,
   ScrollView,
   StyleSheet,
+  Switch,
   Text,
   TextInput,
   TouchableOpacity,
@@ -412,7 +413,7 @@ export default function AccountDetailScreen() {
   const { id } = useLocalSearchParams<{ id: string }>();
   const colors = useColors();
   const insets = useSafeAreaInsets();
-  const { accounts, transactions } = useApp();
+  const { accounts, transactions, updateAccount } = useApp();
 
   const account = accounts.find((a) => a.id === id);
   const accountTxns = useMemo(
@@ -656,6 +657,37 @@ export default function AccountDetailScreen() {
             })}
           </View>
         )}
+
+        {/* ── Include in Networth toggle ── */}
+        <TouchableOpacity
+          style={[
+            styles.networthToggleRow,
+            { backgroundColor: colors.card, borderColor: colors.border },
+          ]}
+          onPress={() => {
+            Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
+            updateAccount(account.id, {
+              includeInNetworth: account.includeInNetworth === false ? true : false,
+            });
+          }}
+          activeOpacity={0.8}
+        >
+          <View style={[styles.networthIcon, { backgroundColor: colors.primary + "18" }]}>
+            <Feather name="dollar-sign" size={18} color={colors.primary} />
+          </View>
+          <Text style={[styles.networthLabel, { color: colors.foreground }]}>
+            Include in Networth
+          </Text>
+          <Switch
+            value={account.includeInNetworth !== false}
+            onValueChange={(val) => {
+              Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
+              updateAccount(account.id, { includeInNetworth: val });
+            }}
+            trackColor={{ false: "#d1d5db", true: colors.primary }}
+            thumbColor="#fff"
+          />
+        </TouchableOpacity>
       </ScrollView>
 
       {/* ── Floating Add Button ── */}
@@ -760,6 +792,19 @@ const styles = StyleSheet.create({
     padding: 40, alignItems: "center", gap: 10,
   },
   emptyTxText: { fontSize: 14, fontFamily: "Inter_400Regular" },
+
+  // Include in networth toggle
+  networthToggleRow: {
+    flexDirection: "row", alignItems: "center",
+    marginHorizontal: 16, marginTop: 16,
+    borderRadius: 16, borderWidth: 1,
+    paddingHorizontal: 14, paddingVertical: 14, gap: 12,
+  },
+  networthIcon: {
+    width: 38, height: 38, borderRadius: 11,
+    alignItems: "center", justifyContent: "center",
+  },
+  networthLabel: { flex: 1, fontSize: 15, fontFamily: "Inter_600SemiBold" },
 
   // FAB
   fab: {

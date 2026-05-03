@@ -32,6 +32,8 @@ export interface Account {
   type: "checking" | "savings" | "credit" | "investment";
   color: string;
   lastFour?: string;
+  /** When false, this account is excluded from net worth. Defaults to true. */
+  includeInNetworth?: boolean;
   /** Set when this account was imported via Plaid */
   plaidItemId?: string;
   plaidAccountId?: string;
@@ -575,7 +577,9 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
   const thisMonthTx = transactions.filter((t) => t.date >= monthStart);
   const monthlyIncome = thisMonthTx.filter((t) => t.type === "income").reduce((s, t) => s + t.amount, 0);
   const monthlyExpense = thisMonthTx.filter((t) => t.type === "expense").reduce((s, t) => s + t.amount, 0);
-  const totalBalance = accounts.reduce((s, a) => s + a.balance, 0);
+  const totalBalance = accounts
+    .filter((a) => a.includeInNetworth !== false)
+    .reduce((s, a) => s + a.balance, 0);
 
   return (
     <AppContext.Provider
