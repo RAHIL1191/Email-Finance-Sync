@@ -20,15 +20,15 @@ import { PLAID_BANKS, useApp } from "@/context/AppContext";
 import { useColors } from "@/hooks/useColors";
 
 type Step = "choose" | "type" | "form";
-type AccountBaseType = "checking" | "savings" | "credit" | "investment";
+export type AccountBaseType = "checking" | "savings" | "credit" | "investment";
 
-interface SubType {
+export interface SubType {
   label: string;
   icon: string;
   type: AccountBaseType;
 }
 
-const ACCOUNT_CATEGORIES: { label: string; items: SubType[] }[] = [
+export const ACCOUNT_CATEGORIES: { label: string; items: SubType[] }[] = [
   {
     label: "Cash",
     items: [
@@ -143,7 +143,7 @@ export default function AddAccountModal({ visible, onClose, onConnectBank }: Pro
     setStep("form");
   };
 
-  const doSave = () => {
+  const doSave = (force = false) => {
     if (!selectedSubType) return;
     Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
     const newId = addAccount({
@@ -156,6 +156,7 @@ export default function AddAccountModal({ visible, onClose, onConnectBank }: Pro
       lastFour: lastFour.trim() || undefined,
       includeInNetworth,
       isJoint,
+      forceCreate: force,
     });
     if (bank.trim()) remapEmailTransactions(bank.trim(), newId);
     handleClose();
@@ -164,25 +165,33 @@ export default function AddAccountModal({ visible, onClose, onConnectBank }: Pro
   const handleSave = () => {
     if (!name.trim() || !selectedSubType) return;
 
-    // Warn if an account with the same last 4 + bank already exists
-    if (lastFour.trim() && bank.trim()) {
-      const bankLower = bank.trim().toLowerCase();
-      const duplicate = accounts.find(
-        (a) =>
-          a.lastFour === lastFour.trim() &&
+    // Check for duplicate by lastFour+bank OR by name
+    const nameLower = name.trim().toLowerCase();
+    const bankLower = bank.trim().toLowerCase();
+    const lastFourTrimmed = lastFour.trim();
+
+    const duplicate = accounts.find((a) => {
+      if (lastFourTrimmed && bank.trim()) {
+        return (
+          a.lastFour === lastFourTrimmed &&
           (a.bank.toLowerCase().includes(bankLower) || bankLower.includes(a.bank.toLowerCase()))
-      );
-      if (duplicate) {
-        Alert.alert(
-          "Account Already Exists",
-          `"${duplicate.name}" at ${duplicate.bank} ending in ••••${duplicate.lastFour} already exists. Creating a duplicate may cause incorrect transaction matching.`,
-          [
-            { text: "Cancel", style: "cancel" },
-            { text: "Create Anyway", style: "destructive", onPress: doSave },
-          ]
         );
-        return;
       }
+      return a.name.toLowerCase() === nameLower;
+    });
+
+    if (duplicate) {
+      Alert.alert(
+        "Account Already Exists",
+        lastFourTrimmed && bank.trim()
+          ? `"${duplicate.name}" at ${duplicate.bank} ending in ••••${duplicate.lastFour} already exists. Creating a duplicate may cause incorrect transaction matching.`
+          : `An account named "${duplicate.name}" already exists. Do you want to create another one?`,
+        [
+          { text: "Cancel", style: "cancel" },
+          { text: "Create Anyway", onPress: () => doSave(true) },
+        ]
+      );
+      return;
     }
 
     doSave();

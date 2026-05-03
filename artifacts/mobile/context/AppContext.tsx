@@ -86,7 +86,7 @@ interface AppContextType {
   addTransaction: (t: Omit<Transaction, "id">) => void;
   updateTransaction: (id: string, t: Partial<Transaction>) => void;
   deleteTransaction: (id: string) => void;
-  addAccount: (a: Omit<Account, "id">) => string;
+  addAccount: (a: Omit<Account, "id"> & { forceCreate?: boolean }) => string;
   remapEmailTransactions: (bankPattern: string, accountId: string) => void;
   updateAccount: (id: string, a: Partial<Account>) => void;
   deleteAccount: (id: string) => void;
@@ -345,9 +345,9 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
   }, []);
 
   // ── CRUD: Accounts ────────────────────────────────────────────────────────
-  const addAccount = useCallback((a: Omit<Account, "id">): string => {
+  const addAccount = useCallback((a: Omit<Account, "id"> & { forceCreate?: boolean }): string => {
     // Dedup: if lastFour + bank already matches an existing account, return its ID
-    if (a.lastFour && a.bank) {
+    if (!a.forceCreate && a.lastFour && a.bank) {
       const existing = findAccountMatch(accountsRef.current, a.bank, a.lastFour);
       if (existing) {
         // Still remap stale email transactions to the existing account

@@ -31,6 +31,7 @@ import { SafeAreaView, useSafeAreaInsets } from "react-native-safe-area-context"
 import AddTransactionModal from "@/components/AddTransactionModal";
 import TransactionDetailModal from "@/components/TransactionDetailModal";
 import { CATEGORY_COLORS, CATEGORY_ICONS } from "@/components/TransactionItem";
+import { ACCOUNT_CATEGORIES, SubType } from "@/components/AddAccountModal";
 import { PLAID_BANKS, Transaction, useApp } from "@/context/AppContext";
 import { useColors } from "@/hooks/useColors";
 
@@ -514,6 +515,7 @@ function EditAccountModal({
     account?.type ?? "checking"
   );
   const [showBankPicker, setShowBankPicker] = useState(false);
+  const [showTypePicker, setShowTypePicker] = useState(false);
   const [bankSearch, setBankSearch] = useState("");
 
   // Reset to latest account values whenever modal opens
@@ -727,42 +729,85 @@ function EditAccountModal({
             <View style={[styles.editDivider, { backgroundColor: colors.border }]} />
 
             {/* Account type */}
-            <View style={[styles.editRow, { flexWrap: "wrap", gap: 8, paddingVertical: 14 }]}>
+            <TouchableOpacity
+              style={styles.editRow}
+              activeOpacity={0.7}
+              onPress={() => {
+                Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
+                setShowTypePicker(true);
+              }}
+            >
               <View style={[styles.formIcon, { backgroundColor: "#e8f0fe" }]}>
                 <Feather name="layers" size={18} color="#4a6fa5" />
               </View>
-              <Text style={[styles.editLabel, { color: colors.foreground }]}>Account Type</Text>
-              <View style={styles.typeChipRow}>
-                {(["checking", "savings", "credit", "investment"] as const).map((t) => {
-                  const active = accountType === t;
-                  const label = t === "checking" ? "Chequing" : t === "savings" ? "Savings" : t === "credit" ? "Credit" : "Investment";
-                  return (
-                    <TouchableOpacity
-                      key={t}
-                      style={[
-                        styles.typeChip,
-                        {
-                          backgroundColor: active ? colors.primary : colors.muted,
-                          borderColor: active ? colors.primary : colors.border,
-                        },
-                      ]}
-                      onPress={() => {
-                        Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
-                        setAccountType(t);
-                      }}
-                      activeOpacity={0.7}
-                    >
-                      <Text style={[styles.typeChipLabel, { color: active ? "#fff" : colors.mutedForeground }]}>
-                        {label}
-                      </Text>
-                    </TouchableOpacity>
-                  );
-                })}
+              <View style={{ flex: 1 }}>
+                <Text style={[styles.editLabel, { color: colors.foreground }]}>Account Type</Text>
+                <Text style={[styles.editSublabel, { color: colors.mutedForeground }]}>
+                  {accountType === "checking" ? "Chequing"
+                    : accountType === "savings" ? "Savings"
+                    : accountType === "credit" ? "Credit"
+                    : "Investment"}
+                </Text>
               </View>
-            </View>
+              <Feather name="chevron-right" size={18} color={colors.mutedForeground} />
+            </TouchableOpacity>
           </View>
         </ScrollView>
       </View>
+
+      {/* Type picker sheet */}
+      <Modal
+        visible={showTypePicker}
+        animationType="slide"
+        presentationStyle="pageSheet"
+        onRequestClose={() => setShowTypePicker(false)}
+      >
+        <View style={[styles.editRoot, { backgroundColor: colors.background, paddingTop: Platform.OS === "web" ? 20 : insets.top + 12 }]}>
+          <View style={[styles.editHeader, { borderBottomColor: colors.border }]}>
+            <TouchableOpacity onPress={() => setShowTypePicker(false)} hitSlop={8}>
+              <Feather name="x" size={22} color={colors.foreground} />
+            </TouchableOpacity>
+            <Text style={[styles.editTitle, { color: colors.foreground }]}>Account Type</Text>
+            <View style={{ width: 22 }} />
+          </View>
+          <ScrollView showsVerticalScrollIndicator={false} contentContainerStyle={{ paddingHorizontal: 16, paddingBottom: 40 }}>
+            {ACCOUNT_CATEGORIES.map((cat) => (
+              <View key={cat.label} style={{ marginTop: 20 }}>
+                <Text style={[styles.typePickerSection, { color: colors.mutedForeground }]}>{cat.label.toUpperCase()}</Text>
+                <View style={[styles.typePickerCard, { backgroundColor: colors.card, borderColor: colors.border }]}>
+                  {cat.items.map((sub: SubType, i: number) => {
+                    const active = accountType === sub.type;
+                    return (
+                      <TouchableOpacity
+                        key={sub.label}
+                        activeOpacity={0.7}
+                        style={[
+                          styles.typePickerRow,
+                          i < cat.items.length - 1 && { borderBottomWidth: StyleSheet.hairlineWidth, borderBottomColor: colors.border },
+                          active && { backgroundColor: colors.primary + "12" },
+                        ]}
+                        onPress={() => {
+                          Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
+                          setAccountType(sub.type);
+                          setTimeout(() => setShowTypePicker(false), 180);
+                        }}
+                      >
+                        <View style={[styles.typePickerIcon, { backgroundColor: active ? colors.primary + "22" : colors.muted }]}>
+                          <Feather name={sub.icon as any} size={16} color={active ? colors.primary : colors.mutedForeground} />
+                        </View>
+                        <Text style={[styles.typePickerLabel, { color: active ? colors.primary : colors.foreground, fontFamily: active ? "Inter_600SemiBold" : "Inter_400Regular" }]}>
+                          {sub.label}
+                        </Text>
+                        {active && <Feather name="check" size={18} color={colors.primary} />}
+                      </TouchableOpacity>
+                    );
+                  })}
+                </View>
+              </View>
+            ))}
+          </ScrollView>
+        </View>
+      </Modal>
 
       {/* Bank picker sheet */}
       <Modal
@@ -919,7 +964,7 @@ export default function AccountDetailScreen() {
           style: "destructive",
           onPress: () => {
             deleteAccount(id!);
-            router.back();
+            setTimeout(() => router.back(), 80);
           },
         },
       ]
@@ -1461,12 +1506,20 @@ const styles = StyleSheet.create({
     borderRadius: 12, borderWidth: 1,
     paddingHorizontal: 12, paddingVertical: 10,
   },
-  typeChipRow: {
-    flexDirection: "row", flexWrap: "wrap", gap: 8, flex: 1,
+  typePickerSection: {
+    fontSize: 11, fontFamily: "Inter_600SemiBold",
+    letterSpacing: 0.8, marginBottom: 6, marginLeft: 4,
   },
-  typeChip: {
-    borderRadius: 20, borderWidth: 1,
-    paddingHorizontal: 14, paddingVertical: 7,
+  typePickerCard: {
+    borderRadius: 14, borderWidth: StyleSheet.hairlineWidth, overflow: "hidden",
   },
-  typeChipLabel: { fontSize: 13, fontFamily: "Inter_600SemiBold" },
+  typePickerRow: {
+    flexDirection: "row", alignItems: "center", gap: 12,
+    paddingHorizontal: 16, paddingVertical: 14,
+  },
+  typePickerIcon: {
+    width: 34, height: 34, borderRadius: 10,
+    alignItems: "center", justifyContent: "center",
+  },
+  typePickerLabel: { flex: 1, fontSize: 15 },
 });
