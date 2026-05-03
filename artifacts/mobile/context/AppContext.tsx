@@ -511,10 +511,11 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
           const matched = t.bank
             ? findAccountMatch(currentAccounts, t.bank, t.lastFour ?? undefined)
             : undefined;
+          const merchant = t.merchant || t.title || "Transaction";
           return {
             id: genId(),
-            title: t.title || "Transaction",
-            merchant: t.merchant || t.title || "Transaction",
+            title: merchant,
+            merchant,
             amount: t.amount,
             type: t.type,
             category: t.category || "Other",
@@ -523,7 +524,7 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
             source: "email" as const,
             fromEmail: true,
             bank: t.bank || "Bank",
-            note: [t.merchant, t.lastFour ? `ending in ${t.lastFour}` : ""].filter(Boolean).join(" · ") || undefined,
+            note: [t.lastFour ? `ending in ${t.lastFour}` : ""].filter(Boolean).join(" · ") || undefined,
           };
         });
         setTransactions((prev) => {

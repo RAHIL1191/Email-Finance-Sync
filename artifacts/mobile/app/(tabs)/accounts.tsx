@@ -118,7 +118,6 @@ function AccountRow({
   const bankLower = (account.bank ?? "").trim().toLowerCase();
   const accountTxs = transactions
     .filter((t) => {
-      if (t.accountId === account.id) return true;
       if (t.source !== "email") return false;
       const txBank = (t.bank ?? "").trim().toLowerCase();
       const txText = `${t.title} ${t.merchant ?? ""} ${t.note ?? ""}`.toLowerCase();
@@ -192,8 +191,7 @@ function AccountRow({
                   {tx.merchant || tx.title}
                 </Text>
                 <Text style={[styles.txPreviewSub, { color: colors.mutedForeground }]} numberOfLines={1}>
-                  {tx.source === "email" ? "Email matched" : "Manual"}
-                  {tx.note ? ` · ${tx.note}` : ""}
+                  {tx.note || "Email matched"}
                 </Text>
               </View>
               <Text style={[styles.txPreviewAmt, { color: tx.type === "expense" ? colors.expense : colors.success }]}>
