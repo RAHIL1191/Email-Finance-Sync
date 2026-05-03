@@ -106,6 +106,19 @@ function formatTime(d: Date) {
   });
 }
 
+function AmountCalcButton({ onPress }: { onPress: () => void }) {
+  const colors = useColors();
+  return (
+    <TouchableOpacity
+      onPress={onPress}
+      style={[styles.calcButton, { borderColor: colors.border, backgroundColor: colors.card }]}
+      activeOpacity={0.75}
+    >
+      <Feather name="menu" size={16} color={colors.mutedForeground} />
+    </TouchableOpacity>
+  );
+}
+
 // ─── Reusable row components ──────────────────────────────────────────────────
 
 function RowItem({
@@ -164,16 +177,18 @@ function DateTimeRow({
   onTimeChange,
   label,
   borderBottom,
+  onOpenDate,
+  onOpenTime,
 }: {
   date: Date;
   onDateChange: (d: Date) => void;
   onTimeChange: (d: Date) => void;
   label?: string;
   borderBottom?: boolean;
+  onOpenDate?: () => void;
+  onOpenTime?: () => void;
 }) {
   const colors = useColors();
-  const [showDate, setShowDate] = useState(false);
-  const [showTime, setShowTime] = useState(false);
 
   return (
     <View style={[styles.row, borderBottom !== false && { borderBottomWidth: StyleSheet.hairlineWidth, borderBottomColor: colors.border }]}>
@@ -183,32 +198,54 @@ function DateTimeRow({
       <View style={{ flex: 1 }}>
         {label ? <Text style={[styles.rowLabel, { color: colors.foreground }]}>{label}</Text> : null}
         <View style={styles.dateTimeInner}>
-          <TouchableOpacity onPress={() => { setShowTime(false); setShowDate(true); }}>
+          <TouchableOpacity onPress={onOpenDate}>
             <Text style={[styles.dateText, { color: colors.foreground }]}>{formatDate(date)}</Text>
           </TouchableOpacity>
-          <TouchableOpacity onPress={() => { setShowDate(false); setShowTime(true); }}>
+          <TouchableOpacity onPress={onOpenTime}>
             <Text style={[styles.timeText, { color: colors.primary }]}>{formatTime(date)}</Text>
           </TouchableOpacity>
         </View>
-        {showDate && (
-          <DateTimePicker
-            value={date}
-            mode="date"
-            display={Platform.OS === "ios" ? "spinner" : "default"}
-            onChange={(_, d) => { setShowDate(false); if (d) onDateChange(d); }}
-          />
-        )}
-        {showTime && (
-          <DateTimePicker
-            value={date}
-            mode="time"
-            display={Platform.OS === "ios" ? "spinner" : "default"}
-            onChange={(_, d) => { setShowTime(false); if (d) onTimeChange(d); }}
-          />
-        )}
       </View>
       <Feather name="chevron-right" size={18} color={colors.mutedForeground} />
     </View>
+  );
+}
+
+function DatePickerModal({
+  visible,
+  title,
+  date,
+  onChange,
+  onClose,
+}: {
+  visible: boolean;
+  title: string;
+  date: Date;
+  onChange: (d: Date) => void;
+  onClose: () => void;
+}) {
+  const colors = useColors();
+  return (
+    <Modal visible={visible} transparent animationType="fade" onRequestClose={onClose}>
+      <TouchableOpacity style={styles.overlay} activeOpacity={1} onPress={onClose} />
+      <View style={styles.centerPicker}>
+        <View style={[styles.centerPickerCard, { backgroundColor: colors.card }]}>
+          <Text style={[styles.pickerTitle, { color: colors.foreground }]}>{title}</Text>
+          <DateTimePicker
+            value={date}
+            mode={title.includes("Time") ? "time" : "date"}
+            display={Platform.OS === "ios" ? "spinner" : "default"}
+            onChange={(_, d) => {
+              if (d) onChange(d);
+              if (Platform.OS !== "ios") onClose();
+            }}
+          />
+          <TouchableOpacity onPress={onClose} style={styles.centerPickerBtn}>
+            <Text style={styles.centerPickerBtnText}>Done</Text>
+          </TouchableOpacity>
+        </View>
+      </View>
+    </Modal>
   );
 }
 
@@ -395,7 +432,7 @@ function AmountHeader({ value, onChange, color }: { value: string; onChange: (v:
   const colors = useColors();
   const ref = useRef<TextInput>(null);
   return (
-    <TouchableOpacity activeOpacity={0.8} style={styles.amountSection} onPress={() => ref.current?.focus()}>
+    <View style={styles.amountSection}>
       <Feather name="dollar-sign" size={28} color={color ?? colors.mutedForeground} style={{ marginTop: 4 }} />
       <TextInput
         ref={ref}
@@ -407,7 +444,8 @@ function AmountHeader({ value, onChange, color }: { value: string; onChange: (v:
         onChangeText={onChange}
         returnKeyType="done"
       />
-    </TouchableOpacity>
+      <AmountCalcButton onPress={() => ref.current?.focus()} />
+    </View>
   );
 }
 
@@ -426,6 +464,8 @@ function ExpenseTab({ onSave }: { onSave: () => void }) {
 
   const [showCatPicker, setShowCatPicker] = useState(false);
   const [showAccPicker, setShowAccPicker] = useState(false);
+  const [showDatePicker, setShowDatePicker] = useState(false);
+  const [showTimePicker, setShowTimePicker] = useState(false);
 
   const selectedAcc = accounts.find((a) => a.id === accountId);
 
@@ -494,6 +534,8 @@ function ExpenseTab({ onSave }: { onSave: () => void }) {
           date={date}
           onDateChange={(d) => setDate((prev) => { const n = new Date(d); n.setHours(prev.getHours(), prev.getMinutes()); return n; })}
           onTimeChange={(d) => setDate((prev) => { const n = new Date(prev); n.setHours(d.getHours(), d.getMinutes()); return n; })}
+          onOpenDate={() => setShowDatePicker(true)}
+          onOpenTime={() => setShowTimePicker(true)}
           borderBottom={false}
         />
       </View>
@@ -524,6 +566,46 @@ function ExpenseTab({ onSave }: { onSave: () => void }) {
         onSelect={setAccountId}
         onClose={() => setShowAccPicker(false)}
       />
+      <Modal visible={showDatePicker} transparent animationType="fade" onRequestClose={() => setShowDatePicker(false)}>
+        <TouchableOpacity style={styles.overlay} activeOpacity={1} onPress={() => setShowDatePicker(false)} />
+        <View style={styles.centerPicker}>
+          <View style={[styles.centerPickerCard, { backgroundColor: colors.card }]}>
+            <Text style={[styles.pickerTitle, { color: colors.foreground }]}>Select Date</Text>
+            <DateTimePicker
+              value={date}
+              mode="date"
+              display={Platform.OS === "ios" ? "spinner" : "default"}
+              onChange={(_, d) => {
+                if (d) setDate(d);
+                if (Platform.OS !== "ios") setShowDatePicker(false);
+              }}
+            />
+            <TouchableOpacity onPress={() => setShowDatePicker(false)} style={styles.centerPickerBtn}>
+              <Text style={styles.centerPickerBtnText}>Done</Text>
+            </TouchableOpacity>
+          </View>
+        </View>
+      </Modal>
+      <Modal visible={showTimePicker} transparent animationType="fade" onRequestClose={() => setShowTimePicker(false)}>
+        <TouchableOpacity style={styles.overlay} activeOpacity={1} onPress={() => setShowTimePicker(false)} />
+        <View style={styles.centerPicker}>
+          <View style={[styles.centerPickerCard, { backgroundColor: colors.card }]}>
+            <Text style={[styles.pickerTitle, { color: colors.foreground }]}>Select Time</Text>
+            <DateTimePicker
+              value={date}
+              mode="time"
+              display={Platform.OS === "ios" ? "spinner" : "default"}
+              onChange={(_, d) => {
+                if (d) setDate(d);
+                if (Platform.OS !== "ios") setShowTimePicker(false);
+              }}
+            />
+            <TouchableOpacity onPress={() => setShowTimePicker(false)} style={styles.centerPickerBtn}>
+              <Text style={styles.centerPickerBtnText}>Done</Text>
+            </TouchableOpacity>
+          </View>
+        </View>
+      </Modal>
     </ScrollView>
   );
 }
@@ -544,6 +626,8 @@ function IncomeTab({ onSave }: { onSave: () => void }) {
   const [showCatPicker, setShowCatPicker] = useState(false);
   const [showAccPicker, setShowAccPicker] = useState(false);
   const [showRepeatPicker, setShowRepeatPicker] = useState(false);
+  const [showDatePicker, setShowDatePicker] = useState(false);
+  const [showTimePicker, setShowTimePicker] = useState(false);
 
   const save = () => {
     const parsed = parseFloat(amount);
@@ -596,6 +680,8 @@ function IncomeTab({ onSave }: { onSave: () => void }) {
           date={date}
           onDateChange={(d) => setDate((prev) => { const n = new Date(d); n.setHours(prev.getHours(), prev.getMinutes()); return n; })}
           onTimeChange={(d) => setDate((prev) => { const n = new Date(prev); n.setHours(d.getHours(), d.getMinutes()); return n; })}
+          onOpenDate={() => setShowDatePicker(true)}
+          onOpenTime={() => setShowTimePicker(true)}
           borderBottom={false}
         />
       </View>
@@ -645,6 +731,46 @@ function IncomeTab({ onSave }: { onSave: () => void }) {
         onSelect={setRepeat}
         onClose={() => setShowRepeatPicker(false)}
       />
+      <Modal visible={showDatePicker} transparent animationType="fade" onRequestClose={() => setShowDatePicker(false)}>
+        <TouchableOpacity style={styles.overlay} activeOpacity={1} onPress={() => setShowDatePicker(false)} />
+        <View style={styles.centerPicker}>
+          <View style={[styles.centerPickerCard, { backgroundColor: colors.card }]}>
+            <Text style={[styles.pickerTitle, { color: colors.foreground }]}>Select Date</Text>
+            <DateTimePicker
+              value={date}
+              mode="date"
+              display={Platform.OS === "ios" ? "spinner" : "default"}
+              onChange={(_, d) => {
+                if (d) setDate(d);
+                if (Platform.OS !== "ios") setShowDatePicker(false);
+              }}
+            />
+            <TouchableOpacity onPress={() => setShowDatePicker(false)} style={styles.centerPickerBtn}>
+              <Text style={styles.centerPickerBtnText}>Done</Text>
+            </TouchableOpacity>
+          </View>
+        </View>
+      </Modal>
+      <Modal visible={showTimePicker} transparent animationType="fade" onRequestClose={() => setShowTimePicker(false)}>
+        <TouchableOpacity style={styles.overlay} activeOpacity={1} onPress={() => setShowTimePicker(false)} />
+        <View style={styles.centerPicker}>
+          <View style={[styles.centerPickerCard, { backgroundColor: colors.card }]}>
+            <Text style={[styles.pickerTitle, { color: colors.foreground }]}>Select Time</Text>
+            <DateTimePicker
+              value={date}
+              mode="time"
+              display={Platform.OS === "ios" ? "spinner" : "default"}
+              onChange={(_, d) => {
+                if (d) setDate(d);
+                if (Platform.OS !== "ios") setShowTimePicker(false);
+              }}
+            />
+            <TouchableOpacity onPress={() => setShowTimePicker(false)} style={styles.centerPickerBtn}>
+              <Text style={styles.centerPickerBtnText}>Done</Text>
+            </TouchableOpacity>
+          </View>
+        </View>
+      </Modal>
     </ScrollView>
   );
 }
@@ -1241,6 +1367,37 @@ const styles = StyleSheet.create({
     borderBottomWidth: StyleSheet.hairlineWidth,
   },
   pickerTitle: { fontSize: 16, fontFamily: "Inter_600SemiBold" },
+
+  calcButton: {
+    width: 34,
+    height: 34,
+    borderRadius: 17,
+    borderWidth: StyleSheet.hairlineWidth,
+    alignItems: "center",
+    justifyContent: "center",
+    marginLeft: 6,
+  },
+  centerPicker: {
+    flex: 1,
+    alignItems: "center",
+    justifyContent: "center",
+    padding: 20,
+  },
+  centerPickerCard: {
+    width: "100%",
+    maxWidth: 360,
+    borderRadius: 18,
+    padding: 16,
+    gap: 12,
+  },
+  centerPickerBtn: {
+    alignSelf: "flex-end",
+    paddingHorizontal: 14,
+    paddingVertical: 10,
+  },
+  centerPickerBtnText: {
+    fontFamily: "Inter_600SemiBold",
+  },
   pickerRow: {
     flexDirection: "row",
     alignItems: "center",
