@@ -560,6 +560,11 @@ function ConnectedInstitutionsModal({
                   ))}
                 </View>
               )}
+              {!emailSync.lastParsed?.length && syncResult && !syncResult.error && (
+                <Text style={[styles.plaidSub, { color: colors.mutedForeground }]}>
+                  Parsed preview will appear after the next sync.
+                </Text>
+              )}
               <View style={{ flexDirection: "row", gap: 10 }}>
                 <TouchableOpacity
                   style={[styles.plaidSyncBtn, { backgroundColor: colors.success, opacity: isSyncing ? 0.7 : 1, flex: 1 }]}
