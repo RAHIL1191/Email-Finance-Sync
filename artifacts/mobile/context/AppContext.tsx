@@ -259,9 +259,33 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
         householdIdRef.current = hId;
         setHouseholdId(hId);
 
-        setTransactions(txRaw ? JSON.parse(txRaw) : SAMPLE_TRANSACTIONS);
-        setAccounts(accRaw ? JSON.parse(accRaw) : SAMPLE_ACCOUNTS);
-        setBills(billRaw ? JSON.parse(billRaw) : SAMPLE_BILLS);
+        const MOCK_ACCOUNT_IDS = new Set(["acc1", "acc2", "acc3"]);
+        const MOCK_TX_IDS = new Set(["t1", "t2", "t3", "t4", "t5"]);
+
+        let parsedAccounts: Account[] = accRaw ? JSON.parse(accRaw) : [];
+        let parsedTx: Transaction[] = txRaw ? JSON.parse(txRaw) : [];
+        let parsedBills: Bill[] = billRaw ? JSON.parse(billRaw) : [];
+
+        // One-time migration: strip mock sample data, preserve real transactions
+        const hasMockAccounts = parsedAccounts.some((a) => MOCK_ACCOUNT_IDS.has(a.id));
+        if (hasMockAccounts) {
+          parsedAccounts = parsedAccounts.filter((a) => !MOCK_ACCOUNT_IDS.has(a.id));
+          parsedTx = parsedTx.filter(
+            (t) => !MOCK_TX_IDS.has(t.id) && !(MOCK_ACCOUNT_IDS.has(t.accountId ?? "") && t.source === "manual")
+          );
+          parsedBills = parsedBills.filter((b) => !MOCK_ACCOUNT_IDS.has(b.accountId ?? ""));
+        }
+
+        // Auto-remap unmatched email transactions to existing accounts
+        const remappedTx = parsedTx.map((t) => {
+          if (t.source !== "email" || !t.bank || t.accountId) return t;
+          const match = findAccountMatch(parsedAccounts, t.bank, undefined);
+          return match ? { ...t, accountId: match.id } : t;
+        });
+
+        setTransactions(remappedTx);
+        setAccounts(parsedAccounts);
+        setBills(parsedBills);
         if (emailRaw) setEmailSync(JSON.parse(emailRaw));
         if (plaidRaw) setPlaidSync(JSON.parse(plaidRaw));
       } catch {}
@@ -327,11 +351,12 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
     if (!bankPattern.trim()) return;
     const pattern = bankPattern.trim().toLowerCase();
     setTransactions((prev) =>
-      prev.map((t) =>
-        t.source === "email" && t.bank && t.bank.toLowerCase().includes(pattern)
-          ? { ...t, accountId }
-          : t
-      )
+      prev.map((t) => {
+        if (t.source !== "email" || !t.bank) return t;
+        const tb = t.bank.toLowerCase();
+        const matches = tb.includes(pattern) || pattern.includes(tb);
+        return matches ? { ...t, accountId } : t;
+      })
     );
   }, []);
 
