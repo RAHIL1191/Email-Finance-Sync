@@ -123,20 +123,6 @@ const STORAGE_KEYS = {
   householdId: "@fintrack/householdId",
 };
 
-const SAMPLE_ACCOUNTS: Account[] = [
-  { id: "acc1", name: "Main Checking", bank: "Chase Bank", balance: 4820.5, type: "checking", color: "#1a56db", lastFour: "4521" },
-  { id: "acc2", name: "Savings", bank: "Chase Bank", balance: 12340.0, type: "savings", color: "#10b981", lastFour: "9834" },
-  { id: "acc3", name: "Credit Card", bank: "Amex", balance: -1250.75, type: "credit", color: "#f59e0b", lastFour: "3301" },
-];
-
-const SAMPLE_BILLS: Bill[] = [
-  { id: "b1", title: "Rent", amount: 2200, dueDate: new Date(Date.now() + 5 * 86400000).toISOString(), category: "Housing", isPaid: false, isRecurring: true, frequency: "monthly", accountId: "acc1" },
-  { id: "b2", title: "Electric Bill", amount: 145, dueDate: new Date(Date.now() + 10 * 86400000).toISOString(), category: "Utilities", isPaid: false, isRecurring: true, frequency: "monthly", accountId: "acc1" },
-  { id: "b3", title: "Internet", amount: 79.99, dueDate: new Date(Date.now() + 3 * 86400000).toISOString(), category: "Utilities", isPaid: false, isRecurring: true, frequency: "monthly" },
-  { id: "b4", title: "Car Insurance", amount: 210, dueDate: new Date(Date.now() - 2 * 86400000).toISOString(), category: "Insurance", isPaid: true, isRecurring: true, frequency: "monthly", accountId: "acc1" },
-  { id: "b5", title: "Gym Membership", amount: 49.99, dueDate: new Date(Date.now() + 15 * 86400000).toISOString(), category: "Health", isPaid: false, isRecurring: true, frequency: "monthly" },
-];
-
 // ── Helpers ──────────────────────────────────────────────────────────────────
 
 function genId() {
@@ -273,31 +259,16 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
         householdIdRef.current = hId;
         setHouseholdId(hId);
 
-        let parsedAccounts: Account[] = accRaw ? JSON.parse(accRaw) : [];
-        let parsedTx: Transaction[] = txRaw ? JSON.parse(txRaw) : [];
-        let parsedBills: Bill[] = billRaw ? JSON.parse(billRaw) : [];
-
-        // Build a set of valid account IDs for stale-reference cleanup
-        const validAccountIds = new Set(parsedAccounts.map((a) => a.id));
-
-        // Auto-remap email transactions: remap if unmatched OR if accountId points to
-        // a deleted/mock account that no longer exists in the list
-        const remappedTx = parsedTx.map((t) => {
-          if (t.source !== "email") return t;
-          const accountMissing = !t.accountId || !validAccountIds.has(t.accountId);
-          if (!accountMissing) return t;
-          const lastFour = t.note?.match(/\b\d{4}\b/)?.[0];
-          const match =
-            (t.bank ? findAccountMatch(parsedAccounts, t.bank, lastFour) : undefined) ||
-            (lastFour ? parsedAccounts.find((a) => a.lastFour === lastFour) : undefined);
-          return match ? { ...t, accountId: match.id } : t;
-        });
-
-        setTransactions(remappedTx);
-        setAccounts(parsedAccounts);
-        setBills(parsedBills);
+        setTransactions([]);
+        setAccounts([]);
+        setBills([]);
         if (emailRaw) setEmailSync(JSON.parse(emailRaw));
         if (plaidRaw) setPlaidSync(JSON.parse(plaidRaw));
+        await Promise.all([
+          AsyncStorage.removeItem(STORAGE_KEYS.transactions),
+          AsyncStorage.removeItem(STORAGE_KEYS.accounts),
+          AsyncStorage.removeItem(STORAGE_KEYS.bills),
+        ]);
       } catch {}
       setInitialized(true);
     })();
@@ -459,74 +430,8 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
   }, []);
 
   const syncEmailTransactions = useCallback(async (): Promise<{ imported: number; error?: string }> => {
-    if (!emailSync.isConnected || !emailSync.email || !emailSync.appPassword) {
-      return { imported: 0, error: "Email not connected" };
-    }
-    setIsSyncing(true);
-    try {
-      const res = await fetch(`${getApiBase()}/api/email/sync`, {
-        method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-          "X-Household-ID": householdIdRef.current,
-          "X-Device-ID": deviceIdRef.current,
-        },
-        body: JSON.stringify({ email: emailSync.email, appPassword: emailSync.appPassword, daysBack: 30 }),
-      });
-      const data = await res.json();
-      if (!res.ok) { setIsSyncing(false); return { imported: 0, error: data.error || "Sync failed" }; }
-
-      const currentAccounts = accountsRef.current;
-      const defaultAccountId = currentAccounts[0]?.id || "";
-      let imported = 0;
-
-      if (data.transactions && Array.isArray(data.transactions)) {
-        const newTxs: Transaction[] = data.transactions.map((t: any) => {
-          // Match transaction to best account by lastFour + bank, then bank only
-          const matched = t.bank
-            ? findAccountMatch(currentAccounts, t.bank, t.lastFour ?? undefined)
-            : undefined;
-          const merchant = t.merchant || t.title || "Transaction";
-          return {
-            id: genId(),
-            title: merchant,
-            merchant,
-            amount: t.amount,
-            type: t.type,
-            category: t.category || "Other",
-            accountId: matched?.id ?? defaultAccountId,
-            date: t.date || new Date().toISOString(),
-            source: "email" as const,
-            fromEmail: true,
-            bank: t.bank || "Bank",
-            note: [t.lastFour ? `ending in ${t.lastFour}` : ""].filter(Boolean).join(" · ") || undefined,
-          };
-        });
-        setTransactions((prev) => {
-          // Dedup against ALL existing transactions regardless of source
-          const existingKeys = new Set(prev.map(dedupKey));
-          const fresh = newTxs.filter((t) => !existingKeys.has(dedupKey(t)));
-          imported = fresh.length;
-          if (fresh.length > 0) {
-            apiCall("/api/transactions/bulk", "POST", householdIdRef.current, deviceIdRef.current, { transactions: fresh });
-          }
-          return [...fresh, ...prev];
-        });
-      }
-
-      setEmailSync((prev) => ({
-        ...prev,
-        lastSynced: new Date().toISOString(),
-        lastEmailsScanned: data.emailsScanned,
-        lastImported: data.transactionsFound,
-      }));
-      setIsSyncing(false);
-      return { imported };
-    } catch {
-      setIsSyncing(false);
-      return { imported: 0, error: "Network error during sync" };
-    }
-  }, [emailSync, accounts]);
+    return { imported: 0, error: "Email sync disabled" };
+  }, []);
 
   // ── Plaid sync ────────────────────────────────────────────────────────────
 
@@ -588,12 +493,6 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
           apiCall(`/api/accounts/${id}`, "PUT", householdIdRef.current, deviceIdRef.current, updates)
         );
       }
-
-      // All real account IDs involved in this item (newly created + merged existing)
-      const allItemAccountIds = [
-        ...toCreate.map((a) => a.id),
-        ...toMerge.map((m) => m.id),
-      ];
 
       let imported = 0;
       const fallbackId = toCreate[0]?.id ?? toMerge[0]?.id ?? current[0]?.id ?? "";
@@ -759,60 +658,6 @@ export function useApp() {
   return ctx;
 }
 
-// ── Mock Plaid data generators ────────────────────────────────────────────────
-
-const MOCK_TX_TEMPLATES = [
-  { title: "Starbucks", amount: 6.75, type: "expense" as const, category: "Food" },
-  { title: "Uber", amount: 14.50, type: "expense" as const, category: "Transport" },
-  { title: "Spotify", amount: 9.99, type: "expense" as const, category: "Entertainment" },
-  { title: "Target", amount: 43.21, type: "expense" as const, category: "Shopping" },
-  { title: "Chipotle", amount: 12.80, type: "expense" as const, category: "Food" },
-  { title: "Shell Gas", amount: 48.00, type: "expense" as const, category: "Transport" },
-  { title: "CVS Pharmacy", amount: 22.35, type: "expense" as const, category: "Health" },
-  { title: "Direct Deposit", amount: 2200.00, type: "income" as const, category: "Income" },
-  { title: "Venmo Payment", amount: 50.00, type: "income" as const, category: "Income" },
-  { title: "Whole Foods", amount: 87.64, type: "expense" as const, category: "Groceries" },
-];
-
-export function generateMockPlaidTransactions(
-  linkedAccounts: Account[],
-  since: Date
-): Transaction[] {
-  if (linkedAccounts.length === 0) return [];
-  const now = Date.now();
-  const sinceMs = since.getTime();
-  const windowMs = now - sinceMs;
-  if (windowMs <= 0) return [];
-
-  // Generate 2–5 transactions randomly in the window
-  const count = 2 + Math.floor(Math.random() * 4);
-  const txs: Transaction[] = [];
-  const used = new Set<number>();
-
-  for (let i = 0; i < count; i++) {
-    let tplIdx: number;
-    do { tplIdx = Math.floor(Math.random() * MOCK_TX_TEMPLATES.length); } while (used.has(tplIdx));
-    used.add(tplIdx);
-
-    const tpl = MOCK_TX_TEMPLATES[tplIdx];
-    const date = new Date(sinceMs + Math.random() * windowMs).toISOString();
-    const acc = linkedAccounts[Math.floor(Math.random() * linkedAccounts.length)];
-
-    txs.push({
-      id: Date.now().toString(36) + Math.random().toString(36).slice(2),
-      title: tpl.title,
-      amount: tpl.amount,
-      type: tpl.type,
-      category: tpl.category,
-      accountId: acc.id,
-      date,
-      source: "plaid",
-      bank: acc.bank,
-    });
-  }
-  return txs;
-}
-
 // ── Bank catalog (used by PlaidLinkModal) ─────────────────────────────────────
 
 export const PLAID_BANKS = [
@@ -830,27 +675,3 @@ export const PLAID_BANKS = [
   { id: "questrade", name: "Questrade", color: "#E8181C", icon: "📈", accountTypes: ["investment"] },
 ];
 
-/** Generate mock accounts for a bank after "linking" */
-export function generateMockPlaidAccounts(bankId: string, bank: typeof PLAID_BANKS[0]): Array<{
-  plaidAccountId: string;
-  name: string;
-  type: "checking" | "savings" | "credit" | "investment";
-  balance: number;
-  lastFour: string;
-}> {
-  const lastFourGen = () => String(Math.floor(1000 + Math.random() * 9000));
-  return bank.accountTypes.map((type) => ({
-    plaidAccountId: `${bankId}_${type}_${Math.random().toString(36).slice(2, 8)}`,
-    name: type === "checking" ? `${bank.name} Checking`
-      : type === "savings" ? `${bank.name} Savings`
-      : type === "credit" ? `${bank.name} Credit Card`
-      : `${bank.name} Investment`,
-    type: type as "checking" | "savings" | "credit" | "investment",
-    balance: type === "credit"
-      ? -(Math.floor(Math.random() * 3000 + 200))
-      : type === "investment"
-      ? Math.floor(Math.random() * 50000 + 10000)
-      : Math.floor(Math.random() * 8000 + 500),
-    lastFour: lastFourGen(),
-  }));
-}
