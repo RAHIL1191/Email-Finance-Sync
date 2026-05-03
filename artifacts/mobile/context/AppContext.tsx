@@ -266,21 +266,30 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
         let parsedTx: Transaction[] = txRaw ? JSON.parse(txRaw) : [];
         let parsedBills: Bill[] = billRaw ? JSON.parse(billRaw) : [];
 
-        // One-time migration: strip mock sample data, preserve real transactions
+        // Strip mock accounts and their manual transactions (runs until none remain)
         const hasMockAccounts = parsedAccounts.some((a) => MOCK_ACCOUNT_IDS.has(a.id));
         if (hasMockAccounts) {
           parsedAccounts = parsedAccounts.filter((a) => !MOCK_ACCOUNT_IDS.has(a.id));
           parsedTx = parsedTx.filter(
             (t) => !MOCK_TX_IDS.has(t.id) && !(MOCK_ACCOUNT_IDS.has(t.accountId ?? "") && t.source === "manual")
           );
-          parsedBills = parsedBills.filter((b) => !MOCK_ACCOUNT_IDS.has(b.accountId ?? ""));
         }
 
-        // Auto-remap unmatched email transactions to existing accounts
+        // Always strip mock bills by ID (independent of whether mock accounts still exist)
+        const MOCK_BILL_IDS = new Set(["b1", "b2", "b3", "b4", "b5"]);
+        parsedBills = parsedBills.filter((b) => !MOCK_BILL_IDS.has(b.id));
+
+        // Build a set of valid account IDs for stale-reference cleanup
+        const validAccountIds = new Set(parsedAccounts.map((a) => a.id));
+
+        // Auto-remap email transactions: remap if unmatched OR if accountId points to
+        // a deleted/mock account that no longer exists in the list
         const remappedTx = parsedTx.map((t) => {
-          if (t.source !== "email" || !t.bank || t.accountId) return t;
+          if (t.source !== "email" || !t.bank) return t;
+          const accountMissing = !t.accountId || !validAccountIds.has(t.accountId);
+          if (!accountMissing) return t;
           const match = findAccountMatch(parsedAccounts, t.bank, undefined);
-          return match ? { ...t, accountId: match.id } : t;
+          return match ? { ...t, accountId: match.id } : { ...t, accountId: "" };
         });
 
         setTransactions(remappedTx);
