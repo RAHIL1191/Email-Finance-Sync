@@ -3,9 +3,11 @@ import * as Haptics from "expo-haptics";
 import { router, useLocalSearchParams } from "expo-router";
 import React, { useMemo, useState } from "react";
 import {
+  Alert,
   Dimensions,
   Modal,
   Platform,
+  Pressable,
   ScrollView,
   StyleSheet,
   Switch,
@@ -29,7 +31,7 @@ import { SafeAreaView, useSafeAreaInsets } from "react-native-safe-area-context"
 import AddTransactionModal from "@/components/AddTransactionModal";
 import TransactionDetailModal from "@/components/TransactionDetailModal";
 import { CATEGORY_COLORS, CATEGORY_ICONS } from "@/components/TransactionItem";
-import { Transaction, useApp } from "@/context/AppContext";
+import { PLAID_BANKS, Transaction, useApp } from "@/context/AppContext";
 import { useColors } from "@/hooks/useColors";
 
 const { width: SCREEN_W } = Dimensions.get("window");
@@ -400,6 +402,432 @@ function AllTransactionsModal({
   );
 }
 
+// ── Account Menu Sheet ────────────────────────────────────────────────────────
+
+function AccountMenuSheet({
+  visible,
+  onClose,
+  onEdit,
+  onDelete,
+}: {
+  visible: boolean;
+  onClose: () => void;
+  onEdit: () => void;
+  onDelete: () => void;
+}) {
+  const colors = useColors();
+  const insets = useSafeAreaInsets();
+
+  return (
+    <Modal
+      visible={visible}
+      transparent
+      animationType="fade"
+      onRequestClose={onClose}
+    >
+      <Pressable style={styles.menuOverlay} onPress={onClose}>
+        <Pressable
+          style={[
+            styles.menuSheet,
+            {
+              backgroundColor: colors.card,
+              paddingBottom: Platform.OS === "web" ? 24 : insets.bottom + 12,
+            },
+          ]}
+          onPress={() => {}}
+        >
+          {/* Handle bar */}
+          <View style={[styles.menuHandle, { backgroundColor: colors.border }]} />
+
+          {/* Edit */}
+          <TouchableOpacity
+            style={styles.menuRow}
+            activeOpacity={0.7}
+            onPress={() => {
+              Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
+              onClose();
+              setTimeout(onEdit, 250);
+            }}
+          >
+            <View style={[styles.menuRowIcon, { backgroundColor: "#3b82f622" }]}>
+              <Feather name="edit-2" size={20} color="#3b82f6" />
+            </View>
+            <Text style={[styles.menuRowLabel, { color: colors.foreground }]}>
+              Edit Account
+            </Text>
+            <Feather name="chevron-right" size={18} color={colors.mutedForeground} />
+          </TouchableOpacity>
+
+          <View style={[styles.menuDivider, { backgroundColor: colors.border }]} />
+
+          {/* Delete */}
+          <TouchableOpacity
+            style={styles.menuRow}
+            activeOpacity={0.7}
+            onPress={() => {
+              Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium);
+              onClose();
+              setTimeout(onDelete, 250);
+            }}
+          >
+            <View style={[styles.menuRowIcon, { backgroundColor: "#ef444422" }]}>
+              <Feather name="trash-2" size={20} color="#ef4444" />
+            </View>
+            <Text style={[styles.menuRowLabel, { color: "#ef4444" }]}>
+              Delete Account
+            </Text>
+            <Feather name="chevron-right" size={18} color={colors.mutedForeground} />
+          </TouchableOpacity>
+        </Pressable>
+      </Pressable>
+    </Modal>
+  );
+}
+
+// ── Edit Account Modal ────────────────────────────────────────────────────────
+
+function EditAccountModal({
+  visible,
+  onClose,
+  accountId,
+}: {
+  visible: boolean;
+  onClose: () => void;
+  accountId: string;
+}) {
+  const colors = useColors();
+  const insets = useSafeAreaInsets();
+  const { accounts, updateAccount } = useApp();
+  const account = accounts.find((a) => a.id === accountId);
+
+  const [name, setName] = useState(account?.name ?? "");
+  const [bank, setBank] = useState(account?.bank ?? "");
+  const [balance, setBalance] = useState(
+    account ? String(Math.abs(account.balance)) : ""
+  );
+  const [lastFour, setLastFour] = useState(account?.lastFour ?? "");
+  const [includeInNetworth, setIncludeInNetworth] = useState(
+    account?.includeInNetworth !== false
+  );
+  const [isJoint, setIsJoint] = useState(account?.isJoint ?? false);
+  const [showBankPicker, setShowBankPicker] = useState(false);
+  const [bankSearch, setBankSearch] = useState("");
+
+  // Reset to latest account values whenever modal opens
+  React.useEffect(() => {
+    if (visible && account) {
+      setName(account.name);
+      setBank(account.bank ?? "");
+      setBalance(String(Math.abs(account.balance)));
+      setLastFour(account.lastFour ?? "");
+      setIncludeInNetworth(account.includeInNetworth !== false);
+      setIsJoint(account.isJoint ?? false);
+    }
+  }, [visible]);
+
+  const filteredBanks = PLAID_BANKS.filter((b) =>
+    b.name.toLowerCase().includes(bankSearch.toLowerCase())
+  );
+
+  const handleSave = () => {
+    if (!name.trim() || !account) return;
+    const raw = parseFloat(balance || "0");
+    const newBalance = account.type === "credit" ? -Math.abs(raw) : raw;
+    updateAccount(account.id, {
+      name: name.trim(),
+      bank: bank.trim(),
+      balance: newBalance,
+      lastFour: lastFour.trim() || undefined,
+      includeInNetworth,
+      isJoint,
+    });
+    Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
+    onClose();
+  };
+
+  if (!account) return null;
+
+  const selectedBank = PLAID_BANKS.find((b) => b.name === bank);
+
+  return (
+    <Modal
+      visible={visible}
+      animationType="slide"
+      presentationStyle="pageSheet"
+      onRequestClose={onClose}
+    >
+      <View
+        style={[
+          styles.editRoot,
+          {
+            backgroundColor: colors.background,
+            paddingTop: Platform.OS === "web" ? 20 : insets.top + 12,
+          },
+        ]}
+      >
+        {/* Header */}
+        <View style={[styles.editHeader, { borderBottomColor: colors.border }]}>
+          <TouchableOpacity onPress={onClose} hitSlop={8}>
+            <Feather name="x" size={22} color={colors.foreground} />
+          </TouchableOpacity>
+          <Text style={[styles.editTitle, { color: colors.foreground }]}>
+            Edit Account
+          </Text>
+          <TouchableOpacity
+            onPress={handleSave}
+            disabled={!name.trim()}
+            hitSlop={8}
+          >
+            <Text
+              style={[
+                styles.editSaveBtn,
+                { color: name.trim() ? colors.primary : colors.mutedForeground },
+              ]}
+            >
+              Save
+            </Text>
+          </TouchableOpacity>
+        </View>
+
+        <ScrollView
+          showsVerticalScrollIndicator={false}
+          keyboardShouldPersistTaps="handled"
+          contentContainerStyle={{
+            paddingBottom: Platform.OS === "web" ? 40 : insets.bottom + 40,
+          }}
+        >
+          {/* Form card */}
+          <View
+            style={[
+              styles.editCard,
+              { backgroundColor: colors.card, borderColor: colors.border },
+            ]}
+          >
+            {/* Bank picker row */}
+            <TouchableOpacity
+              style={styles.editRow}
+              activeOpacity={0.7}
+              onPress={() => { setBankSearch(""); setShowBankPicker(true); }}
+            >
+              {selectedBank ? (
+                <>
+                  <View style={[styles.formIcon, { backgroundColor: selectedBank.color + "22" }]}>
+                    <Text style={{ fontSize: 17 }}>{selectedBank.icon}</Text>
+                  </View>
+                  <Text style={[styles.editLabel, { color: colors.foreground, flex: 1 }]} numberOfLines={1}>
+                    {bank}
+                  </Text>
+                </>
+              ) : (
+                <>
+                  <View style={[styles.formIcon, { backgroundColor: "#e8f0fe" }]}>
+                    <Feather name="briefcase" size={18} color="#4a6fa5" />
+                  </View>
+                  <Text style={[styles.editInput, { color: bank ? colors.foreground : colors.mutedForeground }]}>
+                    {bank || "Select Bank/Institution"}
+                  </Text>
+                </>
+              )}
+              <Feather name="chevron-right" size={18} color={colors.mutedForeground} />
+            </TouchableOpacity>
+
+            <View style={[styles.editDivider, { backgroundColor: colors.border }]} />
+
+            {/* Account name */}
+            <View style={styles.editRow}>
+              <View style={[styles.formIcon, { backgroundColor: "#e8f0fe" }]}>
+                <Feather name="tag" size={18} color="#4a6fa5" />
+              </View>
+              <TextInput
+                style={[styles.editInput, { color: colors.foreground }]}
+                placeholder="Account Name"
+                placeholderTextColor={colors.mutedForeground}
+                value={name}
+                onChangeText={setName}
+              />
+            </View>
+
+            <View style={[styles.editDivider, { backgroundColor: colors.border }]} />
+
+            {/* Balance */}
+            <View style={styles.editRow}>
+              <View style={[styles.formIcon, { backgroundColor: "#e8f0fe" }]}>
+                <Feather name="dollar-sign" size={18} color="#4a6fa5" />
+              </View>
+              <TextInput
+                style={[styles.editInput, { color: colors.foreground }]}
+                placeholder="Balance"
+                placeholderTextColor={colors.mutedForeground}
+                value={balance}
+                onChangeText={setBalance}
+                keyboardType="decimal-pad"
+              />
+              <Text style={[styles.editCurrency, { color: colors.mutedForeground }]}>CAD</Text>
+            </View>
+
+            <View style={[styles.editDivider, { backgroundColor: colors.border }]} />
+
+            {/* Last four */}
+            <View style={styles.editRow}>
+              <View style={[styles.formIcon, { backgroundColor: "#e8f0fe" }]}>
+                <Feather name="credit-card" size={18} color="#4a6fa5" />
+              </View>
+              <TextInput
+                style={[styles.editInput, { color: colors.foreground }]}
+                placeholder="Last 4 digits (optional)"
+                placeholderTextColor={colors.mutedForeground}
+                value={lastFour}
+                onChangeText={(v) => setLastFour(v.replace(/\D/g, "").slice(0, 4))}
+                keyboardType="number-pad"
+                maxLength={4}
+              />
+            </View>
+
+            <View style={[styles.editDivider, { backgroundColor: colors.border }]} />
+
+            {/* Include in net worth */}
+            <View style={styles.editRow}>
+              <View style={[styles.formIcon, { backgroundColor: "#e8f0fe" }]}>
+                <Feather name="trending-up" size={18} color="#4a6fa5" />
+              </View>
+              <Text style={[styles.editLabel, { color: colors.foreground, flex: 1 }]}>
+                Include in net worth
+              </Text>
+              <Switch
+                value={includeInNetworth}
+                onValueChange={setIncludeInNetworth}
+                trackColor={{ false: colors.muted, true: colors.primary }}
+                thumbColor="#fff"
+              />
+            </View>
+
+            <View style={[styles.editDivider, { backgroundColor: colors.border }]} />
+
+            {/* Joint account */}
+            <View style={styles.editRow}>
+              <View style={[styles.formIcon, { backgroundColor: "#e8f0fe" }]}>
+                <Feather name="users" size={18} color="#4a6fa5" />
+              </View>
+              <Text style={[styles.editLabel, { color: colors.foreground, flex: 1 }]}>
+                Joint account
+              </Text>
+              <Switch
+                value={isJoint}
+                onValueChange={setIsJoint}
+                trackColor={{ false: colors.muted, true: colors.primary }}
+                thumbColor="#fff"
+              />
+            </View>
+          </View>
+        </ScrollView>
+      </View>
+
+      {/* Bank picker sheet */}
+      <Modal
+        visible={showBankPicker}
+        animationType="slide"
+        presentationStyle="pageSheet"
+        onRequestClose={() => setShowBankPicker(false)}
+      >
+        <View
+          style={[
+            styles.editRoot,
+            {
+              backgroundColor: colors.background,
+              paddingTop: Platform.OS === "web" ? 20 : insets.top + 12,
+            },
+          ]}
+        >
+          <View style={[styles.editHeader, { borderBottomColor: colors.border }]}>
+            <TouchableOpacity onPress={() => setShowBankPicker(false)} hitSlop={8}>
+              <Feather name="x" size={22} color={colors.foreground} />
+            </TouchableOpacity>
+            <Text style={[styles.editTitle, { color: colors.foreground }]}>
+              Select Bank
+            </Text>
+            <View style={{ width: 22 }} />
+          </View>
+
+          <View
+            style={[
+              styles.editPickerSearch,
+              { backgroundColor: colors.card, borderColor: colors.border },
+            ]}
+          >
+            <Feather name="search" size={16} color={colors.mutedForeground} />
+            <TextInput
+              style={[styles.editInput, { flex: 1 }]}
+              placeholder="Search banks…"
+              placeholderTextColor={colors.mutedForeground}
+              value={bankSearch}
+              onChangeText={setBankSearch}
+              autoFocus
+              clearButtonMode="while-editing"
+            />
+          </View>
+
+          <ScrollView
+            showsVerticalScrollIndicator={false}
+            keyboardShouldPersistTaps="handled"
+            contentContainerStyle={{
+              paddingBottom: Platform.OS === "web" ? 24 : insets.bottom + 24,
+            }}
+          >
+            <View
+              style={[
+                styles.editCard,
+                { backgroundColor: colors.card, borderColor: colors.border },
+              ]}
+            >
+              {filteredBanks.length === 0 && (
+                <View style={{ padding: 24, alignItems: "center" }}>
+                  <Text style={{ color: colors.mutedForeground, fontFamily: "Inter_400Regular" }}>
+                    No banks found
+                  </Text>
+                </View>
+              )}
+              {filteredBanks.map((b, idx) => (
+                <View key={b.id}>
+                  <TouchableOpacity
+                    style={styles.editRow}
+                    activeOpacity={0.7}
+                    onPress={() => {
+                      Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
+                      setBank(b.name);
+                      setShowBankPicker(false);
+                    }}
+                  >
+                    <View style={[styles.formIcon, { backgroundColor: b.color + "22", width: 44, height: 44, borderRadius: 22 }]}>
+                      <Text style={{ fontSize: 20 }}>{b.icon}</Text>
+                    </View>
+                    <View style={{ flex: 1 }}>
+                      <Text style={[styles.editLabel, { color: colors.foreground }]}>{b.name}</Text>
+                      <Text style={[styles.editSublabel, { color: colors.mutedForeground }]}>
+                        {b.accountTypes.map((t) =>
+                          t === "checking" ? "Chequing"
+                          : t === "savings" ? "Savings"
+                          : t === "credit" ? "Credit"
+                          : "Investment"
+                        ).join(" · ")}
+                      </Text>
+                    </View>
+                    {bank === b.name && (
+                      <Feather name="check-circle" size={20} color={colors.primary} />
+                    )}
+                  </TouchableOpacity>
+                  {idx < filteredBanks.length - 1 && (
+                    <View style={[styles.editDivider, { backgroundColor: colors.border, marginLeft: 72 }]} />
+                  )}
+                </View>
+              ))}
+            </View>
+          </ScrollView>
+        </View>
+      </Modal>
+    </Modal>
+  );
+}
+
 // ── Main Screen ───────────────────────────────────────────────────────────────
 
 function bankInitials(bank: string, name: string) {
@@ -413,7 +841,7 @@ export default function AccountDetailScreen() {
   const { id } = useLocalSearchParams<{ id: string }>();
   const colors = useColors();
   const insets = useSafeAreaInsets();
-  const { accounts, transactions, updateAccount } = useApp();
+  const { accounts, transactions, updateAccount, deleteAccount } = useApp();
 
   const account = accounts.find((a) => a.id === id);
   const accountTxns = useMemo(
@@ -435,6 +863,26 @@ export default function AccountDetailScreen() {
   const [selectedTx, setSelectedTx] = useState<Transaction | null>(null);
   const [showAllTx, setShowAllTx] = useState(false);
   const [showAddTx, setShowAddTx] = useState(false);
+  const [showMenu, setShowMenu] = useState(false);
+  const [showEdit, setShowEdit] = useState(false);
+
+  const handleDeleteAccount = () => {
+    Alert.alert(
+      "Delete Account",
+      `Are you sure you want to delete "${account?.name}"? This cannot be undone.`,
+      [
+        { text: "Cancel", style: "cancel" },
+        {
+          text: "Delete",
+          style: "destructive",
+          onPress: () => {
+            deleteAccount(id!);
+            router.back();
+          },
+        },
+      ]
+    );
+  };
 
   if (!account) {
     return (
@@ -501,7 +949,13 @@ export default function AccountDetailScreen() {
           <TouchableOpacity hitSlop={8}>
             <Feather name="refresh-cw" size={20} color={colors.primary} />
           </TouchableOpacity>
-          <TouchableOpacity hitSlop={8}>
+          <TouchableOpacity
+            hitSlop={8}
+            onPress={() => {
+              Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
+              setShowMenu(true);
+            }}
+          >
             <Feather name="more-vertical" size={20} color={colors.primary} />
           </TouchableOpacity>
         </View>
@@ -722,6 +1176,19 @@ export default function AccountDetailScreen() {
         visible={showAddTx}
         onClose={() => setShowAddTx(false)}
       />
+
+      <AccountMenuSheet
+        visible={showMenu}
+        onClose={() => setShowMenu(false)}
+        onEdit={() => setShowEdit(true)}
+        onDelete={handleDeleteAccount}
+      />
+
+      <EditAccountModal
+        visible={showEdit}
+        onClose={() => setShowEdit(false)}
+        accountId={id!}
+      />
     </SafeAreaView>
   );
 }
@@ -856,4 +1323,65 @@ const styles = StyleSheet.create({
   notFound: { flex: 1, alignItems: "center", justifyContent: "center", gap: 14 },
   notFoundText: { fontSize: 16, fontFamily: "Inter_400Regular" },
   backLink: { fontSize: 15, fontFamily: "Inter_600SemiBold" },
+
+  // Account menu sheet
+  menuOverlay: {
+    flex: 1,
+    backgroundColor: "rgba(0,0,0,0.45)",
+    justifyContent: "flex-end",
+  },
+  menuSheet: {
+    borderTopLeftRadius: 24,
+    borderTopRightRadius: 24,
+    paddingTop: 12,
+    paddingHorizontal: 16,
+  },
+  menuHandle: {
+    width: 40, height: 4, borderRadius: 2,
+    alignSelf: "center", marginBottom: 20,
+  },
+  menuRow: {
+    flexDirection: "row", alignItems: "center",
+    paddingVertical: 14, gap: 14,
+  },
+  menuRowIcon: {
+    width: 44, height: 44, borderRadius: 22,
+    alignItems: "center", justifyContent: "center",
+  },
+  menuRowLabel: { flex: 1, fontSize: 16, fontFamily: "Inter_500Medium" },
+  menuDivider: { height: StyleSheet.hairlineWidth, marginLeft: 58 },
+
+  // Edit account modal
+  editRoot: { flex: 1 },
+  editHeader: {
+    flexDirection: "row", alignItems: "center", justifyContent: "space-between",
+    paddingHorizontal: 20, paddingBottom: 14,
+    borderBottomWidth: StyleSheet.hairlineWidth,
+  },
+  editTitle: { fontSize: 17, fontFamily: "Inter_600SemiBold" },
+  editSaveBtn: { fontSize: 16, fontFamily: "Inter_600SemiBold" },
+  editCard: {
+    marginHorizontal: 16, marginTop: 16,
+    borderRadius: 14, borderWidth: StyleSheet.hairlineWidth,
+    overflow: "hidden",
+  },
+  editRow: {
+    flexDirection: "row", alignItems: "center",
+    paddingHorizontal: 16, paddingVertical: 12, gap: 12, minHeight: 54,
+  },
+  editDivider: { height: StyleSheet.hairlineWidth, marginLeft: 60 },
+  formIcon: {
+    width: 36, height: 36, borderRadius: 18,
+    alignItems: "center", justifyContent: "center", flexShrink: 0,
+  },
+  editLabel: { fontSize: 15, fontFamily: "Inter_500Medium" },
+  editSublabel: { fontSize: 12, fontFamily: "Inter_400Regular", marginTop: 2 },
+  editInput: { flex: 1, fontSize: 15, fontFamily: "Inter_400Regular", paddingVertical: 4 },
+  editCurrency: { fontSize: 13, fontFamily: "Inter_500Medium" },
+  editPickerSearch: {
+    flexDirection: "row", alignItems: "center", gap: 10,
+    marginHorizontal: 16, marginVertical: 12,
+    borderRadius: 12, borderWidth: 1,
+    paddingHorizontal: 12, paddingVertical: 10,
+  },
 });
