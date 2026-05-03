@@ -14,6 +14,7 @@ import {
 import { SafeAreaView } from "react-native-safe-area-context";
 
 import AddEntrySheet from "@/components/AddEntrySheet";
+import BillFilterModal, { BillFilterSettings, DEFAULT_FILTER } from "@/components/BillFilterModal";
 import MonthDetailModal from "@/components/MonthDetailModal";
 import TransactionDetailModal from "@/components/TransactionDetailModal";
 import TransactionItem from "@/components/TransactionItem";
@@ -896,6 +897,8 @@ function TransactionsTab({ transactions, colors }: { transactions: Transaction[]
   const [filter, setFilter] = useState<TxFilter>("All");
   const [showAdd, setShowAdd] = useState(false);
   const [selectedTx, setSelectedTx] = useState<Transaction | null>(null);
+  const [showFilter, setShowFilter] = useState(false);
+  const [filterSettings, setFilterSettings] = useState<BillFilterSettings>(DEFAULT_FILTER);
 
   const dedupKey = useCallback((t: Transaction) => {
     const bank = (t.bank ?? "").toLowerCase().trim();
@@ -964,23 +967,31 @@ function TransactionsTab({ transactions, colors }: { transactions: Transaction[]
   return (
     <View style={{ flex: 1 }}>
       {/* Filter pills */}
-      <View style={styles.txFilterRow}>
-        {TX_FILTERS.map((f) => (
-          <TouchableOpacity
-            key={f}
-            style={[
-              styles.txFilterChip,
-              filter === f
-                ? { backgroundColor: colors.primary, borderColor: colors.primary }
-                : { backgroundColor: colors.card, borderColor: colors.border },
-            ]}
-            onPress={() => setFilter(f)}
-          >
-            <Text style={[styles.txFilterText, { color: filter === f ? "#fff" : colors.mutedForeground }]}>
-              {f}
-            </Text>
-          </TouchableOpacity>
-        ))}
+      <View style={styles.txFilterTopRow}>
+        <View style={styles.txFilterRow}>
+          {TX_FILTERS.map((f) => (
+            <TouchableOpacity
+              key={f}
+              style={[
+                styles.txFilterChip,
+                filter === f
+                  ? { backgroundColor: colors.primary, borderColor: colors.primary }
+                  : { backgroundColor: colors.card, borderColor: colors.border },
+              ]}
+              onPress={() => setFilter(f)}
+            >
+              <Text style={[styles.txFilterText, { color: filter === f ? "#fff" : colors.mutedForeground }]}>
+                {f}
+              </Text>
+            </TouchableOpacity>
+          ))}
+        </View>
+        <TouchableOpacity
+          style={[styles.txFilterButton, { backgroundColor: colors.card, borderColor: colors.border }]}
+          onPress={() => setShowFilter(true)}
+        >
+          <Feather name="sliders" size={18} color={colors.foreground} />
+        </TouchableOpacity>
       </View>
 
       {/* View Recurring Transactions */}
@@ -1035,6 +1046,15 @@ function TransactionsTab({ transactions, colors }: { transactions: Transaction[]
         visible={!!selectedTx}
         onClose={() => setSelectedTx(null)}
         transaction={selectedTx}
+      />
+      <BillFilterModal
+        visible={showFilter}
+        current={filterSettings}
+        onApply={(s) => {
+          setFilterSettings(s);
+          setShowFilter(false);
+        }}
+        onClose={() => setShowFilter(false)}
       />
     </View>
   );
@@ -1640,10 +1660,17 @@ const styles = StyleSheet.create({
   },
 
   txFilterRow: {
+    flex: 1,
     flexDirection: "row",
     gap: 8,
     paddingHorizontal: 16,
     paddingVertical: 10,
+    flexWrap: "wrap",
+  },
+  txFilterTopRow: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 8,
   },
   txFilterChip: {
     paddingHorizontal: 14,
@@ -1654,6 +1681,15 @@ const styles = StyleSheet.create({
   txFilterText: {
     fontSize: 13,
     fontFamily: "Inter_500Medium",
+  },
+  txFilterButton: {
+    width: 38,
+    height: 38,
+    borderRadius: 19,
+    borderWidth: 1,
+    alignItems: "center",
+    justifyContent: "center",
+    marginRight: 16,
   },
   recurringRow: {
     flexDirection: "row",
