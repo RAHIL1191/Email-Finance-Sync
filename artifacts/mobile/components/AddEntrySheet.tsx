@@ -245,21 +245,25 @@ function DatePickerModal({
   return (
     <Modal visible={visible} transparent animationType="fade" onRequestClose={onClose}>
       <TouchableOpacity style={styles.overlay} activeOpacity={1} onPress={onClose} />
-      <View style={[styles.centerPicker, { justifyContent: "flex-end", padding: 0 }]}>
-        <View style={[styles.centerPickerCard, { backgroundColor: colors.card, width: "100%", maxWidth: "100%", minHeight: 320, borderRadius: 20, paddingHorizontal: 18, paddingTop: 12, paddingBottom: 18 }]}>
+      <View style={styles.bottomSheetWrap}>
+        <View style={[styles.bottomSheetCard, { backgroundColor: colors.card }]}>
           <View style={[styles.pickerHandle, { backgroundColor: colors.border }]} />
-          <Text style={[styles.pickerTitle, { color: colors.foreground }]}>{title}</Text>
-          <DateTimePicker
-            value={date}
-            mode={mode}
-            display="inline"
-            onChange={(_, d) => {
-              if (d) onChange(d);
-            }}
-          />
-          <TouchableOpacity onPress={onClose} style={[styles.centerPickerBtn, { backgroundColor: colors.primary }]}>
-            <Text style={styles.centerPickerBtnText}>Done</Text>
-          </TouchableOpacity>
+          <View style={styles.bottomSheetHeader}>
+            <Text style={[styles.pickerTitle, { color: colors.foreground }]}>{title}</Text>
+            <TouchableOpacity onPress={onClose} style={[styles.donePill, { backgroundColor: colors.primary }]}>
+              <Text style={styles.donePillText}>Done</Text>
+            </TouchableOpacity>
+          </View>
+          <View style={styles.inlinePickerWrap}>
+            <DateTimePicker
+              value={date}
+              mode={mode}
+              display="inline"
+              onChange={(_, d) => {
+                if (d) onChange(d);
+              }}
+            />
+          </View>
         </View>
       </View>
     </Modal>
@@ -1359,14 +1363,17 @@ const styles = StyleSheet.create({
     justifyContent: "center",
     marginLeft: 6,
   },
-  centerPicker: {
+  bottomSheetWrap: {
     flex: 1,
-    alignItems: "center",
     justifyContent: "flex-end",
   },
-  centerPickerCard: {
+  bottomSheetCard: {
     width: "100%",
-    maxWidth: 360,
+    borderTopLeftRadius: 22,
+    borderTopRightRadius: 22,
+    paddingHorizontal: 16,
+    paddingTop: 10,
+    paddingBottom: 18,
     gap: 12,
   },
   pickerHandle: {
@@ -1376,13 +1383,21 @@ const styles = StyleSheet.create({
     alignSelf: "center",
     marginBottom: 6,
   },
-  centerPickerBtn: {
-    alignSelf: "stretch",
+  bottomSheetHeader: {
+    flexDirection: "row",
     alignItems: "center",
-    paddingVertical: 14,
-    borderRadius: 14,
+    justifyContent: "space-between",
   },
-  centerPickerBtnText: { fontFamily: "Inter_600SemiBold", color: "#fff" },
+  inlinePickerWrap: {
+    borderRadius: 16,
+    overflow: "hidden",
+  },
+  donePill: {
+    paddingHorizontal: 14,
+    paddingVertical: 10,
+    borderRadius: 12,
+  },
+  donePillText: { fontFamily: "Inter_600SemiBold", color: "#fff" },
   pickerRow: {
     flexDirection: "row",
     alignItems: "center",

@@ -321,21 +321,25 @@ export default function TransactionDetailModal({ visible, onClose, transaction }
               ) : (
                 <Modal visible={showDatePicker} transparent animationType="fade" onRequestClose={() => setShowDatePicker(false)}>
                   <TouchableOpacity style={s.overlay} activeOpacity={1} onPress={() => setShowDatePicker(false)} />
-                  <View style={s.centerPicker}>
-                    <View style={[s.centerPickerCard, { backgroundColor: colors.card, minHeight: 260 }]}>
+                  <View style={s.bottomSheetWrap}>
+                    <View style={[s.bottomSheetCard, { backgroundColor: colors.card }]}>
                       <View style={[s.pickerHandle, { backgroundColor: colors.border }]} />
-                      <Text style={[s.pickerTitle, { color: colors.foreground }]}>Edit Date</Text>
-                      <DateTimePicker
-                        value={editDate ?? dateObj}
-                        mode="date"
-                        display="spinner"
-                        onChange={(_, d) => {
-                          if (d) setEditDate(d);
-                        }}
-                      />
-                      <TouchableOpacity onPress={() => setShowDatePicker(false)} style={[s.centerPickerBtn, { backgroundColor: colors.primary }]}>
-                        <Text style={s.centerPickerBtnText}>Done</Text>
-                      </TouchableOpacity>
+                      <View style={s.bottomSheetHeader}>
+                        <Text style={[s.pickerTitle, { color: colors.foreground }]}>Edit Date</Text>
+                        <TouchableOpacity onPress={() => setShowDatePicker(false)} style={[s.donePill, { backgroundColor: colors.primary }]}>
+                          <Text style={s.donePillText}>Done</Text>
+                        </TouchableOpacity>
+                      </View>
+                      <View style={s.inlinePickerWrap}>
+                        <DateTimePicker
+                          value={editDate ?? dateObj}
+                          mode="date"
+                          display="inline"
+                          onChange={(_, d) => {
+                            if (d) setEditDate(d);
+                          }}
+                        />
+                      </View>
                     </View>
                   </View>
                 </Modal>
@@ -600,17 +604,17 @@ const s = StyleSheet.create({
     borderWidth: 1,
   },
   overlay: { flex: 1, backgroundColor: "rgba(0,0,0,0.4)" },
-  centerPicker: {
+  bottomSheetWrap: {
     flex: 1,
-    alignItems: "center",
-    justifyContent: "center",
-    padding: 20,
+    justifyContent: "flex-end",
   },
-  centerPickerCard: {
+  bottomSheetCard: {
     width: "100%",
-    maxWidth: 360,
-    borderRadius: 18,
-    padding: 16,
+    borderTopLeftRadius: 22,
+    borderTopRightRadius: 22,
+    paddingHorizontal: 16,
+    paddingTop: 10,
+    paddingBottom: 18,
     gap: 12,
   },
   pickerHandle: {
@@ -624,12 +628,22 @@ const s = StyleSheet.create({
     fontSize: 16,
     fontFamily: "Inter_600SemiBold",
   },
-  centerPickerBtn: {
-    alignSelf: "flex-end",
+  bottomSheetHeader: {
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "space-between",
+  },
+  inlinePickerWrap: {
+    borderRadius: 16,
+    overflow: "hidden",
+  },
+  donePill: {
     paddingHorizontal: 14,
     paddingVertical: 10,
+    borderRadius: 12,
   },
-  centerPickerBtnText: {
+  donePillText: {
     fontFamily: "Inter_600SemiBold",
+    color: "#fff",
   },
 });
