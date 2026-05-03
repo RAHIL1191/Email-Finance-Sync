@@ -11,6 +11,7 @@ import React, {
 export interface Transaction {
   id: string;
   title: string;
+  merchant?: string;
   amount: number;
   type: "income" | "expense";
   category: string;
@@ -96,6 +97,7 @@ interface AppContextType {
   markBillPaid: (id: string) => void;
   connectEmail: (email: string, appPassword: string) => Promise<{ success: boolean; error?: string }>;
   disconnectEmail: () => void;
+  resetEmailTransactions: () => void;
   syncEmailTransactions: () => Promise<{ imported: number; error?: string }>;
   connectPlaid: (item: PlaidItem, newAccounts: Omit<Account, "id">[], initialTransactions: Omit<Transaction, "id">[]) => Promise<{ imported: number }>;
   syncPlaidTransactions: (itemId: string) => Promise<{ imported: number; error?: string }>;
@@ -225,7 +227,9 @@ function remapEmailTransactionsForAccount(
     if (t.source !== "email" || !t.bank) return t;
     const tb = t.bank.toLowerCase();
     const matchesBank = tb.includes(bankLower) || bankLower.includes(tb);
-    const matchesLastFour = !!account.lastFour && t.note?.includes(account.lastFour);
+    const matchesLastFour =
+      !!account.lastFour &&
+      (t.note?.includes(account.lastFour) || t.title.includes(account.lastFour) || t.merchant?.includes(account.lastFour));
     return matchesBank || matchesLastFour ? { ...t, accountId: account.id } : t;
   });
 }
@@ -465,6 +469,10 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
     setEmailSync({ email: "", appPassword: "", isConnected: false });
   }, []);
 
+  const resetEmailTransactions = useCallback(() => {
+    setTransactions((prev) => prev.filter((t) => t.source !== "email"));
+  }, []);
+
   const syncEmailTransactions = useCallback(async (): Promise<{ imported: number; error?: string }> => {
     if (!emailSync.isConnected || !emailSync.email || !emailSync.appPassword) {
       return { imported: 0, error: "Email not connected" };
@@ -496,6 +504,7 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
           return {
             id: genId(),
             title: t.title || "Transaction",
+            merchant: t.merchant || t.title || "Transaction",
             amount: t.amount,
             type: t.type,
             category: t.category || "Other",
@@ -747,7 +756,7 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
         addTransaction, updateTransaction, deleteTransaction,
         addAccount, remapEmailTransactions, updateAccount, deleteAccount,
         addBill, updateBill, deleteBill, markBillPaid,
-        connectEmail, disconnectEmail, syncEmailTransactions,
+        connectEmail, disconnectEmail, resetEmailTransactions, syncEmailTransactions,
         connectPlaid, syncPlaidTransactions, disconnectPlaid,
         isSyncing, totalBalance, monthlyIncome, monthlyExpense,
         deviceId, householdId, changeHouseholdId,

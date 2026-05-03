@@ -1,5 +1,6 @@
 export interface ParsedTransaction {
   title: string;
+  merchant: string;
   amount: number;
   type: "income" | "expense";
   category: string;
@@ -74,6 +75,7 @@ const BANK_PATTERNS: BankPattern[] = [
           const merchant = chargeMatch[2].trim();
           return {
             title: merchant,
+            merchant,
             amount,
             type: "expense",
             category: categorizeFrom(merchant),
@@ -88,6 +90,7 @@ const BANK_PATTERNS: BankPattern[] = [
           const amount = parseFloat(depositMatch[1].replace(/,/g, ""));
           return {
             title: "Chase Deposit",
+            merchant: "Chase Deposit",
             amount,
             type: "income",
             category: "Income",
@@ -115,6 +118,7 @@ const BANK_PATTERNS: BankPattern[] = [
           const merchant = match[2]?.trim() || subject;
           return {
             title: merchant || "BofA Transaction",
+            merchant: merchant || "BofA Transaction",
             amount,
             type: "expense",
             category: categorizeFrom(merchant || ""),
@@ -142,6 +146,7 @@ const BANK_PATTERNS: BankPattern[] = [
           const merchant = match[2].trim();
           return {
             title: merchant,
+            merchant,
             amount,
             type: "expense",
             category: categorizeFrom(merchant),
@@ -158,6 +163,7 @@ const BANK_PATTERNS: BankPattern[] = [
           const merchant = merchantMatch ? merchantMatch[1].trim() : "Amex Charge";
           return {
             title: merchant,
+            merchant,
             amount,
             type: "expense",
             category: categorizeFrom(merchant),
@@ -184,6 +190,7 @@ const BANK_PATTERNS: BankPattern[] = [
           const merchant = match[2].trim();
           return {
             title: merchant,
+            merchant,
             amount,
             type: "expense",
             category: categorizeFrom(merchant),
@@ -211,6 +218,7 @@ const BANK_PATTERNS: BankPattern[] = [
           const merchant = match[2].trim();
           return {
             title: merchant,
+            merchant,
             amount,
             type: "expense",
             category: categorizeFrom(merchant),
@@ -237,6 +245,7 @@ const BANK_PATTERNS: BankPattern[] = [
           const merchant = match[2]?.trim() || "Citi Charge";
           return {
             title: merchant,
+            merchant,
             amount,
             type: "expense",
             category: categorizeFrom(merchant),
