@@ -15,6 +15,7 @@ export interface Transaction {
   projectId?: string;
   projectName?: string;
   isRefund?: boolean;
+  isRefundComplete?: boolean;
   amount: number;
   type: "income" | "expense";
   category: string;
