@@ -4,7 +4,6 @@ import React, { useMemo, useState } from "react";
 import {
   ActivityIndicator,
   Animated,
-  Modal,
   Platform,
   ScrollView,
   StyleSheet,
@@ -234,7 +233,10 @@ export default function InsightsScreen() {
     <SafeAreaView edges={["top"]} style={[styles.container, { backgroundColor: colors.background }]}>
       <TouchableOpacity
         style={[styles.filterFab, { backgroundColor: colors.primary }]}
-        onPress={() => setShowFilter(true)}
+        onPress={() => {
+          Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
+          setShowFilter(true);
+        }}
         activeOpacity={0.85}
       >
         <Feather name="sliders" size={20} color="#fff" />
