@@ -12,6 +12,8 @@ export interface Transaction {
   id: string;
   title: string;
   merchant?: string;
+  projectId?: string;
+  projectName?: string;
   amount: number;
   type: "income" | "expense";
   category: string;
@@ -55,6 +57,14 @@ export interface Bill {
   accountId?: string;
 }
 
+export interface Project {
+  id: string;
+  name: string;
+  description?: string;
+  color: string;
+  createdAt: string;
+}
+
 export interface EmailSync {
   email: string;
   appPassword: string;
@@ -91,6 +101,7 @@ interface AppContextType {
   transactions: Transaction[];
   accounts: Account[];
   bills: Bill[];
+  projects: Project[];
   emailSync: EmailSync;
   plaidSync: PlaidSync;
   addTransaction: (t: Omit<Transaction, "id">) => void;
@@ -104,6 +115,9 @@ interface AppContextType {
   updateBill: (id: string, b: Partial<Bill>) => void;
   deleteBill: (id: string) => void;
   markBillPaid: (id: string) => void;
+  addProject: (p: Omit<Project, "id" | "createdAt">) => string;
+  updateProject: (id: string, p: Partial<Project>) => void;
+  deleteProject: (id: string) => void;
   connectEmail: (email: string, appPassword: string) => Promise<{ success: boolean; error?: string }>;
   disconnectEmail: () => void;
   resetEmailTransactions: () => void;
@@ -126,6 +140,7 @@ const STORAGE_KEYS = {
   transactions: "@fintrack/transactions",
   accounts: "@fintrack/accounts",
   bills: "@fintrack/bills",
+  projects: "@fintrack/projects",
   emailSync: "@fintrack/emailSync",
   plaidSync: "@fintrack/plaidSync",
   deviceId: "@fintrack/deviceId",
@@ -244,6 +259,7 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
   const [transactions, setTransactions] = useState<Transaction[]>([]);
   const [accounts, setAccounts] = useState<Account[]>([]);
   const [bills, setBills] = useState<Bill[]>([]);
+  const [projects, setProjects] = useState<Project[]>([]);
   const [emailSync, setEmailSync] = useState<EmailSync>({ email: "", appPassword: "", isConnected: false });
   const [plaidSync, setPlaidSync] = useState<PlaidSync>({ items: [] });
   const [isSyncing, setIsSyncing] = useState(false);
@@ -257,11 +273,12 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
   useEffect(() => {
     (async () => {
       try {
-        const [txRaw, accRaw, billRaw, emailRaw, plaidRaw, storedDeviceId, storedHouseholdId] =
+        const [txRaw, accRaw, billRaw, projectRaw, emailRaw, plaidRaw, storedDeviceId, storedHouseholdId] =
           await Promise.all([
             AsyncStorage.getItem(STORAGE_KEYS.transactions),
             AsyncStorage.getItem(STORAGE_KEYS.accounts),
             AsyncStorage.getItem(STORAGE_KEYS.bills),
+            AsyncStorage.getItem(STORAGE_KEYS.projects),
             AsyncStorage.getItem(STORAGE_KEYS.emailSync),
             AsyncStorage.getItem(STORAGE_KEYS.plaidSync),
             AsyncStorage.getItem(STORAGE_KEYS.deviceId),
@@ -281,6 +298,7 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
         setTransactions(txRaw ? JSON.parse(txRaw) : []);
         setAccounts(accRaw ? JSON.parse(accRaw) : []);
         setBills(billRaw ? JSON.parse(billRaw) : []);
+        setProjects(projectRaw ? JSON.parse(projectRaw) : []);
         if (emailRaw) setEmailSync(JSON.parse(emailRaw));
         if (plaidRaw) setPlaidSync(JSON.parse(plaidRaw));
       } catch {}
@@ -294,6 +312,7 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
     accountsRef.current = accounts;
   }, [accounts, initialized]);
   useEffect(() => { if (initialized) AsyncStorage.setItem(STORAGE_KEYS.bills, JSON.stringify(bills)); }, [bills, initialized]);
+  useEffect(() => { if (initialized) AsyncStorage.setItem(STORAGE_KEYS.projects, JSON.stringify(projects)); }, [projects, initialized]);
   useEffect(() => { if (initialized) AsyncStorage.setItem(STORAGE_KEYS.emailSync, JSON.stringify(emailSync)); }, [emailSync, initialized]);
   useEffect(() => { if (initialized) AsyncStorage.setItem(STORAGE_KEYS.plaidSync, JSON.stringify(plaidSync)); }, [plaidSync, initialized]);
 
@@ -305,10 +324,12 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
     setTransactions([]);
     setAccounts([]);
     setBills([]);
+    setProjects([]);
     await Promise.all([
       AsyncStorage.removeItem(STORAGE_KEYS.transactions),
       AsyncStorage.removeItem(STORAGE_KEYS.accounts),
       AsyncStorage.removeItem(STORAGE_KEYS.bills),
+      AsyncStorage.removeItem(STORAGE_KEYS.projects),
     ]);
   }, []);
 
@@ -389,6 +410,21 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
   const deleteBill = useCallback((id: string) => {
     setBills((prev) => prev.filter((b) => b.id !== id));
     apiCall(`/api/bills/${id}`, "DELETE", householdIdRef.current, deviceIdRef.current);
+  }, []);
+
+  const addProject = useCallback((p: Omit<Project, "id" | "createdAt">): string => {
+    const created: Project = { ...p, id: genId(), createdAt: new Date().toISOString() };
+    setProjects((prev) => [...prev, created]);
+    return created.id;
+  }, []);
+
+  const updateProject = useCallback((id: string, updates: Partial<Project>) => {
+    setProjects((prev) => prev.map((p) => (p.id === id ? { ...p, ...updates } : p)));
+  }, []);
+
+  const deleteProject = useCallback((id: string) => {
+    setProjects((prev) => prev.filter((p) => p.id !== id));
+    setTransactions((prev) => prev.map((t) => (t.projectId === id ? { ...t, projectId: undefined, projectName: undefined } : t)));
   }, []);
 
   const markBillPaid = useCallback(
@@ -697,10 +733,11 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
   return (
     <AppContext.Provider
       value={{
-        transactions, accounts, bills, emailSync, plaidSync,
+        transactions, accounts, bills, projects, emailSync, plaidSync,
         addTransaction, updateTransaction, deleteTransaction,
         addAccount, remapEmailTransactions, updateAccount, deleteAccount,
         addBill, updateBill, deleteBill, markBillPaid,
+        addProject, updateProject, deleteProject,
         connectEmail, disconnectEmail, resetEmailTransactions, syncEmailTransactions,
         connectPlaid, syncPlaidTransactions, disconnectPlaid,
         isSyncing, totalBalance, monthlyIncome, monthlyExpense,
