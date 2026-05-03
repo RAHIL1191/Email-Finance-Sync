@@ -104,7 +104,7 @@ function AccountRow({
 }) {
   const colors = useColors();
   const [showDeleteConfirm, setShowDeleteConfirm] = React.useState(false);
-  const { deleteAccount } = useApp();
+  const { deleteAccount, transactions } = useApp();
   const isNeg = account.balance < 0;
   const bankMeta = PLAID_BANKS.find(
     (b) => b.name.toLowerCase() === (account.bank ?? "").toLowerCase()
@@ -115,6 +115,7 @@ function AccountRow({
     : account.type === "savings" ? "Savings"
     : account.type === "credit" ? "Credit"
     : "Investment";
+  const accountTxs = transactions.filter((t) => t.accountId === account.id).slice(0, 3);
 
   return (
     <>
@@ -171,6 +172,26 @@ function AccountRow({
           deleteAccount(account.id);
         }}
       />
+      {accountTxs.length > 0 ? (
+        <View style={[styles.txPreview, { backgroundColor: colors.background, borderTopColor: colors.border }]}>
+          {accountTxs.map((tx) => (
+            <View key={tx.id} style={styles.txPreviewRow}>
+              <View style={{ flex: 1 }}>
+                <Text style={[styles.txPreviewTitle, { color: colors.foreground }]} numberOfLines={1}>
+                  {tx.merchant || tx.title}
+                </Text>
+                <Text style={[styles.txPreviewSub, { color: colors.mutedForeground }]} numberOfLines={1}>
+                  {tx.source === "email" ? "Email matched" : "Manual"}
+                  {tx.note ? ` · ${tx.note}` : ""}
+                </Text>
+              </View>
+              <Text style={[styles.txPreviewAmt, { color: tx.type === "expense" ? colors.expense : colors.success }]}>
+                {tx.type === "expense" ? "-" : "+"}${Math.abs(tx.amount).toFixed(2)}
+              </Text>
+            </View>
+          ))}
+        </View>
+      ) : null}
     </>
   );
 }
@@ -849,6 +870,30 @@ const styles = StyleSheet.create({
   acctName: { fontSize: 15, fontFamily: "Inter_600SemiBold" },
   acctSub: { fontSize: 12, fontFamily: "Inter_400Regular" },
   acctBal: { fontSize: 15, fontFamily: "Inter_600SemiBold" },
+  txPreview: {
+    borderTopWidth: StyleSheet.hairlineWidth,
+    paddingHorizontal: 16,
+    paddingVertical: 10,
+    gap: 8,
+  },
+  txPreviewRow: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 10,
+  },
+  txPreviewTitle: {
+    fontSize: 13,
+    fontFamily: "Inter_600SemiBold",
+  },
+  txPreviewSub: {
+    fontSize: 11,
+    fontFamily: "Inter_400Regular",
+    marginTop: 2,
+  },
+  txPreviewAmt: {
+    fontSize: 12,
+    fontFamily: "Inter_600SemiBold",
+  },
 
   // Account group
   groupHeader: {
