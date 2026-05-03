@@ -631,6 +631,15 @@ function extractLastFour(text: string): string | undefined {
   return undefined;
 }
 
+function extractBankHints(text: string): string[] {
+  const hints = new Set<string>();
+  const matches = text.match(/\b(chase|bank of america|bofa|american express|amex|wells fargo|capital one|citi|citibank|td|rbc|royal bank|scotiabank|bmo|cibc|tangerine|desjardins|eq bank)\b/gi);
+  if (matches) {
+    matches.forEach((m) => hints.add(m.toLowerCase()));
+  }
+  return [...hints];
+}
+
 export function parseEmailContent(
   fromAddress: string,
   subject: string,
@@ -654,6 +663,7 @@ export function parseEmailContent(
 
   // Normalised subject without "Fwd:" prefix for pattern matching
   const cleanSubject = stripSubjectPrefixes(subject);
+  const bankHints = extractBankHints(combined);
   // -----------------------------------------------------------------------
 
   for (const bankPattern of BANK_PATTERNS) {
@@ -668,7 +678,11 @@ export function parseEmailContent(
       (p) => p.test(cleanSubject) || p.test(subject)
     );
 
-    if (!fromMatch && !subjectMatch) continue;
+    const hintMatch =
+      bankHints.some((hint) => bankPattern.bankName === "Bank" || hint.includes(bankPattern.bankName.toLowerCase())) ||
+      (bankPattern.bankName === "Bank" && bankHints.length > 0);
+
+    if (!fromMatch && !subjectMatch && !hintMatch) continue;
 
     for (const parser of bankPattern.parsers) {
       const result = parser(combined, cleanSubject);

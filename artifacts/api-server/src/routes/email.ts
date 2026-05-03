@@ -12,7 +12,7 @@ interface SyncRequest {
 }
 
 router.post("/email/sync", async (req, res) => {
-  const { email, appPassword, daysBack = 30 } = req.body as SyncRequest;
+  const { email, appPassword, daysBack = 90 } = req.body as SyncRequest;
 
   if (!email || !appPassword) {
     res.status(400).json({ error: "email and appPassword are required" });
@@ -71,6 +71,9 @@ router.post("/email/sync", async (req, res) => {
         { from: "discover.com" },
         { from: "usbank.com" },
         { from: "ally.com" },
+        { from: "alerts@bank" },
+        { from: "noreply@bank" },
+        { from: "notice@bank" },
         { subject: "transaction" },
         { subject: "purchase" },
         { subject: "charge" },
@@ -78,6 +81,7 @@ router.post("/email/sync", async (req, res) => {
         { subject: "alert" },
         { subject: "debit" },
         { subject: "deposit" },
+        { subject: "statement" },
       ],
     } as any;
 
