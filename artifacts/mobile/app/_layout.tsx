@@ -30,6 +30,7 @@ function RootLayoutNav() {
     <Stack screenOptions={{ headerShown: false }}>
       <Stack.Screen name="(tabs)" options={{ headerShown: false }} />
       <Stack.Screen name="account/[id]" options={{ headerShown: false, animation: "slide_from_right" }} />
+      <Stack.Screen name="ai-review" options={{ headerShown: false, animation: "slide_from_right" }} />
     </Stack>
   );
 }

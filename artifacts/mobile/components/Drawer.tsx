@@ -13,6 +13,8 @@ import {
 } from "react-native";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 
+import { router } from "expo-router";
+
 import { useDrawer } from "@/context/DrawerContext";
 import { useColors } from "@/hooks/useColors";
 import FamilySyncSection from "./drawer/FamilySyncSection";
@@ -113,16 +115,30 @@ export default function Drawer() {
           {/* Family Sync */}
           <FamilySyncSection />
 
-          {/* Divider — more sections will go here */}
+          {/* Divider */}
           <View style={[styles.divider, { backgroundColor: colors.border }]} />
 
-          {/* Placeholder for future sections */}
-          <View style={styles.comingSoon}>
-            <Feather name="settings" size={15} color={colors.mutedForeground} />
-            <Text style={[styles.comingSoonText, { color: colors.mutedForeground }]}>
-              More settings coming soon
-            </Text>
-          </View>
+          {/* AI Spend Review */}
+          <TouchableOpacity
+            style={styles.menuItem}
+            onPress={() => {
+              Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
+              closeDrawer();
+              setTimeout(() => router.push("/ai-review"), 220);
+            }}
+            activeOpacity={0.8}
+          >
+            <View style={[styles.menuIconWrap, { backgroundColor: "#8b5cf6" + "18" }]}>
+              <Feather name="cpu" size={15} color="#8b5cf6" />
+            </View>
+            <View style={styles.menuTextWrap}>
+              <Text style={[styles.menuTitle, { color: colors.foreground }]}>AI Spend Review</Text>
+              <Text style={[styles.menuSub, { color: colors.mutedForeground }]}>
+                Score your purchases with AI
+              </Text>
+            </View>
+            <Feather name="chevron-right" size={16} color={colors.mutedForeground} />
+          </TouchableOpacity>
         </View>
 
         {/* ── Footer ── */}
@@ -174,15 +190,23 @@ const styles = StyleSheet.create({
   closeBtn: { padding: 4 },
   sections: { flex: 1, paddingTop: 8 },
   divider: { height: 1, marginHorizontal: 20, marginVertical: 8 },
-  comingSoon: {
+  menuItem: {
     flexDirection: "row",
     alignItems: "center",
-    gap: 8,
+    gap: 12,
     paddingHorizontal: 20,
     paddingVertical: 12,
-    opacity: 0.6,
   },
-  comingSoonText: { fontSize: 13, fontFamily: "Inter_400Regular" },
+  menuIconWrap: {
+    width: 32,
+    height: 32,
+    borderRadius: 10,
+    alignItems: "center",
+    justifyContent: "center",
+  },
+  menuTextWrap: { flex: 1 },
+  menuTitle: { fontSize: 14, fontFamily: "Inter_600SemiBold" },
+  menuSub: { fontSize: 11, fontFamily: "Inter_400Regular", marginTop: 1 },
   footer: {
     borderTopWidth: 1,
     paddingTop: 12,

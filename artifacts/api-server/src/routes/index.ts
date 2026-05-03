@@ -8,6 +8,7 @@ import transactionsRouter from "./transactions.js";
 import billsRouter from "./bills.js";
 import emailRouter from "./email.js";
 import plaidRouter, { plaidLinkPageHandler } from "./plaid.js";
+import aiReviewRouter from "./ai-review.js";
 
 const router: IRouter = Router();
 
@@ -23,6 +24,9 @@ router.get("/plaid/link-page", plaidLinkPageHandler);
 router.use(accountsRouter);
 router.use(transactionsRouter);
 router.use(billsRouter);
+
+// AI features (rate-limited)
+router.use(strictRateLimit, aiReviewRouter);
 
 // Feature-flagged: email sync (apply strict rate limit)
 if (features.emailSync) {
