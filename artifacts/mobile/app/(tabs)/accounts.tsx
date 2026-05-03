@@ -115,7 +115,18 @@ function AccountRow({
     : account.type === "savings" ? "Savings"
     : account.type === "credit" ? "Credit"
     : "Investment";
-  const accountTxs = transactions.filter((t) => t.accountId === account.id).slice(0, 3);
+  const bankLower = (account.bank ?? "").trim().toLowerCase();
+  const accountTxs = transactions
+    .filter((t) => {
+      if (t.accountId === account.id) return true;
+      if (t.source !== "email") return false;
+      const txBank = (t.bank ?? "").trim().toLowerCase();
+      const txText = `${t.title} ${t.merchant ?? ""} ${t.note ?? ""}`.toLowerCase();
+      const matchesBank = !!bankLower && (txBank.includes(bankLower) || bankLower.includes(txBank) || txText.includes(bankLower));
+      const matchesLastFour = !!account.lastFour && txText.includes(account.lastFour);
+      return matchesBank || matchesLastFour;
+    })
+    .slice(0, 3);
 
   return (
     <>
