@@ -161,17 +161,26 @@ export default function AddBillModal({ visible, onClose }: Props) {
               </Text>
               <Feather name="calendar" size={16} color={colors.mutedForeground} />
             </TouchableOpacity>
-            {showDatePicker && (
-              <DateTimePicker
-                value={dueDate}
-                mode="date"
-                display={Platform.OS === "ios" ? "spinner" : "default"}
-                onChange={(_, date) => {
-                  setShowDatePicker(false);
-                  if (date) setDueDate(date);
-                }}
-              />
-            )}
+            <Modal visible={showDatePicker} transparent animationType="fade" onRequestClose={() => setShowDatePicker(false)}>
+              <TouchableOpacity style={styles.overlay} activeOpacity={1} onPress={() => setShowDatePicker(false)} />
+              <View style={styles.centerPicker}>
+                <View style={[styles.centerPickerCard, { backgroundColor: colors.card }]}>
+                  <Text style={[styles.pickerTitle, { color: colors.foreground }]}>Select Due Date</Text>
+                  <DateTimePicker
+                    value={dueDate}
+                    mode="date"
+                    display={Platform.OS === "ios" ? "spinner" : "default"}
+                    onChange={(_, date) => {
+                      if (date) setDueDate(date);
+                      if (Platform.OS !== "ios") setShowDatePicker(false);
+                    }}
+                  />
+                  <TouchableOpacity onPress={() => setShowDatePicker(false)} style={styles.centerPickerBtn}>
+                    <Text style={styles.centerPickerBtnText}>Done</Text>
+                  </TouchableOpacity>
+                </View>
+              </View>
+            </Modal>
           </View>
 
           <View style={styles.section}>
@@ -359,5 +368,31 @@ const styles = StyleSheet.create({
   freqText: {
     fontSize: 13,
     fontFamily: "Inter_500Medium",
+  },
+  overlay: { flex: 1, backgroundColor: "rgba(0,0,0,0.4)" },
+  centerPicker: {
+    flex: 1,
+    alignItems: "center",
+    justifyContent: "center",
+    padding: 20,
+  },
+  centerPickerCard: {
+    width: "100%",
+    maxWidth: 360,
+    borderRadius: 18,
+    padding: 16,
+    gap: 12,
+  },
+  pickerTitle: {
+    fontSize: 16,
+    fontFamily: "Inter_600SemiBold",
+  },
+  centerPickerBtn: {
+    alignSelf: "flex-end",
+    paddingHorizontal: 14,
+    paddingVertical: 10,
+  },
+  centerPickerBtnText: {
+    fontFamily: "Inter_600SemiBold",
   },
 });

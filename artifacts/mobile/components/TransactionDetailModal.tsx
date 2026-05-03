@@ -18,6 +18,7 @@ import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { Transaction, useApp } from "@/context/AppContext";
 import { useColors } from "@/hooks/useColors";
 import { CATEGORY_COLORS, CATEGORY_ICONS } from "./TransactionItem";
+import DateTimePicker from "@react-native-community/datetimepicker";
 
 const CATEGORIES = [
   "Income", "Food", "Groceries", "Shopping", "Transport",
@@ -60,6 +61,8 @@ export default function TransactionDetailModal({ visible, onClose, transaction }
   const [category, setCategory] = useState("Other");
   const [accountId, setAccountId] = useState("");
   const [note, setNote] = useState("");
+  const [editDate, setEditDate] = useState<Date | null>(null);
+  const [showDatePicker, setShowDatePicker] = useState(false);
 
   useEffect(() => {
     if (transaction) {
@@ -69,6 +72,7 @@ export default function TransactionDetailModal({ visible, onClose, transaction }
       setCategory(transaction.category);
       setAccountId(transaction.accountId);
       setNote(transaction.note || "");
+      setEditDate(new Date(transaction.date));
       setEditing(false);
     }
   }, [transaction]);
@@ -98,6 +102,7 @@ export default function TransactionDetailModal({ visible, onClose, transaction }
       category: editType === "TRANSFER" ? "Transfer" : editType === "BILLS" ? "Bills" : category,
       accountId,
       note: note.trim() || undefined,
+      date: editDate?.toISOString() ?? transaction.date,
     });
     setEditing(false);
   };
@@ -292,7 +297,7 @@ export default function TransactionDetailModal({ visible, onClose, transaction }
               </View>
 
               {/* Date */}
-              <View style={[s.editRow, { borderBottomColor: colors.border }]}>
+              <TouchableOpacity style={[s.editRow, { borderBottomColor: colors.border }]} onPress={() => setShowDatePicker(true)}>
                 <View style={[s.editRowIcon, { backgroundColor: colors.muted }]}>
                   <Feather name="calendar" size={18} color={colors.mutedForeground} />
                 </View>
@@ -300,7 +305,27 @@ export default function TransactionDetailModal({ visible, onClose, transaction }
                   <Text style={[s.editRowTitle, { color: colors.foreground }]}>{dateLine}</Text>
                 </View>
                 <Feather name="chevron-right" size={16} color={colors.mutedForeground} />
-              </View>
+              </TouchableOpacity>
+              <Modal visible={showDatePicker} transparent animationType="fade" onRequestClose={() => setShowDatePicker(false)}>
+                <TouchableOpacity style={s.overlay} activeOpacity={1} onPress={() => setShowDatePicker(false)} />
+                <View style={s.centerPicker}>
+                  <View style={[s.centerPickerCard, { backgroundColor: colors.card }]}>
+                    <Text style={[s.pickerTitle, { color: colors.foreground }]}>Edit Date</Text>
+                    <DateTimePicker
+                      value={editDate ?? dateObj}
+                      mode="date"
+                      display={Platform.OS === "ios" ? "spinner" : "default"}
+                      onChange={(_, d) => {
+                        if (d) setEditDate(d);
+                        if (Platform.OS !== "ios") setShowDatePicker(false);
+                      }}
+                    />
+                    <TouchableOpacity onPress={() => setShowDatePicker(false)} style={s.centerPickerBtn}>
+                      <Text style={s.centerPickerBtnText}>Done</Text>
+                    </TouchableOpacity>
+                  </View>
+                </View>
+              </Modal>
 
               {/* Notes */}
               <View style={[s.editRow, { borderBottomColor: colors.border }]}>
@@ -559,5 +584,31 @@ const s = StyleSheet.create({
     padding: 16,
     borderRadius: 14,
     borderWidth: 1,
+  },
+  overlay: { flex: 1, backgroundColor: "rgba(0,0,0,0.4)" },
+  centerPicker: {
+    flex: 1,
+    alignItems: "center",
+    justifyContent: "center",
+    padding: 20,
+  },
+  centerPickerCard: {
+    width: "100%",
+    maxWidth: 360,
+    borderRadius: 18,
+    padding: 16,
+    gap: 12,
+  },
+  pickerTitle: {
+    fontSize: 16,
+    fontFamily: "Inter_600SemiBold",
+  },
+  centerPickerBtn: {
+    alignSelf: "flex-end",
+    paddingHorizontal: 14,
+    paddingVertical: 10,
+  },
+  centerPickerBtnText: {
+    fontFamily: "Inter_600SemiBold",
   },
 });
