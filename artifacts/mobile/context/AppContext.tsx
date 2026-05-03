@@ -215,6 +215,20 @@ function findAccountMatch(
   return accounts.find(bankMatches);
 }
 
+function remapEmailTransactionsForAccount(
+  transactions: Transaction[],
+  account: Account
+): Transaction[] {
+  if (!account.bank) return transactions;
+  const bankLower = account.bank.trim().toLowerCase();
+  return transactions.map((t) => {
+    if (t.source !== "email" || !t.bank) return t;
+    const tb = t.bank.toLowerCase();
+    const matchesBank = tb.includes(bankLower) || bankLower.includes(tb);
+    return matchesBank ? { ...t, accountId: account.id } : t;
+  });
+}
+
 // ── Provider ─────────────────────────────────────────────────────────────────
 
 export function AppProvider({ children }: { children: React.ReactNode }) {
@@ -346,7 +360,9 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
     if (!a.forceCreate && a.lastFour && a.bank) {
       const existing = findAccountMatch(accountsRef.current, a.bank, a.lastFour);
       if (existing) {
-        if (existing.bank) remapEmailTransactions(existing.bank, existing.id);
+        if (existing.bank) {
+          setTransactions((prev) => remapEmailTransactionsForAccount(prev, existing));
+        }
         return existing.id;
       }
     }
@@ -354,7 +370,9 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
     setAccounts((prev) => [...prev, newA]);
     apiCall("/api/accounts", "POST", householdIdRef.current, deviceIdRef.current, newA);
     // Auto-remap any email transactions whose bank matches this new account
-    if (newA.bank) remapEmailTransactions(newA.bank, newA.id);
+    if (newA.bank) {
+      setTransactions((prev) => remapEmailTransactionsForAccount(prev, newA));
+    }
     return newA.id;
   }, []);
 
