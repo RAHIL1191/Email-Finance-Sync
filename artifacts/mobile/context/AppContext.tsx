@@ -214,6 +214,10 @@ function findAccountMatch(
     const strict = accounts.find((a) => a.lastFour === lastFour && bankMatches(a));
     if (strict) return strict;
   }
+  if (lastFour) {
+    const byLastFour = accounts.find((a) => a.lastFour === lastFour);
+    if (byLastFour) return byLastFour;
+  }
   return accounts.find(bankMatches);
 }
 
@@ -221,15 +225,18 @@ function remapEmailTransactionsForAccount(
   transactions: Transaction[],
   account: Account
 ): Transaction[] {
-  if (!account.bank) return transactions;
+  if (!account.bank && !account.lastFour) return transactions;
   const bankLower = account.bank.trim().toLowerCase();
   return transactions.map((t) => {
-    if (t.source !== "email" || !t.bank) return t;
-    const tb = t.bank.toLowerCase();
-    const matchesBank = tb.includes(bankLower) || bankLower.includes(tb);
+    if (t.source !== "email") return t;
+    const tb = (t.bank ?? "").toLowerCase();
+    const tm = (t.merchant ?? t.title ?? "").toLowerCase();
+    const matchesBank = !!account.bank && (tb.includes(bankLower) || bankLower.includes(tb) || tm.includes(bankLower));
     const matchesLastFour =
       !!account.lastFour &&
-      (t.note?.includes(account.lastFour) || t.title.includes(account.lastFour) || t.merchant?.includes(account.lastFour));
+      (t.note?.includes(account.lastFour) ||
+        t.title.includes(account.lastFour) ||
+        t.merchant?.includes(account.lastFour));
     return matchesBank || matchesLastFour ? { ...t, accountId: account.id } : t;
   });
 }
@@ -301,11 +308,14 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
         // Auto-remap email transactions: remap if unmatched OR if accountId points to
         // a deleted/mock account that no longer exists in the list
         const remappedTx = parsedTx.map((t) => {
-          if (t.source !== "email" || !t.bank) return t;
+          if (t.source !== "email") return t;
           const accountMissing = !t.accountId || !validAccountIds.has(t.accountId);
           if (!accountMissing) return t;
-          const match = findAccountMatch(parsedAccounts, t.bank, t.note?.match(/\b\d{4}\b/)?.[0]);
-          return match ? { ...t, accountId: match.id } : { ...t, accountId: "" };
+          const lastFour = t.note?.match(/\b\d{4}\b/)?.[0];
+          const match =
+            (t.bank ? findAccountMatch(parsedAccounts, t.bank, lastFour) : undefined) ||
+            (lastFour ? parsedAccounts.find((a) => a.lastFour === lastFour) : undefined);
+          return match ? { ...t, accountId: match.id } : t;
         });
 
         setTransactions(remappedTx);
@@ -513,7 +523,7 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
             source: "email" as const,
             fromEmail: true,
             bank: t.bank || "Bank",
-            note: t.lastFour ? `ending in ${t.lastFour}` : undefined,
+            note: [t.merchant, t.lastFour ? `ending in ${t.lastFour}` : ""].filter(Boolean).join(" · ") || undefined,
           };
         });
         setTransactions((prev) => {
