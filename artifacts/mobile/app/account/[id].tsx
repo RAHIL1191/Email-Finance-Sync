@@ -29,6 +29,7 @@ import {
 import { SafeAreaView, useSafeAreaInsets } from "react-native-safe-area-context";
 
 import AddTransactionModal from "@/components/AddTransactionModal";
+import ConfirmModal from "@/components/ConfirmModal";
 import TransactionDetailModal from "@/components/TransactionDetailModal";
 import { CATEGORY_COLORS, CATEGORY_ICONS } from "@/components/TransactionItem";
 import { ACCOUNT_CATEGORIES, SubType } from "@/components/AddAccountModal";
@@ -952,24 +953,7 @@ export default function AccountDetailScreen() {
   const [showAddTx, setShowAddTx] = useState(false);
   const [showMenu, setShowMenu] = useState(false);
   const [showEdit, setShowEdit] = useState(false);
-
-  const handleDeleteAccount = () => {
-    Alert.alert(
-      "Delete Account",
-      `Are you sure you want to delete "${account?.name}"? This cannot be undone.`,
-      [
-        { text: "Cancel", style: "cancel" },
-        {
-          text: "Delete",
-          style: "destructive",
-          onPress: () => {
-            deleteAccount(id!);
-            setTimeout(() => router.back(), 80);
-          },
-        },
-      ]
-    );
-  };
+  const [showDeleteConfirm, setShowDeleteConfirm] = useState(false);
 
   if (!account) {
     return (
@@ -1291,13 +1275,30 @@ export default function AccountDetailScreen() {
         visible={showMenu}
         onClose={() => setShowMenu(false)}
         onEdit={() => setShowEdit(true)}
-        onDelete={handleDeleteAccount}
+        onDelete={() => {
+          setShowMenu(false);
+          setTimeout(() => setShowDeleteConfirm(true), 150);
+        }}
       />
 
       <EditAccountModal
         visible={showEdit}
         onClose={() => setShowEdit(false)}
         accountId={id!}
+      />
+
+      <ConfirmModal
+        visible={showDeleteConfirm}
+        title="Delete Account"
+        message={`Are you sure you want to delete "${account?.name}"? This cannot be undone.`}
+        confirmLabel="Delete"
+        confirmDestructive
+        onCancel={() => setShowDeleteConfirm(false)}
+        onConfirm={() => {
+          setShowDeleteConfirm(false);
+          deleteAccount(id!);
+          setTimeout(() => router.back(), 80);
+        }}
       />
     </SafeAreaView>
   );

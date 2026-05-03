@@ -4,7 +4,6 @@ import { router } from "expo-router";
 import React, { useMemo, useState } from "react";
 import {
   ActivityIndicator,
-  Alert,
   Dimensions,
   KeyboardAvoidingView,
   Linking,
@@ -21,8 +20,9 @@ import { Defs, LinearGradient, Path, Stop, Svg } from "react-native-svg";
 import { SafeAreaView, useSafeAreaInsets } from "react-native-safe-area-context";
 
 import AddAccountModal from "@/components/AddAccountModal";
+import ConfirmModal from "@/components/ConfirmModal";
 import PlaidLinkModal from "@/components/PlaidLinkModal";
-import { Account, PlaidItem, useApp } from "@/context/AppContext";
+import { Account, PlaidItem, PLAID_BANKS, useApp } from "@/context/AppContext";
 import { useColors } from "@/hooks/useColors";
 
 const { width: SCREEN_W } = Dimensions.get("window");
@@ -97,57 +97,81 @@ function NetWorthChart({ balance, colors }: { balance: number; colors: any }) {
 
 function AccountRow({
   account,
-  onDelete,
   isLast,
 }: {
   account: Account;
-  onDelete: () => void;
   isLast: boolean;
 }) {
   const colors = useColors();
+  const [showDeleteConfirm, setShowDeleteConfirm] = React.useState(false);
+  const { deleteAccount } = useApp();
   const isNeg = account.balance < 0;
+  const bankMeta = PLAID_BANKS.find(
+    (b) => b.name.toLowerCase() === (account.bank ?? "").toLowerCase()
+  );
   const initials = bankInitials(account.bank, account.name);
   const typeLabel =
-    account.type.charAt(0).toUpperCase() + account.type.slice(1);
+    account.type === "checking" ? "Chequing"
+    : account.type === "savings" ? "Savings"
+    : account.type === "credit" ? "Credit"
+    : "Investment";
 
   return (
-    <TouchableOpacity
-      style={[
-        styles.acctRow,
-        !isLast && { borderBottomWidth: StyleSheet.hairlineWidth, borderBottomColor: colors.border },
-      ]}
-      onPress={() => {
-        Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
-        router.push({ pathname: "/account/[id]", params: { id: account.id } });
-      }}
-      onLongPress={() => {
-        Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
-        Alert.alert("Delete Account", `Remove "${account.name}"?`, [
-          { text: "Cancel", style: "cancel" },
-          { text: "Delete", style: "destructive", onPress: onDelete },
-        ]);
-      }}
-      activeOpacity={0.7}
-    >
-      <View style={[styles.acctBadge, { backgroundColor: account.color }]}>
-        <Text style={styles.acctBadgeText}>{initials}</Text>
-      </View>
-      <View style={styles.acctInfo}>
-        <Text style={[styles.acctName, { color: colors.foreground }]} numberOfLines={1}>
-          {account.name}
+    <>
+      <TouchableOpacity
+        style={[
+          styles.acctRow,
+          !isLast && { borderBottomWidth: StyleSheet.hairlineWidth, borderBottomColor: colors.border },
+        ]}
+        onPress={() => {
+          Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
+          router.push({ pathname: "/account/[id]", params: { id: account.id } });
+        }}
+        onLongPress={() => {
+          Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium);
+          setShowDeleteConfirm(true);
+        }}
+        activeOpacity={0.7}
+      >
+        <View style={[styles.acctBadge, { backgroundColor: account.color }]}>
+          {bankMeta ? (
+            <Text style={styles.acctBadgeEmoji}>{bankMeta.icon}</Text>
+          ) : (
+            <Text style={styles.acctBadgeText}>{initials}</Text>
+          )}
+        </View>
+        <View style={styles.acctInfo}>
+          <Text style={[styles.acctName, { color: colors.foreground }]} numberOfLines={1}>
+            {account.name}
+          </Text>
+          <Text style={[styles.acctSub, { color: colors.mutedForeground }]} numberOfLines={1}>
+            {typeLabel}
+            {account.bank ? ` · ${account.bank}` : ""}
+            {account.lastFour ? ` · ••••${account.lastFour}` : ""}
+          </Text>
+        </View>
+        <Text style={[styles.acctBal, { color: isNeg ? colors.expense : colors.foreground }]}>
+          {isNeg ? "- " : ""}$
+          {Math.abs(account.balance).toLocaleString("en-US", {
+            minimumFractionDigits: 2,
+            maximumFractionDigits: 2,
+          })}
         </Text>
-        <Text style={[styles.acctSub, { color: colors.mutedForeground }]} numberOfLines={1}>
-          {typeLabel} · {account.bank}
-        </Text>
-      </View>
-      <Text style={[styles.acctBal, { color: isNeg ? colors.expense : colors.foreground }]}>
-        {isNeg ? "- " : ""}$
-        {Math.abs(account.balance).toLocaleString("en-US", {
-          minimumFractionDigits: 2,
-          maximumFractionDigits: 2,
-        })}
-      </Text>
-    </TouchableOpacity>
+      </TouchableOpacity>
+
+      <ConfirmModal
+        visible={showDeleteConfirm}
+        title="Delete Account"
+        message={`Remove "${account.name}"? This cannot be undone.`}
+        confirmLabel="Delete"
+        confirmDestructive
+        onCancel={() => setShowDeleteConfirm(false)}
+        onConfirm={() => {
+          setShowDeleteConfirm(false);
+          deleteAccount(account.id);
+        }}
+      />
+    </>
   );
 }
 
@@ -157,12 +181,10 @@ function AccountGroup({
   title,
   accounts,
   total,
-  onDelete,
 }: {
   title: string;
   accounts: Account[];
   total: number;
-  onDelete: (id: string) => void;
 }) {
   const colors = useColors();
   const isNeg = total < 0;
@@ -172,25 +194,20 @@ function AccountGroup({
       <View style={styles.groupHeader}>
         <View style={{ flexDirection: "row", alignItems: "center", gap: 6 }}>
           <Text style={[styles.groupTitle, { color: colors.foreground }]}>{title}</Text>
-          <Feather name="edit-2" size={12} color={colors.mutedForeground} />
         </View>
-        <TouchableOpacity style={{ flexDirection: "row", alignItems: "center", gap: 3 }}>
-          <Text style={[styles.groupTotal, { color: isNeg ? colors.expense : colors.foreground }]}>
-            {isNeg ? "- " : ""}$
-            {Math.abs(total).toLocaleString("en-US", {
-              minimumFractionDigits: 2,
-              maximumFractionDigits: 2,
-            })}
-          </Text>
-          <Feather name="chevron-right" size={15} color={colors.mutedForeground} />
-        </TouchableOpacity>
+        <Text style={[styles.groupTotal, { color: isNeg ? colors.expense : colors.foreground }]}>
+          {isNeg ? "- " : ""}$
+          {Math.abs(total).toLocaleString("en-US", {
+            minimumFractionDigits: 2,
+            maximumFractionDigits: 2,
+          })}
+        </Text>
       </View>
       <View style={[styles.groupCard, { backgroundColor: colors.card, borderColor: colors.border }]}>
         {accounts.map((a, i) => (
           <AccountRow
             key={a.id}
             account={a}
-            onDelete={() => onDelete(a.id)}
             isLast={i === accounts.length - 1}
           />
         ))}
@@ -331,6 +348,7 @@ function PlaidItemPanel({ item }: { item: PlaidItem }) {
   const colors = useColors();
   const { syncPlaidTransactions, disconnectPlaid, isSyncing } = useApp();
   const [syncResult, setSyncResult] = useState<{ imported: number; error?: string } | null>(null);
+  const [showDisconnectConfirm, setShowDisconnectConfirm] = useState(false);
 
   const handleSync = async () => {
     Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium);
@@ -340,12 +358,7 @@ function PlaidItemPanel({ item }: { item: PlaidItem }) {
     if (result.imported > 0) Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
   };
 
-  const handleDisconnect = () => {
-    Alert.alert("Disconnect Bank", `Remove ${item.bankName} and all its imported accounts?`, [
-      { text: "Cancel", style: "cancel" },
-      { text: "Disconnect", style: "destructive", onPress: () => disconnectPlaid(item.itemId) },
-    ]);
-  };
+  const handleDisconnect = () => setShowDisconnectConfirm(true);
 
   return (
     <View style={[styles.plaidPanel, { backgroundColor: colors.card, borderColor: item.bankColor + "50" }]}>
@@ -399,6 +412,18 @@ function PlaidItemPanel({ item }: { item: PlaidItem }) {
           <Text style={[styles.disconnectText, { color: colors.expense }]}>Disconnect</Text>
         </TouchableOpacity>
       </View>
+      <ConfirmModal
+        visible={showDisconnectConfirm}
+        title="Disconnect Bank"
+        message={`Remove ${item.bankName} and all its imported accounts?`}
+        confirmLabel="Disconnect"
+        confirmDestructive
+        onCancel={() => setShowDisconnectConfirm(false)}
+        onConfirm={() => {
+          setShowDisconnectConfirm(false);
+          disconnectPlaid(item.itemId);
+        }}
+      />
     </View>
   );
 }
@@ -428,12 +453,9 @@ function ConnectedInstitutionsModal({
     setSyncResult(result);
   };
 
-  const handleEmailDisconnect = () => {
-    Alert.alert("Disconnect Email", "Remove email sync connection?", [
-      { text: "Cancel", style: "cancel" },
-      { text: "Disconnect", style: "destructive", onPress: disconnectEmail },
-    ]);
-  };
+  const [showEmailDisconnectConfirm, setShowEmailDisconnectConfirm] = useState(false);
+
+  const handleEmailDisconnect = () => setShowEmailDisconnectConfirm(true);
 
   return (
     <Modal visible={visible} animationType="slide" presentationStyle="pageSheet" onRequestClose={onClose}>
@@ -537,6 +559,19 @@ function ConnectedInstitutionsModal({
           )}
         </ScrollView>
       </View>
+
+      <ConfirmModal
+        visible={showEmailDisconnectConfirm}
+        title="Disconnect Email"
+        message="Remove email sync connection? Your imported transactions will remain."
+        confirmLabel="Disconnect"
+        confirmDestructive
+        onCancel={() => setShowEmailDisconnectConfirm(false)}
+        onConfirm={() => {
+          setShowEmailDisconnectConfirm(false);
+          disconnectEmail();
+        }}
+      />
     </Modal>
   );
 }
@@ -550,7 +585,6 @@ export default function AccountsScreen() {
   const colors = useColors();
   const {
     accounts,
-    deleteAccount,
     totalBalance,
     emailSync,
     plaidSync,
@@ -672,7 +706,6 @@ export default function AccountsScreen() {
                 title="Cash"
                 accounts={cashAccounts}
                 total={cashTotal}
-                onDelete={deleteAccount}
               />
             )}
 
@@ -682,7 +715,6 @@ export default function AccountsScreen() {
                 title="Credit"
                 accounts={creditAccounts}
                 total={creditTotal}
-                onDelete={deleteAccount}
               />
             )}
 
@@ -692,7 +724,6 @@ export default function AccountsScreen() {
                 title="Investment"
                 accounts={investAccounts}
                 total={investTotal}
-                onDelete={deleteAccount}
               />
             )}
 
@@ -813,6 +844,7 @@ const styles = StyleSheet.create({
   acctRow: { flexDirection: "row", alignItems: "center", paddingVertical: 13, paddingHorizontal: 14, gap: 12 },
   acctBadge: { width: 42, height: 42, borderRadius: 21, alignItems: "center", justifyContent: "center" },
   acctBadgeText: { color: "#fff", fontSize: 13, fontFamily: "Inter_700Bold" },
+  acctBadgeEmoji: { fontSize: 20 },
   acctInfo: { flex: 1, gap: 2 },
   acctName: { fontSize: 15, fontFamily: "Inter_600SemiBold" },
   acctSub: { fontSize: 12, fontFamily: "Inter_400Regular" },

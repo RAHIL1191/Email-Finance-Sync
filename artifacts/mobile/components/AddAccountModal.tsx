@@ -16,6 +16,7 @@ import {
 } from "react-native";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 
+import ConfirmModal from "@/components/ConfirmModal";
 import { PLAID_BANKS, useApp } from "@/context/AppContext";
 import { useColors } from "@/hooks/useColors";
 
@@ -103,6 +104,7 @@ export default function AddAccountModal({ visible, onClose, onConnectBank }: Pro
   const [isJoint, setIsJoint] = useState(false);
   const [showBankPicker, setShowBankPicker] = useState(false);
   const [bankSearch, setBankSearch] = useState("");
+  const [duplicateAccount, setDuplicateAccount] = useState<typeof accounts[0] | null>(null);
 
   const reset = () => {
     setStep("choose");
@@ -115,6 +117,7 @@ export default function AddAccountModal({ visible, onClose, onConnectBank }: Pro
     setIsJoint(false);
     setShowBankPicker(false);
     setBankSearch("");
+    setDuplicateAccount(null);
   };
 
   const filteredBanks = PLAID_BANKS.filter((b) =>
@@ -181,16 +184,7 @@ export default function AddAccountModal({ visible, onClose, onConnectBank }: Pro
     });
 
     if (duplicate) {
-      Alert.alert(
-        "Account Already Exists",
-        lastFourTrimmed && bank.trim()
-          ? `"${duplicate.name}" at ${duplicate.bank} ending in ••••${duplicate.lastFour} already exists. Creating a duplicate may cause incorrect transaction matching.`
-          : `An account named "${duplicate.name}" already exists. Do you want to create another one?`,
-        [
-          { text: "Cancel", style: "cancel" },
-          { text: "Create Anyway", onPress: () => doSave(true) },
-        ]
-      );
+      setDuplicateAccount(duplicate);
       return;
     }
 
@@ -666,6 +660,26 @@ export default function AddAccountModal({ visible, onClose, onConnectBank }: Pro
           </ScrollView>
         </View>
       </Modal>
+
+      {/* Duplicate account confirm */}
+      <ConfirmModal
+        visible={!!duplicateAccount}
+        title="Account Already Exists"
+        message={
+          duplicateAccount
+            ? duplicateAccount.lastFour && duplicateAccount.bank
+              ? `"${duplicateAccount.name}" at ${duplicateAccount.bank} ending in ••••${duplicateAccount.lastFour} already exists. Creating a duplicate may cause incorrect transaction matching.`
+              : `An account named "${duplicateAccount.name}" already exists. Do you want to create another one?`
+            : ""
+        }
+        confirmLabel="Create Anyway"
+        cancelLabel="Cancel"
+        onCancel={() => setDuplicateAccount(null)}
+        onConfirm={() => {
+          setDuplicateAccount(null);
+          doSave(true);
+        }}
+      />
     </Modal>
   );
 }
