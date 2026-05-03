@@ -536,12 +536,12 @@ const BANK_PATTERNS: BankPattern[] = [
   // Generic bank alert fallback
   {
     bankName: "Bank",
-    fromPatterns: [/alert|notify|notification|noreply/i],
-    subjectPatterns: [/transaction|charge|purchase|alert|debit|credit|deposit/i],
+    fromPatterns: [/alert|notify|notification|noreply|no-reply|mailer-daemon/i],
+    subjectPatterns: [/transaction|charge|purchase|alert|debit|credit|deposit|debit card|card alert|card purchase/i],
     parsers: [
       (text, subject) => {
         // Generic: look for dollar amounts and merchant patterns
-        const amountMatch = text.match(/\$\s*([\d,]+\.\d{2})/);
+        const amountMatch = text.match(/\$\s*([\d,]+\.\d{2})/) || text.match(/([\d,]+\.\d{2})\s*\$/) || text.match(/\b([\d,]+\.\d{2})\b/);
         if (!amountMatch) return null;
         const amount = parseFloat(amountMatch[1].replace(/,/g, ""));
         if (amount <= 0 || amount > 100000) return null;
@@ -550,6 +550,8 @@ const BANK_PATTERNS: BankPattern[] = [
         const merchantPatterns = [
           /(?:at|from|to|merchant:?|vendor:?)\s+([A-Z][A-Za-z0-9 &'*-]{2,40})/,
           /(?:purchase|transaction|charge)\s+(?:at|from)\s+([A-Z][A-Za-z0-9 &'*-]{2,40})/,
+          /(?:spent at|used at|card used at)\s+([A-Z][A-Za-z0-9 &'*-]{2,40})/i,
+          /([A-Z][A-Za-z0-9 &'*-]{2,40})\s+(?:purchase|charge|debit)/i,
         ];
         let merchant = "Transaction";
         for (const pat of merchantPatterns) {
