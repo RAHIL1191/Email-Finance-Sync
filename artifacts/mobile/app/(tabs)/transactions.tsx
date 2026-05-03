@@ -1051,6 +1051,10 @@ function ReviewTab({
     setReviewedIds((prev) => [...prev, tx.id]);
   };
 
+  const handleReject = (txId: string) => {
+    setReviewedIds((prev) => [...prev, txId]);
+  };
+
   return (
     <View style={{ flex: 1 }}>
       <FlatList
@@ -1079,6 +1083,9 @@ function ReviewTab({
             </Text>
             <TouchableOpacity style={[styles.reviewAddBtn, { backgroundColor: colors.primary }]} onPress={() => handleAdd(item)}>
               <Text style={styles.reviewAddText}>Add</Text>
+            </TouchableOpacity>
+            <TouchableOpacity style={[styles.reviewRejectBtn, { borderColor: colors.expense }]} onPress={() => handleReject(item.id)}>
+              <Text style={[styles.reviewRejectText, { color: colors.expense }]}>Reject</Text>
             </TouchableOpacity>
           </View>
         )}
@@ -1252,6 +1259,8 @@ const styles = StyleSheet.create({
   reviewAmount: { fontSize: 14, fontFamily: "Inter_700Bold" },
   reviewAddBtn: { paddingHorizontal: 12, paddingVertical: 8, borderRadius: 10 },
   reviewAddText: { color: "#fff", fontSize: 13, fontFamily: "Inter_600SemiBold" },
+  reviewRejectBtn: { paddingHorizontal: 12, paddingVertical: 8, borderRadius: 10, borderWidth: 1 },
+  reviewRejectText: { fontSize: 13, fontFamily: "Inter_600SemiBold" },
 
   monthNav: {
     flexDirection: "row",
