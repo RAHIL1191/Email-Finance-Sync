@@ -121,6 +121,15 @@ router.post("/email/sync", async (req, res) => {
     res.json({
       success: true,
       transactions,
+      parsed: transactions.map((t) => ({
+        title: t.title,
+        merchant: t.merchant,
+        amount: t.amount,
+        type: t.type,
+        bank: t.bank,
+        rawSubject: t.rawSubject,
+        lastFour: t.lastFour,
+      })),
       emailsScanned: emailCount,
       transactionsFound: transactions.length,
     });
