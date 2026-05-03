@@ -447,6 +447,130 @@ function AccountPickerModal({
   );
 }
 
+// ─── Project Picker modal ─────────────────────────────────────────────────────
+
+export const PROJECT_COLORS = [
+  "#6366f1", "#8b5cf6", "#ec4899", "#ef4444", "#f97316",
+  "#eab308", "#22c55e", "#14b8a6", "#3b82f6", "#64748b",
+];
+
+function ProjectPickerModal({
+  visible,
+  selected,
+  onSelect,
+  onClose,
+}: {
+  visible: boolean;
+  selected?: string;
+  onSelect: (id: string | undefined, name: string | undefined) => void;
+  onClose: () => void;
+}) {
+  const colors = useColors();
+  const insets = useSafeAreaInsets();
+  const { projects, addProject } = useApp();
+
+  const [creating, setCreating] = useState(false);
+  const [newName, setNewName] = useState("");
+  const [newColor, setNewColor] = useState(PROJECT_COLORS[0]);
+  const [newDesc, setNewDesc] = useState("");
+
+  const resetCreate = () => { setCreating(false); setNewName(""); setNewDesc(""); setNewColor(PROJECT_COLORS[0]); };
+
+  const handleCreate = () => {
+    if (!newName.trim()) return;
+    Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
+    const id = addProject({ name: newName.trim(), color: newColor, description: newDesc.trim() || undefined });
+    onSelect(id, newName.trim());
+    resetCreate();
+    onClose();
+  };
+
+  return (
+    <Modal visible={visible} transparent animationType="slide" onRequestClose={() => { resetCreate(); onClose(); }}>
+      <TouchableOpacity style={styles.overlay} activeOpacity={1} onPress={() => { resetCreate(); onClose(); }} />
+      <View style={[styles.pickerSheet, { backgroundColor: colors.card, paddingBottom: insets.bottom + 16 }]}>
+        <View style={[styles.pickerHeader, { borderBottomColor: colors.border }]}>
+          <Text style={[styles.pickerTitle, { color: colors.foreground }]}>
+            {creating ? "New Project" : "Tag Project"}
+          </Text>
+          <TouchableOpacity onPress={creating ? resetCreate : () => { resetCreate(); onClose(); }}>
+            <Feather name={creating ? "arrow-left" : "x"} size={20} color={colors.foreground} />
+          </TouchableOpacity>
+        </View>
+        {creating ? (
+          <ScrollView showsVerticalScrollIndicator={false} contentContainerStyle={{ padding: 16, gap: 12 }}>
+            <TextInput
+              style={[styles.projectInput, { borderColor: colors.border, color: colors.foreground, backgroundColor: colors.accent }]}
+              placeholder="Project name (e.g. Europe Trip, Birthday Party)"
+              placeholderTextColor={colors.mutedForeground}
+              value={newName}
+              onChangeText={setNewName}
+              autoFocus
+              returnKeyType="next"
+            />
+            <TextInput
+              style={[styles.projectInput, { borderColor: colors.border, color: colors.foreground, backgroundColor: colors.accent }]}
+              placeholder="Description (optional)"
+              placeholderTextColor={colors.mutedForeground}
+              value={newDesc}
+              onChangeText={setNewDesc}
+              returnKeyType="done"
+            />
+            <Text style={[styles.colorLabel, { color: colors.mutedForeground }]}>Color</Text>
+            <View style={styles.colorRow}>
+              {PROJECT_COLORS.map((c) => (
+                <TouchableOpacity
+                  key={c}
+                  style={[styles.colorSwatch, { backgroundColor: c, borderWidth: newColor === c ? 3 : 0, borderColor: "#fff" }]}
+                  onPress={() => setNewColor(c)}
+                />
+              ))}
+            </View>
+            <TouchableOpacity
+              style={[styles.saveBtn, { backgroundColor: newName.trim() ? colors.primary : colors.border, marginTop: 8 }]}
+              onPress={handleCreate}
+              activeOpacity={newName.trim() ? 0.8 : 1}
+            >
+              <Text style={styles.saveBtnText}>Create Project</Text>
+            </TouchableOpacity>
+          </ScrollView>
+        ) : (
+          <ScrollView showsVerticalScrollIndicator={false}>
+            <TouchableOpacity
+              style={[styles.pickerRow, { borderBottomColor: colors.border }]}
+              onPress={() => { onSelect(undefined, undefined); onClose(); }}
+            >
+              <View style={[styles.projectDot, { backgroundColor: colors.border }]} />
+              <Text style={[styles.pickerOption, { color: !selected ? colors.primary : colors.foreground, flex: 1 }]}>No Project</Text>
+              {!selected && <Feather name="check" size={18} color={colors.primary} />}
+            </TouchableOpacity>
+            {projects.map((p) => (
+              <TouchableOpacity
+                key={p.id}
+                style={[styles.pickerRow, { borderBottomColor: colors.border }]}
+                onPress={() => { onSelect(p.id, p.name); onClose(); }}
+              >
+                <View style={[styles.projectDot, { backgroundColor: p.color }]} />
+                <Text style={[styles.pickerOption, { color: selected === p.id ? colors.primary : colors.foreground, flex: 1 }]}>{p.name}</Text>
+                {selected === p.id && <Feather name="check" size={18} color={colors.primary} />}
+              </TouchableOpacity>
+            ))}
+            <TouchableOpacity
+              style={[styles.pickerRow, { borderBottomColor: "transparent" }]}
+              onPress={() => setCreating(true)}
+            >
+              <View style={[styles.projectDot, { backgroundColor: colors.primary, alignItems: "center", justifyContent: "center" }]}>
+                <Feather name="plus" size={8} color="#fff" />
+              </View>
+              <Text style={[styles.pickerOption, { color: colors.primary, flex: 1 }]}>New Project…</Text>
+            </TouchableOpacity>
+          </ScrollView>
+        )}
+      </View>
+    </Modal>
+  );
+}
+
 // ─── Amount header ─────────────────────────────────────────────────────────────
 
 function AmountHeader({ value, onChange, color }: { value: string; onChange: (v: string) => void; color?: string }) {
@@ -482,11 +606,14 @@ function ExpenseTab({ onSave }: { onSave: () => void }) {
   const [accountId, setAccountId] = useState(accounts[0]?.id ?? "");
   const [date, setDate] = useState(new Date());
   const [notes, setNotes] = useState("");
+  const [projectId, setProjectId] = useState<string | undefined>(undefined);
+  const [projectName, setProjectName] = useState<string | undefined>(undefined);
 
   const [showCatPicker, setShowCatPicker] = useState(false);
   const [showAccPicker, setShowAccPicker] = useState(false);
   const [showDatePicker, setShowDatePicker] = useState(false);
   const [showTimePicker, setShowTimePicker] = useState(false);
+  const [showProjectPicker, setShowProjectPicker] = useState(false);
 
   const selectedAcc = accounts.find((a) => a.id === accountId);
 
@@ -503,6 +630,8 @@ function ExpenseTab({ onSave }: { onSave: () => void }) {
       accountId,
       date: date.toISOString(),
       note: notes || undefined,
+      projectId: projectId || undefined,
+      projectName: projectName || undefined,
       source: "manual",
     });
     onSave();
@@ -565,6 +694,17 @@ function ExpenseTab({ onSave }: { onSave: () => void }) {
         <NotesRow value={notes} onChange={setNotes} borderBottom={false} />
       </View>
 
+      <View style={[styles.card, { backgroundColor: colors.card }]}>
+        <RowItem
+          icon="folder"
+          label={projectName}
+          placeholder="Tag a Project (optional)"
+          onPress={() => setShowProjectPicker(true)}
+          onClear={projectId ? () => { setProjectId(undefined); setProjectName(undefined); } : undefined}
+          borderBottom={false}
+        />
+      </View>
+
       <TouchableOpacity style={[styles.addImagesRow, { backgroundColor: colors.card, borderColor: colors.border }]}>
         <Feather name="camera" size={20} color={colors.mutedForeground} />
         <Text style={[styles.addImagesText, { color: colors.mutedForeground }]}>Add Receipts</Text>
@@ -586,6 +726,12 @@ function ExpenseTab({ onSave }: { onSave: () => void }) {
         selected={accountId}
         onSelect={setAccountId}
         onClose={() => setShowAccPicker(false)}
+      />
+      <ProjectPickerModal
+        visible={showProjectPicker}
+        selected={projectId}
+        onSelect={(id, name) => { setProjectId(id); setProjectName(name); }}
+        onClose={() => setShowProjectPicker(false)}
       />
       <DatePickerModal
         visible={showDatePicker}
@@ -623,6 +769,9 @@ function IncomeTab({ onSave }: { onSave: () => void }) {
   const [showRepeatPicker, setShowRepeatPicker] = useState(false);
   const [showDatePicker, setShowDatePicker] = useState(false);
   const [showTimePicker, setShowTimePicker] = useState(false);
+  const [showProjectPicker, setShowProjectPicker] = useState(false);
+  const [projectId, setProjectId] = useState<string | undefined>(undefined);
+  const [projectName, setProjectName] = useState<string | undefined>(undefined);
 
   const save = () => {
     const parsed = parseFloat(amount);
@@ -636,6 +785,8 @@ function IncomeTab({ onSave }: { onSave: () => void }) {
       accountId,
       date: date.toISOString(),
       note: [notes, repeat !== "Never" ? `Repeats ${repeat}` : ""].filter(Boolean).join(" · ") || undefined,
+      projectId: projectId || undefined,
+      projectName: projectName || undefined,
       source: "manual",
     });
     onSave();
@@ -696,6 +847,17 @@ function IncomeTab({ onSave }: { onSave: () => void }) {
         />
       </View>
 
+      <View style={[styles.card, { backgroundColor: colors.card }]}>
+        <RowItem
+          icon="folder"
+          label={projectName}
+          placeholder="Tag a Project (optional)"
+          onPress={() => setShowProjectPicker(true)}
+          onClear={projectId ? () => { setProjectId(undefined); setProjectName(undefined); } : undefined}
+          borderBottom={false}
+        />
+      </View>
+
       <TouchableOpacity style={[styles.addImagesRow, { backgroundColor: colors.card, borderColor: colors.border }]}>
         <Feather name="camera" size={20} color={colors.mutedForeground} />
         <Text style={[styles.addImagesText, { color: colors.mutedForeground }]}>Add Images</Text>
@@ -717,6 +879,12 @@ function IncomeTab({ onSave }: { onSave: () => void }) {
         selected={accountId}
         onSelect={setAccountId}
         onClose={() => setShowAccPicker(false)}
+      />
+      <ProjectPickerModal
+        visible={showProjectPicker}
+        selected={projectId}
+        onSelect={(id, name) => { setProjectId(id); setProjectName(name); }}
+        onClose={() => setShowProjectPicker(false)}
       />
       <PickerModal
         visible={showRepeatPicker}
@@ -1431,4 +1599,10 @@ const styles = StyleSheet.create({
   accPickerName: { fontSize: 15, fontFamily: "Inter_500Medium" },
   accPickerSub: { fontSize: 12, fontFamily: "Inter_400Regular", marginTop: 2 },
   emptyPicker: { textAlign: "center", padding: 24, fontFamily: "Inter_400Regular" },
+
+  projectInput: { borderWidth: 1, borderRadius: 10, paddingHorizontal: 14, paddingVertical: 12, fontSize: 15, fontFamily: "Inter_400Regular" },
+  colorLabel: { fontSize: 11, fontFamily: "Inter_600SemiBold", textTransform: "uppercase", letterSpacing: 0.6 },
+  colorRow: { flexDirection: "row", flexWrap: "wrap", gap: 10 },
+  colorSwatch: { width: 32, height: 32, borderRadius: 16 },
+  projectDot: { width: 14, height: 14, borderRadius: 7, flexShrink: 0 },
 });
