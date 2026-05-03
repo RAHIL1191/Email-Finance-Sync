@@ -228,8 +228,9 @@ function DatePickerModal({
   return (
     <Modal visible={visible} transparent animationType="fade" onRequestClose={onClose}>
       <TouchableOpacity style={styles.overlay} activeOpacity={1} onPress={onClose} />
-      <View style={styles.centerPicker}>
+      <View style={[styles.centerPicker, { justifyContent: "flex-end" }]}>
         <View style={[styles.centerPickerCard, { backgroundColor: colors.card }]}>
+          <View style={[styles.pickerHandle, { backgroundColor: colors.border }]} />
           <Text style={[styles.pickerTitle, { color: colors.foreground }]}>{title}</Text>
           <DateTimePicker
             value={date}
@@ -240,7 +241,7 @@ function DatePickerModal({
               if (Platform.OS !== "ios") onClose();
             }}
           />
-          <TouchableOpacity onPress={onClose} style={styles.centerPickerBtn}>
+          <TouchableOpacity onPress={onClose} style={[styles.centerPickerBtn, { backgroundColor: colors.primary }]}>
             <Text style={styles.centerPickerBtnText}>Done</Text>
           </TouchableOpacity>
         </View>
@@ -1380,24 +1381,31 @@ const styles = StyleSheet.create({
   centerPicker: {
     flex: 1,
     alignItems: "center",
-    justifyContent: "center",
+    justifyContent: "flex-end",
     padding: 20,
   },
   centerPickerCard: {
     width: "100%",
     maxWidth: 360,
-    borderRadius: 18,
+    borderTopLeftRadius: 22,
+    borderTopRightRadius: 22,
     padding: 16,
     gap: 12,
   },
+  pickerHandle: {
+    width: 42,
+    height: 5,
+    borderRadius: 999,
+    alignSelf: "center",
+    marginBottom: 6,
+  },
   centerPickerBtn: {
-    alignSelf: "flex-end",
-    paddingHorizontal: 14,
-    paddingVertical: 10,
+    alignSelf: "stretch",
+    alignItems: "center",
+    paddingVertical: 14,
+    borderRadius: 14,
   },
-  centerPickerBtnText: {
-    fontFamily: "Inter_600SemiBold",
-  },
+  centerPickerBtnText: { fontFamily: "Inter_600SemiBold", color: "#fff" },
   pickerRow: {
     flexDirection: "row",
     alignItems: "center",

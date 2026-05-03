@@ -163,8 +163,9 @@ export default function AddBillModal({ visible, onClose }: Props) {
             </TouchableOpacity>
             <Modal visible={showDatePicker} transparent animationType="fade" onRequestClose={() => setShowDatePicker(false)}>
               <TouchableOpacity style={styles.overlay} activeOpacity={1} onPress={() => setShowDatePicker(false)} />
-              <View style={styles.centerPicker}>
+              <View style={[styles.centerPicker, { justifyContent: "flex-end" }]}>
                 <View style={[styles.centerPickerCard, { backgroundColor: colors.card }]}>
+                  <View style={[styles.pickerHandle, { backgroundColor: colors.border }]} />
                   <Text style={[styles.pickerTitle, { color: colors.foreground }]}>Select Due Date</Text>
                   <DateTimePicker
                     value={dueDate}
@@ -175,7 +176,7 @@ export default function AddBillModal({ visible, onClose }: Props) {
                       if (Platform.OS !== "ios") setShowDatePicker(false);
                     }}
                   />
-                  <TouchableOpacity onPress={() => setShowDatePicker(false)} style={styles.centerPickerBtn}>
+                  <TouchableOpacity onPress={() => setShowDatePicker(false)} style={[styles.centerPickerBtn, { backgroundColor: colors.primary }]}>
                     <Text style={styles.centerPickerBtnText}>Done</Text>
                   </TouchableOpacity>
                 </View>
@@ -382,6 +383,13 @@ const styles = StyleSheet.create({
     borderRadius: 18,
     padding: 16,
     gap: 12,
+  },
+  pickerHandle: {
+    width: 42,
+    height: 5,
+    borderRadius: 999,
+    alignSelf: "center",
+    marginBottom: 6,
   },
   pickerTitle: {
     fontSize: 16,
