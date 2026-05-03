@@ -4,6 +4,7 @@ import React, { useMemo, useState } from "react";
 import {
   ActivityIndicator,
   Animated,
+  Modal,
   Platform,
   ScrollView,
   StyleSheet,
@@ -14,6 +15,7 @@ import {
 import { SafeAreaView } from "react-native-safe-area-context";
 
 import AddEntrySheet from "@/components/AddEntrySheet";
+import BillFilterModal, { BillFilterSettings, DEFAULT_FILTER } from "@/components/BillFilterModal";
 import { useApp } from "@/context/AppContext";
 import { useColors } from "@/hooks/useColors";
 
@@ -168,6 +170,8 @@ export default function InsightsScreen() {
   const { transactions, accounts, bills, monthlyIncome, monthlyExpense } = useApp();
   const [isGenerating, setIsGenerating] = useState(false);
   const [aiInsights, setAiInsights] = useState<string[]>([]);
+  const [showFilter, setShowFilter] = useState(false);
+  const [filterSettings, setFilterSettings] = useState<BillFilterSettings>(DEFAULT_FILTER);
 
   const [sheetVisible, setSheetVisible] = useState(false);
   const [sheetTab, setSheetTab] = useState<EntryTab>("EXPENSE");
@@ -228,6 +232,13 @@ export default function InsightsScreen() {
 
   return (
     <SafeAreaView edges={["top"]} style={[styles.container, { backgroundColor: colors.background }]}>
+      <TouchableOpacity
+        style={[styles.filterFab, { backgroundColor: colors.primary }]}
+        onPress={() => setShowFilter(true)}
+        activeOpacity={0.85}
+      >
+        <Feather name="sliders" size={20} color="#fff" />
+      </TouchableOpacity>
       <ScrollView
         showsVerticalScrollIndicator={false}
         contentContainerStyle={[styles.scroll, { paddingBottom: Platform.OS === "web" ? 34 + 84 : 120 }]}
@@ -329,6 +340,16 @@ export default function InsightsScreen() {
         initialTab={sheetTab}
         onClose={() => setSheetVisible(false)}
       />
+
+      <BillFilterModal
+        visible={showFilter}
+        current={filterSettings}
+        onApply={(s) => {
+          setFilterSettings(s);
+          setShowFilter(false);
+        }}
+        onClose={() => setShowFilter(false)}
+      />
     </SafeAreaView>
   );
 }
@@ -403,6 +424,18 @@ const styles = StyleSheet.create({
     justifyContent: "center",
   },
   fabActionLabel: { fontSize: 15, fontFamily: "Inter_600SemiBold" },
+  filterFab: {
+    position: "absolute",
+    top: Platform.OS === "web" ? 56 : 14,
+    right: 16,
+    width: 44,
+    height: 44,
+    borderRadius: 22,
+    alignItems: "center",
+    justifyContent: "center",
+    zIndex: 20,
+    elevation: 6,
+  },
   fab: {
     width: 52,
     height: 52,
