@@ -593,6 +593,8 @@ function extractForwardedFrom(text: string): string {
     /(?:Forwarded message|Begin forwarded message|Original Message|Mensaje reenviado|Message transféré)[^\n]*\n.*?From:\s*([^\n]+)/is,
     // Simpler fallback: any "From:" line in the body that contains an @ symbol
     /\bFrom:\s*([^\n]*@[^\n]+)/i,
+    /\bDe:\s*([^\n]*@[^\n]+)/i,
+    /\bFrom\s*:\s*([^\n]*@[^\n]+)/i,
   ];
   for (const pat of fwdMarkers) {
     const m = text.match(pat);
@@ -655,7 +657,11 @@ export function parseEmailContent(
   // --- Forwarding support ------------------------------------------------
   // If the email was forwarded the envelope From is the forwarder's address,
   // not the bank's.  We try to recover the original sender from the body.
-  const isForwarded = /fwd:|forwarded message|begin forwarded|original message/i.test(subject + " " + text.slice(0, 300));
+  const isForwarded =
+    /fwd:|fw:|forwarded message|begin forwarded|original message|message transféré|mensaje reenviado/i.test(
+      subject + " " + text.slice(0, 500)
+    ) ||
+    /\b(from|de|von)\s*:\s*.+@.+/i.test(text.slice(0, 1200));
   const originalFrom = isForwarded ? extractForwardedFrom(text) : "";
 
   // Also scan the body for bank domain strings as an additional signal,
