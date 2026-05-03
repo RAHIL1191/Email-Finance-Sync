@@ -7,6 +7,7 @@ import {
   Platform,
   ScrollView,
   StyleSheet,
+  Switch,
   Text,
   TextInput,
   TouchableOpacity,
@@ -87,7 +88,7 @@ interface Props {
 export default function AddAccountModal({ visible, onClose, onConnectBank }: Props) {
   const colors = useColors();
   const insets = useSafeAreaInsets();
-  const { addAccount } = useApp();
+  const { addAccount, remapEmailTransactions } = useApp();
 
   const [step, setStep] = useState<Step>("choose");
   const [selectedSubType, setSelectedSubType] = useState<SubType | null>(null);
@@ -96,8 +97,9 @@ export default function AddAccountModal({ visible, onClose, onConnectBank }: Pro
   const [name, setName] = useState("");
   const [bank, setBank] = useState("");
   const [balance, setBalance] = useState("");
-  const [color, setColor] = useState(PALETTE[0]);
   const [lastFour, setLastFour] = useState("");
+  const [includeInNetworth, setIncludeInNetworth] = useState(true);
+  const [isJoint, setIsJoint] = useState(false);
 
   const reset = () => {
     setStep("choose");
@@ -105,8 +107,9 @@ export default function AddAccountModal({ visible, onClose, onConnectBank }: Pro
     setName("");
     setBank("");
     setBalance("");
-    setColor(PALETTE[0]);
     setLastFour("");
+    setIncludeInNetworth(true);
+    setIsJoint(false);
   };
 
   const handleClose = () => {
@@ -132,16 +135,20 @@ export default function AddAccountModal({ visible, onClose, onConnectBank }: Pro
   };
 
   const handleSave = () => {
-    if (!name.trim() || !bank.trim() || !selectedSubType) return;
+    if (!name.trim() || !selectedSubType) return;
     Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
-    addAccount({
+    const newId = addAccount({
       name: name.trim(),
       bank: bank.trim(),
       balance: parseFloat(balance || "0"),
       type: selectedSubType.type,
-      color,
+      color: PALETTE[0],
+      currency: "CAD",
       lastFour: lastFour.trim() || undefined,
+      includeInNetworth,
+      isJoint,
     });
+    if (bank.trim()) remapEmailTransactions(bank.trim(), newId);
     handleClose();
   };
 
@@ -336,101 +343,151 @@ export default function AddAccountModal({ visible, onClose, onConnectBank }: Pro
         {step === "form" && (
           <>
             <ScrollView
-              contentContainerStyle={[
-                styles.formContent,
-                { paddingBottom: insets.bottom + 100 },
-              ]}
+              contentContainerStyle={{ paddingBottom: (Platform.OS === "web" ? 20 : insets.bottom) + 100 }}
               keyboardShouldPersistTaps="handled"
               showsVerticalScrollIndicator={false}
             >
-              {/* Selected type chip */}
-              {selectedSubType && (
-                <View
-                  style={[
-                    styles.selectedTypeChip,
-                    { backgroundColor: colors.primary + "15", borderColor: colors.primary + "40" },
-                  ]}
-                >
-                  <Feather name={selectedSubType.icon as any} size={16} color={colors.primary} />
-                  <Text style={[styles.selectedTypeText, { color: colors.primary }]}>
-                    {selectedSubType.label}
+              <View style={[styles.formCard, { backgroundColor: colors.card, borderColor: colors.border }]}>
+
+                {/* Row 1 — Account type (from step 2) */}
+                <TouchableOpacity style={styles.fRow} onPress={() => setStep("type")} activeOpacity={0.7}>
+                  <View style={[styles.fIcon, { backgroundColor: colors.primary + "18" }]}>
+                    <Feather name={selectedSubType?.icon as any ?? "credit-card"} size={18} color={colors.primary} />
+                  </View>
+                  <Text style={[styles.fLabel, { color: colors.foreground }]} numberOfLines={1}>
+                    {selectedSubType?.label ?? "Account"}
                   </Text>
-                  <TouchableOpacity onPress={() => setStep("type")} hitSlop={8}>
-                    <Feather name="edit-2" size={13} color={colors.primary} />
-                  </TouchableOpacity>
+                  <View style={[styles.fIconRight, { backgroundColor: colors.muted }]}>
+                    <Feather name="settings" size={16} color={colors.mutedForeground} />
+                  </View>
+                </TouchableOpacity>
+
+                <View style={[styles.fDivider, { backgroundColor: colors.border }]} />
+
+                {/* Row 2 — Bank / Institution */}
+                <View style={styles.fRow}>
+                  <View style={[styles.fIcon, { backgroundColor: "#e8f0fe" }]}>
+                    <Feather name="briefcase" size={18} color="#4a6fa5" />
+                  </View>
+                  <TextInput
+                    style={[styles.fInput, { color: colors.foreground }]}
+                    placeholder="Select Bank/Institution"
+                    placeholderTextColor={colors.mutedForeground}
+                    value={bank}
+                    onChangeText={setBank}
+                    returnKeyType="next"
+                  />
+                  <Feather name="chevron-right" size={18} color={colors.mutedForeground} />
                 </View>
-              )}
 
-              <View style={styles.formSection}>
-                <Text style={[styles.formLabel, { color: colors.mutedForeground }]}>
-                  Account Name
-                </Text>
-                <TextInput
-                  style={[styles.input, { backgroundColor: colors.card, color: colors.foreground, borderColor: colors.border }]}
-                  placeholder={selectedSubType?.label || "e.g. Main Checking"}
-                  placeholderTextColor={colors.mutedForeground}
-                  value={name}
-                  onChangeText={setName}
-                />
-              </View>
+                <View style={[styles.fDivider, { backgroundColor: colors.border }]} />
 
-              <View style={styles.formSection}>
-                <Text style={[styles.formLabel, { color: colors.mutedForeground }]}>
-                  Bank / Institution
-                </Text>
-                <TextInput
-                  style={[styles.input, { backgroundColor: colors.card, color: colors.foreground, borderColor: colors.border }]}
-                  placeholder="e.g. Chase Bank"
-                  placeholderTextColor={colors.mutedForeground}
-                  value={bank}
-                  onChangeText={setBank}
-                />
-              </View>
-
-              <View style={styles.formSection}>
-                <Text style={[styles.formLabel, { color: colors.mutedForeground }]}>
-                  Current Balance
-                </Text>
-                <TextInput
-                  style={[styles.input, { backgroundColor: colors.card, color: colors.foreground, borderColor: colors.border }]}
-                  placeholder="0.00"
-                  placeholderTextColor={colors.mutedForeground}
-                  keyboardType="decimal-pad"
-                  value={balance}
-                  onChangeText={setBalance}
-                />
-              </View>
-
-              <View style={styles.formSection}>
-                <Text style={[styles.formLabel, { color: colors.mutedForeground }]}>
-                  Last 4 Digits (optional)
-                </Text>
-                <TextInput
-                  style={[styles.input, { backgroundColor: colors.card, color: colors.foreground, borderColor: colors.border }]}
-                  placeholder="1234"
-                  placeholderTextColor={colors.mutedForeground}
-                  keyboardType="number-pad"
-                  maxLength={4}
-                  value={lastFour}
-                  onChangeText={setLastFour}
-                />
-              </View>
-
-              <View style={styles.formSection}>
-                <Text style={[styles.formLabel, { color: colors.mutedForeground }]}>
-                  Color
-                </Text>
-                <View style={styles.paletteRow}>
-                  {PALETTE.map((c) => (
-                    <TouchableOpacity
-                      key={c}
-                      style={[styles.colorDot, { backgroundColor: c }, color === c && styles.selectedDot]}
-                      onPress={() => setColor(c)}
-                    >
-                      {color === c && <Feather name="check" size={14} color="#fff" />}
-                    </TouchableOpacity>
-                  ))}
+                {/* Row 3 — Account Name */}
+                <View style={styles.fRow}>
+                  <View style={[styles.fIcon, { backgroundColor: "#e8f0fe" }]}>
+                    <Feather name="credit-card" size={18} color="#4a6fa5" />
+                  </View>
+                  <TextInput
+                    style={[styles.fInput, { color: colors.foreground }]}
+                    placeholder="Account Name"
+                    placeholderTextColor={colors.mutedForeground}
+                    value={name}
+                    onChangeText={setName}
+                    returnKeyType="next"
+                  />
                 </View>
+
+                <View style={[styles.fDivider, { backgroundColor: colors.border }]} />
+
+                {/* Row 4 — Account Number */}
+                <View style={[styles.fRow, { alignItems: "flex-start", paddingVertical: 14 }]}>
+                  <View style={[styles.fIcon, { backgroundColor: "#e8f0fe", marginTop: 2 }]}>
+                    <Feather name="hash" size={18} color="#4a6fa5" />
+                  </View>
+                  <View style={{ flex: 1, gap: 4 }}>
+                    <TextInput
+                      style={[styles.fInput, { color: colors.foreground, paddingVertical: 0 }]}
+                      placeholder="Account Number"
+                      placeholderTextColor={colors.mutedForeground}
+                      keyboardType="number-pad"
+                      maxLength={4}
+                      value={lastFour}
+                      onChangeText={setLastFour}
+                      returnKeyType="next"
+                    />
+                    <Text style={[styles.fSublabel, { color: colors.mutedForeground }]}>
+                      Entering last 4 digit is recommended.
+                    </Text>
+                  </View>
+                </View>
+
+                <View style={[styles.fDivider, { backgroundColor: colors.border }]} />
+
+                {/* Row 5 — Currency (static CAD) */}
+                <View style={styles.fRow}>
+                  <View style={[styles.fIcon, { backgroundColor: "#e8f4f0" }]}>
+                    <Feather name="repeat" size={18} color="#2e8b6e" />
+                  </View>
+                  <View style={{ flex: 1 }}>
+                    <Text style={[styles.fSubtitle, { color: colors.mutedForeground }]}>Currency</Text>
+                    <Text style={[styles.fLabel, { color: colors.foreground }]}>CAD</Text>
+                  </View>
+                  <Feather name="chevron-right" size={18} color={colors.mutedForeground} />
+                </View>
+
+                <View style={[styles.fDivider, { backgroundColor: colors.border }]} />
+
+                {/* Row 6 — Starting balance */}
+                <View style={styles.fRow}>
+                  <View style={[styles.fIcon, { backgroundColor: "#e8f0fe" }]}>
+                    <Feather name="dollar-sign" size={18} color="#4a6fa5" />
+                  </View>
+                  <TextInput
+                    style={[styles.fInput, { color: colors.foreground }]}
+                    placeholder="Starting balance"
+                    placeholderTextColor={colors.mutedForeground}
+                    keyboardType="decimal-pad"
+                    value={balance}
+                    onChangeText={setBalance}
+                  />
+                </View>
+
+                <View style={[styles.fDivider, { backgroundColor: colors.border }]} />
+
+                {/* Row 7 — Include in net worth */}
+                <View style={[styles.fRow, { minHeight: 60 }]}>
+                  <View style={[styles.fIcon, { backgroundColor: "#e8f4f0" }]}>
+                    <Feather name="archive" size={18} color="#2e8b6e" />
+                  </View>
+                  <Text style={[styles.fLabel, { color: colors.foreground, flex: 1, flexWrap: "wrap", paddingRight: 8 }]}>
+                    Include balance of this account into overall balance or net worth.
+                  </Text>
+                  <Switch
+                    value={includeInNetworth}
+                    onValueChange={setIncludeInNetworth}
+                    trackColor={{ false: colors.muted, true: colors.primary }}
+                    thumbColor="#fff"
+                  />
+                </View>
+
+                <View style={[styles.fDivider, { backgroundColor: colors.border }]} />
+
+                {/* Row 8 — Joint account */}
+                <View style={styles.fRow}>
+                  <View style={[styles.fIcon, { backgroundColor: "#e8f0fe" }]}>
+                    <Feather name="users" size={18} color="#4a6fa5" />
+                  </View>
+                  <Text style={[styles.fLabel, { color: colors.foreground, flex: 1 }]}>
+                    Joint account
+                  </Text>
+                  <Switch
+                    value={isJoint}
+                    onValueChange={setIsJoint}
+                    trackColor={{ false: colors.muted, true: colors.primary }}
+                    thumbColor="#fff"
+                  />
+                </View>
+
               </View>
             </ScrollView>
 
@@ -449,25 +506,23 @@ export default function AddAccountModal({ visible, onClose, onConnectBank }: Pro
                 style={[styles.backBtn, { borderColor: colors.border }]}
                 onPress={() => setStep("type")}
               >
-                <Text style={[styles.backBtnText, { color: colors.foreground }]}>
-                  BACK
-                </Text>
+                <Text style={[styles.backBtnText, { color: colors.foreground }]}>BACK</Text>
               </TouchableOpacity>
               <TouchableOpacity
                 style={[
                   styles.nextBtn,
-                  { backgroundColor: name.trim() && bank.trim() ? colors.primary : colors.muted },
+                  { backgroundColor: name.trim() ? colors.primary : colors.muted },
                 ]}
                 onPress={handleSave}
-                disabled={!name.trim() || !bank.trim()}
+                disabled={!name.trim()}
               >
                 <Text
                   style={[
                     styles.nextBtnText,
-                    { color: name.trim() && bank.trim() ? "#fff" : colors.mutedForeground },
+                    { color: name.trim() ? "#fff" : colors.mutedForeground },
                   ]}
                 >
-                  SAVE
+                  CREATE
                 </Text>
               </TouchableOpacity>
             </View>
@@ -552,28 +607,31 @@ const styles = StyleSheet.create({
   },
   nextBtnText: { fontSize: 14, fontFamily: "Inter_700Bold", letterSpacing: 0.5 },
 
-  // Step 3 — form
-  formContent: { padding: 20, gap: 22 },
-  selectedTypeChip: {
-    flexDirection: "row", alignItems: "center", gap: 8,
-    alignSelf: "flex-start", borderRadius: 50,
-    paddingHorizontal: 14, paddingVertical: 8, borderWidth: 1,
+  // Step 3 — flat-row form
+  formCard: {
+    marginHorizontal: 16, marginTop: 16,
+    borderRadius: 14, borderWidth: StyleSheet.hairlineWidth,
+    overflow: "hidden",
   },
-  selectedTypeText: { fontSize: 14, fontFamily: "Inter_600SemiBold" },
-  formSection: { gap: 8 },
-  formLabel: {
-    fontSize: 12, fontFamily: "Inter_500Medium",
-    textTransform: "uppercase", letterSpacing: 0.5,
+  fRow: {
+    flexDirection: "row", alignItems: "center",
+    paddingHorizontal: 16, paddingVertical: 12, gap: 12, minHeight: 54,
   },
-  input: {
-    borderWidth: 1, borderRadius: 12,
-    paddingHorizontal: 14, paddingVertical: 13,
-    fontSize: 15, fontFamily: "Inter_400Regular",
-  },
-  paletteRow: { flexDirection: "row", gap: 10, flexWrap: "wrap" },
-  colorDot: {
+  fDivider: { height: StyleSheet.hairlineWidth, marginLeft: 60 },
+  fIcon: {
     width: 36, height: 36, borderRadius: 18,
     alignItems: "center", justifyContent: "center",
+    flexShrink: 0,
   },
-  selectedDot: { borderWidth: 3, borderColor: "rgba(255,255,255,0.7)" },
+  fIconRight: {
+    width: 32, height: 32, borderRadius: 16,
+    alignItems: "center", justifyContent: "center",
+  },
+  fLabel: { fontSize: 15, fontFamily: "Inter_500Medium" },
+  fSubtitle: { fontSize: 11, fontFamily: "Inter_400Regular", marginBottom: 2 },
+  fSublabel: { fontSize: 12, fontFamily: "Inter_400Regular" },
+  fInput: {
+    flex: 1, fontSize: 15, fontFamily: "Inter_400Regular",
+    paddingVertical: 4,
+  },
 });

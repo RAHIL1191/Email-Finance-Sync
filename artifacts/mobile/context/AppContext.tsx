@@ -32,8 +32,11 @@ export interface Account {
   type: "checking" | "savings" | "credit" | "investment";
   color: string;
   lastFour?: string;
+  currency?: string;
   /** When false, this account is excluded from net worth. Defaults to true. */
   includeInNetworth?: boolean;
+  /** Whether this is a joint account shared with another person */
+  isJoint?: boolean;
   /** Set when this account was imported via Plaid */
   plaidItemId?: string;
   plaidAccountId?: string;
@@ -83,7 +86,8 @@ interface AppContextType {
   addTransaction: (t: Omit<Transaction, "id">) => void;
   updateTransaction: (id: string, t: Partial<Transaction>) => void;
   deleteTransaction: (id: string) => void;
-  addAccount: (a: Omit<Account, "id">) => void;
+  addAccount: (a: Omit<Account, "id">) => string;
+  remapEmailTransactions: (bankPattern: string, accountId: string) => void;
   updateAccount: (id: string, a: Partial<Account>) => void;
   deleteAccount: (id: string) => void;
   addBill: (b: Omit<Bill, "id">) => void;
@@ -283,10 +287,23 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
   }, []);
 
   // ── CRUD: Accounts ────────────────────────────────────────────────────────
-  const addAccount = useCallback((a: Omit<Account, "id">) => {
+  const addAccount = useCallback((a: Omit<Account, "id">): string => {
     const newA: Account = { ...a, id: genId() };
     setAccounts((prev) => [...prev, newA]);
     apiCall("/api/accounts", "POST", householdIdRef.current, deviceIdRef.current, newA);
+    return newA.id;
+  }, []);
+
+  const remapEmailTransactions = useCallback((bankPattern: string, accountId: string) => {
+    if (!bankPattern.trim()) return;
+    const pattern = bankPattern.trim().toLowerCase();
+    setTransactions((prev) =>
+      prev.map((t) =>
+        t.source === "email" && t.bank && t.bank.toLowerCase().includes(pattern)
+          ? { ...t, accountId }
+          : t
+      )
+    );
   }, []);
 
   const updateAccount = useCallback((id: string, updates: Partial<Account>) => {
@@ -586,7 +603,7 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
       value={{
         transactions, accounts, bills, emailSync, plaidSync,
         addTransaction, updateTransaction, deleteTransaction,
-        addAccount, updateAccount, deleteAccount,
+        addAccount, remapEmailTransactions, updateAccount, deleteAccount,
         addBill, updateBill, deleteBill, markBillPaid,
         connectEmail, disconnectEmail, syncEmailTransactions,
         connectPlaid, syncPlaidTransactions, disconnectPlaid,
