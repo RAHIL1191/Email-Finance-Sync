@@ -532,6 +532,34 @@ function ConnectedInstitutionsModal({
                   </Text>
                 </View>
               )}
+              {emailSync.lastParsed && emailSync.lastParsed.length > 0 && (
+                <View style={{ gap: 8 }}>
+                  <Text style={[styles.plaidLastSync, { color: colors.mutedForeground }]}>Parsed transaction details:</Text>
+                  {emailSync.lastParsed.slice(0, 5).map((p, idx) => (
+                    <View
+                      key={`${p.rawSubject}-${idx}`}
+                      style={{
+                        padding: 10,
+                        borderRadius: 12,
+                        backgroundColor: colors.background,
+                        borderWidth: 1,
+                        borderColor: colors.border,
+                        gap: 2,
+                      }}
+                    >
+                      <Text style={[styles.plaidBankName, { color: colors.foreground }]} numberOfLines={1}>
+                        {p.merchant || p.title || "Transaction"}
+                      </Text>
+                      <Text style={[styles.plaidSub, { color: colors.mutedForeground }]} numberOfLines={1}>
+                        {p.bank} · ${p.amount.toFixed(2)} · {p.type}
+                      </Text>
+                      <Text style={[styles.plaidSub, { color: colors.mutedForeground }]} numberOfLines={1}>
+                        {p.rawSubject}
+                      </Text>
+                    </View>
+                  ))}
+                </View>
+              )}
               <View style={{ flexDirection: "row", gap: 10 }}>
                 <TouchableOpacity
                   style={[styles.plaidSyncBtn, { backgroundColor: colors.success, opacity: isSyncing ? 0.7 : 1, flex: 1 }]}

@@ -62,6 +62,15 @@ export interface EmailSync {
   lastSynced?: string;
   lastEmailsScanned?: number;
   lastImported?: number;
+  lastParsed?: Array<{
+    title: string;
+    merchant: string;
+    amount: number;
+    type: "income" | "expense";
+    bank: string;
+    rawSubject: string;
+    lastFour?: string;
+  }>;
 }
 
 export interface PlaidItem {
@@ -473,6 +482,7 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
         lastSynced: new Date().toISOString(),
         lastEmailsScanned: data.emailsScanned,
         lastImported: data.transactionsFound,
+        lastParsed: Array.isArray(data.parsed) ? data.parsed : [],
       }));
       setIsSyncing(false);
       return { imported: importedTransactions.length };
