@@ -510,6 +510,9 @@ function EditAccountModal({
     account?.includeInNetworth !== false
   );
   const [isJoint, setIsJoint] = useState(account?.isJoint ?? false);
+  const [accountType, setAccountType] = useState<"checking" | "savings" | "credit" | "investment">(
+    account?.type ?? "checking"
+  );
   const [showBankPicker, setShowBankPicker] = useState(false);
   const [bankSearch, setBankSearch] = useState("");
 
@@ -522,6 +525,7 @@ function EditAccountModal({
       setLastFour(account.lastFour ?? "");
       setIncludeInNetworth(account.includeInNetworth !== false);
       setIsJoint(account.isJoint ?? false);
+      setAccountType(account.type ?? "checking");
     }
   }, [visible]);
 
@@ -540,6 +544,7 @@ function EditAccountModal({
       lastFour: lastFour.trim() || undefined,
       includeInNetworth,
       isJoint,
+      type: accountType,
     });
     Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
     onClose();
@@ -717,6 +722,43 @@ function EditAccountModal({
                 trackColor={{ false: colors.muted, true: colors.primary }}
                 thumbColor="#fff"
               />
+            </View>
+
+            <View style={[styles.editDivider, { backgroundColor: colors.border }]} />
+
+            {/* Account type */}
+            <View style={[styles.editRow, { flexWrap: "wrap", gap: 8, paddingVertical: 14 }]}>
+              <View style={[styles.formIcon, { backgroundColor: "#e8f0fe" }]}>
+                <Feather name="layers" size={18} color="#4a6fa5" />
+              </View>
+              <Text style={[styles.editLabel, { color: colors.foreground }]}>Account Type</Text>
+              <View style={styles.typeChipRow}>
+                {(["checking", "savings", "credit", "investment"] as const).map((t) => {
+                  const active = accountType === t;
+                  const label = t === "checking" ? "Chequing" : t === "savings" ? "Savings" : t === "credit" ? "Credit" : "Investment";
+                  return (
+                    <TouchableOpacity
+                      key={t}
+                      style={[
+                        styles.typeChip,
+                        {
+                          backgroundColor: active ? colors.primary : colors.muted,
+                          borderColor: active ? colors.primary : colors.border,
+                        },
+                      ]}
+                      onPress={() => {
+                        Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
+                        setAccountType(t);
+                      }}
+                      activeOpacity={0.7}
+                    >
+                      <Text style={[styles.typeChipLabel, { color: active ? "#fff" : colors.mutedForeground }]}>
+                        {label}
+                      </Text>
+                    </TouchableOpacity>
+                  );
+                })}
+              </View>
             </View>
           </View>
         </ScrollView>
@@ -973,6 +1015,29 @@ export default function AccountDetailScreen() {
           <Text style={[styles.accountNameLg, { color: colors.foreground }]}>
             {account.name}
           </Text>
+          <View style={styles.accountMeta}>
+            {account.bank ? (
+              <Text style={[styles.accountMetaBank, { color: colors.mutedForeground }]}>
+                {account.bank}
+              </Text>
+            ) : null}
+            {account.lastFour ? (
+              <View style={[styles.accountCardChip, { backgroundColor: colors.card, borderColor: colors.border }]}>
+                <Feather name="credit-card" size={12} color={colors.mutedForeground} />
+                <Text style={[styles.accountCardNumber, { color: colors.foreground }]}>
+                  •••• {account.lastFour}
+                </Text>
+              </View>
+            ) : null}
+            <View style={[styles.accountTypePill, { backgroundColor: account.color + "22" }]}>
+              <Text style={[styles.accountTypeLabel, { color: account.color }]}>
+                {account.type === "checking" ? "Chequing"
+                  : account.type === "savings" ? "Savings"
+                  : account.type === "credit" ? "Credit"
+                  : "Investment"}
+              </Text>
+            </View>
+          </View>
         </View>
 
         {/* ── Balance ── */}
@@ -1218,6 +1283,18 @@ const styles = StyleSheet.create({
   },
   accountBadgeLgText: { color: "#fff", fontSize: 24, fontFamily: "Inter_700Bold" },
   accountNameLg: { fontSize: 20, fontFamily: "Inter_700Bold" },
+  accountMeta: { alignItems: "center", gap: 8, marginTop: 2 },
+  accountMetaBank: { fontSize: 13, fontFamily: "Inter_400Regular" },
+  accountCardChip: {
+    flexDirection: "row", alignItems: "center", gap: 6,
+    borderRadius: 20, borderWidth: 1,
+    paddingHorizontal: 12, paddingVertical: 5,
+  },
+  accountCardNumber: { fontSize: 14, fontFamily: "Inter_600SemiBold", letterSpacing: 1 },
+  accountTypePill: {
+    borderRadius: 20, paddingHorizontal: 14, paddingVertical: 5,
+  },
+  accountTypeLabel: { fontSize: 12, fontFamily: "Inter_700Bold", letterSpacing: 0.4 },
 
   // Balance
   balanceSection: { alignItems: "center", paddingTop: 12, gap: 4 },
@@ -1384,4 +1461,12 @@ const styles = StyleSheet.create({
     borderRadius: 12, borderWidth: 1,
     paddingHorizontal: 12, paddingVertical: 10,
   },
+  typeChipRow: {
+    flexDirection: "row", flexWrap: "wrap", gap: 8, flex: 1,
+  },
+  typeChip: {
+    borderRadius: 20, borderWidth: 1,
+    paddingHorizontal: 14, paddingVertical: 7,
+  },
+  typeChipLabel: { fontSize: 13, fontFamily: "Inter_600SemiBold" },
 });
