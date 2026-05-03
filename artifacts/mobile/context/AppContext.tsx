@@ -271,16 +271,11 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
         householdIdRef.current = hId;
         setHouseholdId(hId);
 
-        setTransactions([]);
-        setAccounts([]);
-        setBills([]);
+        setTransactions(txRaw ? JSON.parse(txRaw) : []);
+        setAccounts(accRaw ? JSON.parse(accRaw) : []);
+        setBills(billRaw ? JSON.parse(billRaw) : []);
         if (emailRaw) setEmailSync(JSON.parse(emailRaw));
         if (plaidRaw) setPlaidSync(JSON.parse(plaidRaw));
-        await Promise.all([
-          AsyncStorage.removeItem(STORAGE_KEYS.transactions),
-          AsyncStorage.removeItem(STORAGE_KEYS.accounts),
-          AsyncStorage.removeItem(STORAGE_KEYS.bills),
-        ]);
       } catch {}
       setInitialized(true);
     })();
