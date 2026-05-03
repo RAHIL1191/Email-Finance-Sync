@@ -567,46 +567,20 @@ function ExpenseTab({ onSave }: { onSave: () => void }) {
         onSelect={setAccountId}
         onClose={() => setShowAccPicker(false)}
       />
-      <Modal visible={showDatePicker} transparent animationType="fade" onRequestClose={() => setShowDatePicker(false)}>
-        <TouchableOpacity style={styles.overlay} activeOpacity={1} onPress={() => setShowDatePicker(false)} />
-        <View style={styles.centerPicker}>
-          <View style={[styles.centerPickerCard, { backgroundColor: colors.card }]}>
-            <Text style={[styles.pickerTitle, { color: colors.foreground }]}>Select Date</Text>
-            <DateTimePicker
-              value={date}
-              mode="date"
-              display={Platform.OS === "ios" ? "spinner" : "default"}
-              onChange={(_, d) => {
-                if (d) setDate(d);
-                if (Platform.OS !== "ios") setShowDatePicker(false);
-              }}
-            />
-            <TouchableOpacity onPress={() => setShowDatePicker(false)} style={styles.centerPickerBtn}>
-              <Text style={styles.centerPickerBtnText}>Done</Text>
-            </TouchableOpacity>
-          </View>
-        </View>
-      </Modal>
-      <Modal visible={showTimePicker} transparent animationType="fade" onRequestClose={() => setShowTimePicker(false)}>
-        <TouchableOpacity style={styles.overlay} activeOpacity={1} onPress={() => setShowTimePicker(false)} />
-        <View style={styles.centerPicker}>
-          <View style={[styles.centerPickerCard, { backgroundColor: colors.card }]}>
-            <Text style={[styles.pickerTitle, { color: colors.foreground }]}>Select Time</Text>
-            <DateTimePicker
-              value={date}
-              mode="time"
-              display={Platform.OS === "ios" ? "spinner" : "default"}
-              onChange={(_, d) => {
-                if (d) setDate(d);
-                if (Platform.OS !== "ios") setShowTimePicker(false);
-              }}
-            />
-            <TouchableOpacity onPress={() => setShowTimePicker(false)} style={styles.centerPickerBtn}>
-              <Text style={styles.centerPickerBtnText}>Done</Text>
-            </TouchableOpacity>
-          </View>
-        </View>
-      </Modal>
+      <DatePickerModal
+        visible={showDatePicker}
+        title="Select Date"
+        date={date}
+        onChange={setDate}
+        onClose={() => setShowDatePicker(false)}
+      />
+      <DatePickerModal
+        visible={showTimePicker}
+        title="Select Time"
+        date={date}
+        onChange={setDate}
+        onClose={() => setShowTimePicker(false)}
+      />
     </ScrollView>
   );
 }
