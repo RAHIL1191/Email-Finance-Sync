@@ -12,7 +12,7 @@ import {
 } from "react-native";
 import { SafeAreaView } from "react-native-safe-area-context";
 
-import AddBillModal from "@/components/AddBillModal";
+import AddEntrySheet from "@/components/AddEntrySheet";
 import BillFilterModal, {
   BillFilterSettings,
   DEFAULT_FILTER,
@@ -519,7 +519,7 @@ export default function BillsScreen() {
         <Feather name="plus" size={24} color="#fff" />
       </TouchableOpacity>
 
-      <AddBillModal visible={showAdd} onClose={() => setShowAdd(false)} />
+      <AddEntrySheet visible={showAdd} initialTab="BILLS" onClose={() => setShowAdd(false)} />
 
       <BillFilterModal
         visible={showFilter}

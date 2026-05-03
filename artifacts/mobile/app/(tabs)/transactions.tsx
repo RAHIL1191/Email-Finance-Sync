@@ -13,7 +13,7 @@ import {
 } from "react-native";
 import { SafeAreaView } from "react-native-safe-area-context";
 
-import AddTransactionModal from "@/components/AddTransactionModal";
+import AddEntrySheet from "@/components/AddEntrySheet";
 import MonthDetailModal from "@/components/MonthDetailModal";
 import TransactionDetailModal from "@/components/TransactionDetailModal";
 import TransactionItem from "@/components/TransactionItem";
@@ -1013,7 +1013,7 @@ function TransactionsTab({ transactions, colors }: { transactions: Transaction[]
         }
       />
 
-      <AddTransactionModal visible={showAdd} onClose={() => setShowAdd(false)} />
+      <AddEntrySheet visible={showAdd} initialTab="EXPENSE" onClose={() => setShowAdd(false)} />
       <TransactionDetailModal
         visible={!!selectedTx}
         onClose={() => setSelectedTx(null)}
@@ -1111,7 +1111,7 @@ export default function InsightsScreen() {
         <Feather name="plus" size={24} color={colors.primary} />
       </TouchableOpacity>
 
-      <AddTransactionModal visible={showAdd} onClose={() => setShowAdd(false)} />
+      <AddEntrySheet visible={showAdd} initialTab="EXPENSE" onClose={() => setShowAdd(false)} />
       <MonthDetailModal
         visible={!!selectedMonth}
         onClose={() => setSelectedMonth(null)}

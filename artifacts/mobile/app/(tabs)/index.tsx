@@ -14,7 +14,7 @@ import {
 } from "react-native";
 import { SafeAreaView } from "react-native-safe-area-context";
 
-import AddTransactionModal from "@/components/AddTransactionModal";
+import AddEntrySheet from "@/components/AddEntrySheet";
 import { useApp } from "@/context/AppContext";
 import { useDrawer } from "@/context/DrawerContext";
 import { useColors } from "@/hooks/useColors";
@@ -474,7 +474,7 @@ export default function HomeScreen() {
 
       </ScrollView>
 
-      <AddTransactionModal visible={showAddTx} onClose={() => setShowAddTx(false)} />
+      <AddEntrySheet visible={showAddTx} initialTab="EXPENSE" onClose={() => setShowAddTx(false)} />
     </SafeAreaView>
   );
 }

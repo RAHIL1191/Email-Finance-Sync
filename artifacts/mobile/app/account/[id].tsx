@@ -28,7 +28,7 @@ import {
 } from "react-native-svg";
 import { SafeAreaView, useSafeAreaInsets } from "react-native-safe-area-context";
 
-import AddTransactionModal from "@/components/AddTransactionModal";
+import AddEntrySheet from "@/components/AddEntrySheet";
 import ConfirmModal from "@/components/ConfirmModal";
 import TransactionDetailModal from "@/components/TransactionDetailModal";
 import { CATEGORY_COLORS, CATEGORY_ICONS } from "@/components/TransactionItem";
@@ -1266,8 +1266,9 @@ export default function AccountDetailScreen() {
         }}
       />
 
-      <AddTransactionModal
+      <AddEntrySheet
         visible={showAddTx}
+        initialTab="EXPENSE"
         onClose={() => setShowAddTx(false)}
       />
 
