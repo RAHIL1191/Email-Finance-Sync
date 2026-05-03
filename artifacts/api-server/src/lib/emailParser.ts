@@ -6,6 +6,8 @@ export interface ParsedTransaction {
   bank: string;
   date: string;
   rawSubject: string;
+  /** Last 4 digits of the card/account if mentioned in the email */
+  lastFour?: string;
 }
 
 interface BankPattern {
@@ -600,6 +602,26 @@ function stripSubjectPrefixes(subject: string): string {
   return subject.replace(/^(Fwd?:|Re:|TR:|Réf?:|AW:|\[Fwd\])\s*/gi, "").trim();
 }
 
+/**
+ * Extract the last 4 digits of a card/account number from email text.
+ * Handles patterns like "card ending in 1234", "•••• 1234", "****1234", "account ending in 1234".
+ */
+function extractLastFour(text: string): string | undefined {
+  const patterns = [
+    /(?:card|account|carte|compte)\s+ending\s+in\s+(\d{4})\b/i,
+    /ending\s+in\s+(\d{4})\b/i,
+    /(?:card|account|carte|compte)\s+#\s*\d*(\d{4})\b/i,
+    /[*•x]{3,}\s*(\d{4})\b/i,
+    /\b(?:no\.?|number:?)\s*[*•x\d]*(\d{4})\b/i,
+    /\bcard\s+\d*(\d{4})\b/i,
+  ];
+  for (const pat of patterns) {
+    const m = text.match(pat);
+    if (m) return m[1];
+  }
+  return undefined;
+}
+
 export function parseEmailContent(
   fromAddress: string,
   subject: string,
@@ -644,6 +666,8 @@ export function parseEmailContent(
       if (result) {
         result.date = emailDate.toISOString();
         result.bank = bankPattern.bankName !== "Bank" ? bankPattern.bankName : result.bank;
+        // Extract last 4 digits of the card/account if mentioned in the email
+        result.lastFour = extractLastFour(combined);
         // Tag forwarded transactions so the UI can show it if needed
         if (isForwarded) (result as any).forwarded = true;
         return result;

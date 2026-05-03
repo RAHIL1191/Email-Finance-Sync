@@ -199,6 +199,26 @@ function dedupKey(t: { amount: number; title: string; date: string }) {
   return `${t.amount}-${t.title.toLowerCase().trim()}-${t.date.slice(0, 10)}`;
 }
 
+/** Find the best matching account for a bank name and optional last-4 digits */
+function findAccountMatch(
+  accounts: Account[],
+  bank: string,
+  lastFour?: string
+): Account | undefined {
+  const bankLower = bank.trim().toLowerCase();
+  if (lastFour) {
+    const strict = accounts.find(
+      (a) =>
+        a.lastFour === lastFour &&
+        (a.bank.toLowerCase().includes(bankLower) || bankLower.includes(a.bank.toLowerCase()))
+    );
+    if (strict) return strict;
+  }
+  return accounts.find(
+    (a) => a.bank.toLowerCase().includes(bankLower) || bankLower.includes(a.bank.toLowerCase())
+  );
+}
+
 // ── Provider ─────────────────────────────────────────────────────────────────
 
 export function AppProvider({ children }: { children: React.ReactNode }) {
@@ -213,6 +233,7 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
   const [householdId, setHouseholdId] = useState<string>("");
   const deviceIdRef = useRef<string>("");
   const householdIdRef = useRef<string>("");
+  const accountsRef = useRef<Account[]>([]);
 
   useEffect(() => {
     (async () => {
@@ -249,7 +270,10 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
   }, []);
 
   useEffect(() => { if (initialized) AsyncStorage.setItem(STORAGE_KEYS.transactions, JSON.stringify(transactions)); }, [transactions, initialized]);
-  useEffect(() => { if (initialized) AsyncStorage.setItem(STORAGE_KEYS.accounts, JSON.stringify(accounts)); }, [accounts, initialized]);
+  useEffect(() => {
+    if (initialized) AsyncStorage.setItem(STORAGE_KEYS.accounts, JSON.stringify(accounts));
+    accountsRef.current = accounts;
+  }, [accounts, initialized]);
   useEffect(() => { if (initialized) AsyncStorage.setItem(STORAGE_KEYS.bills, JSON.stringify(bills)); }, [bills, initialized]);
   useEffect(() => { if (initialized) AsyncStorage.setItem(STORAGE_KEYS.emailSync, JSON.stringify(emailSync)); }, [emailSync, initialized]);
   useEffect(() => { if (initialized) AsyncStorage.setItem(STORAGE_KEYS.plaidSync, JSON.stringify(plaidSync)); }, [plaidSync, initialized]);
@@ -288,6 +312,11 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
 
   // ── CRUD: Accounts ────────────────────────────────────────────────────────
   const addAccount = useCallback((a: Omit<Account, "id">): string => {
+    // Dedup: if lastFour + bank already matches an existing account, return its ID
+    if (a.lastFour && a.bank) {
+      const existing = findAccountMatch(accountsRef.current, a.bank, a.lastFour);
+      if (existing) return existing.id;
+    }
     const newA: Account = { ...a, id: genId() };
     setAccounts((prev) => [...prev, newA]);
     apiCall("/api/accounts", "POST", householdIdRef.current, deviceIdRef.current, newA);
@@ -399,22 +428,29 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
       const data = await res.json();
       if (!res.ok) { setIsSyncing(false); return { imported: 0, error: data.error || "Sync failed" }; }
 
-      const defaultAccountId = accounts[0]?.id || "acc1";
+      const currentAccounts = accountsRef.current;
+      const defaultAccountId = currentAccounts[0]?.id || "acc1";
       let imported = 0;
 
       if (data.transactions && Array.isArray(data.transactions)) {
-        const newTxs: Transaction[] = data.transactions.map((t: any) => ({
-          id: genId(),
-          title: t.title || "Transaction",
-          amount: t.amount,
-          type: t.type,
-          category: t.category || "Other",
-          accountId: defaultAccountId,
-          date: t.date || new Date().toISOString(),
-          source: "email" as const,
-          fromEmail: true,
-          bank: t.bank || "Bank",
-        }));
+        const newTxs: Transaction[] = data.transactions.map((t: any) => {
+          // Match transaction to best account by lastFour + bank, then bank only
+          const matched = t.bank
+            ? findAccountMatch(currentAccounts, t.bank, t.lastFour ?? undefined)
+            : undefined;
+          return {
+            id: genId(),
+            title: t.title || "Transaction",
+            amount: t.amount,
+            type: t.type,
+            category: t.category || "Other",
+            accountId: matched?.id ?? defaultAccountId,
+            date: t.date || new Date().toISOString(),
+            source: "email" as const,
+            fromEmail: true,
+            bank: t.bank || "Bank",
+          };
+        });
         setTransactions((prev) => {
           // Dedup against ALL existing transactions regardless of source
           const existingKeys = new Set(prev.map(dedupKey));
@@ -449,21 +485,71 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
       newAccounts: Omit<Account, "id">[],
       initialTransactions: Omit<Transaction, "id">[]
     ): Promise<{ imported: number }> => {
-      // Add accounts
-      const createdAccounts: Account[] = newAccounts.map((a) => ({ ...a, id: genId() }));
-      setAccounts((prev) => [...prev, ...createdAccounts]);
+      const current = accountsRef.current;
 
-      // Map plaidAccountId → real accountId for transaction wiring
+      // Dedup: for each incoming Plaid account, check if it already exists locally
+      // by plaidAccountId first, then by lastFour + bank name match
       const plaidAccMap: Record<string, string> = {};
-      createdAccounts.forEach((a) => {
-        if (a.plaidAccountId) plaidAccMap[a.plaidAccountId] = a.id;
-      });
+      const toCreate: Account[] = [];
+      const toMerge: { id: string; updates: Partial<Account> }[] = [];
+
+      for (const a of newAccounts) {
+        // 1. Exact plaidAccountId match — already synced
+        if (a.plaidAccountId) {
+          const byPlaidId = current.find((e) => e.plaidAccountId === a.plaidAccountId);
+          if (byPlaidId) {
+            plaidAccMap[a.plaidAccountId] = byPlaidId.id;
+            continue;
+          }
+        }
+        // 2. lastFour + bank name match — manual account that should be linked
+        if (a.lastFour && a.bank) {
+          const existing = findAccountMatch(current, a.bank, a.lastFour);
+          if (existing && !existing.plaidAccountId) {
+            plaidAccMap[a.plaidAccountId ?? ""] = existing.id;
+            toMerge.push({
+              id: existing.id,
+              updates: { plaidAccountId: a.plaidAccountId, plaidItemId: item.itemId },
+            });
+            continue;
+          }
+        }
+        // 3. New account — create it
+        const created: Account = { ...a, id: genId() };
+        toCreate.push(created);
+        if (a.plaidAccountId) plaidAccMap[a.plaidAccountId] = created.id;
+      }
+
+      if (toCreate.length > 0) {
+        setAccounts((prev) => [...prev, ...toCreate]);
+        toCreate.forEach((a) =>
+          apiCall("/api/accounts", "POST", householdIdRef.current, deviceIdRef.current, a)
+        );
+      }
+      if (toMerge.length > 0) {
+        setAccounts((prev) =>
+          prev.map((a) => {
+            const upd = toMerge.find((u) => u.id === a.id);
+            return upd ? { ...a, ...upd.updates } : a;
+          })
+        );
+        toMerge.forEach(({ id, updates }) =>
+          apiCall(`/api/accounts/${id}`, "PUT", householdIdRef.current, deviceIdRef.current, updates)
+        );
+      }
+
+      // All real account IDs involved in this item (newly created + merged existing)
+      const allItemAccountIds = [
+        ...toCreate.map((a) => a.id),
+        ...toMerge.map((m) => m.id),
+      ];
 
       let imported = 0;
+      const fallbackId = toCreate[0]?.id ?? toMerge[0]?.id ?? current[0]?.id ?? "";
       const txsToAdd: Transaction[] = initialTransactions.map((t) => ({
         ...t,
         id: genId(),
-        accountId: (t.accountId && plaidAccMap[t.accountId]) || createdAccounts[0]?.id || t.accountId,
+        accountId: (t.accountId && plaidAccMap[t.accountId]) || fallbackId || t.accountId,
         source: "plaid" as const,
       }));
 
@@ -477,7 +563,7 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
       // Register item with accountIds
       const registeredItem: PlaidItem = {
         ...item,
-        accountIds: createdAccounts.map((a) => a.id),
+        accountIds: allItemAccountIds,
         lastSynced: new Date().toISOString(),
         lastImported: imported,
       };

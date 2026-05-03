@@ -2,6 +2,7 @@ import { Feather } from "@expo/vector-icons";
 import * as Haptics from "expo-haptics";
 import React, { useState } from "react";
 import {
+  Alert,
   KeyboardAvoidingView,
   Modal,
   Platform,
@@ -88,7 +89,7 @@ interface Props {
 export default function AddAccountModal({ visible, onClose, onConnectBank }: Props) {
   const colors = useColors();
   const insets = useSafeAreaInsets();
-  const { addAccount, remapEmailTransactions } = useApp();
+  const { addAccount, remapEmailTransactions, accounts } = useApp();
 
   const [step, setStep] = useState<Step>("choose");
   const [selectedSubType, setSelectedSubType] = useState<SubType | null>(null);
@@ -134,8 +135,8 @@ export default function AddAccountModal({ visible, onClose, onConnectBank }: Pro
     setStep("form");
   };
 
-  const handleSave = () => {
-    if (!name.trim() || !selectedSubType) return;
+  const doSave = () => {
+    if (!selectedSubType) return;
     Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
     const newId = addAccount({
       name: name.trim(),
@@ -150,6 +151,33 @@ export default function AddAccountModal({ visible, onClose, onConnectBank }: Pro
     });
     if (bank.trim()) remapEmailTransactions(bank.trim(), newId);
     handleClose();
+  };
+
+  const handleSave = () => {
+    if (!name.trim() || !selectedSubType) return;
+
+    // Warn if an account with the same last 4 + bank already exists
+    if (lastFour.trim() && bank.trim()) {
+      const bankLower = bank.trim().toLowerCase();
+      const duplicate = accounts.find(
+        (a) =>
+          a.lastFour === lastFour.trim() &&
+          (a.bank.toLowerCase().includes(bankLower) || bankLower.includes(a.bank.toLowerCase()))
+      );
+      if (duplicate) {
+        Alert.alert(
+          "Account Already Exists",
+          `"${duplicate.name}" at ${duplicate.bank} ending in ••••${duplicate.lastFour} already exists. Creating a duplicate may cause incorrect transaction matching.`,
+          [
+            { text: "Cancel", style: "cancel" },
+            { text: "Create Anyway", style: "destructive", onPress: doSave },
+          ]
+        );
+        return;
+      }
+    }
+
+    doSave();
   };
 
   const topPad = (Platform.OS === "web" ? 20 : insets.top) + 16;
