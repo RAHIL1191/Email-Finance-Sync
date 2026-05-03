@@ -16,7 +16,7 @@ import {
 } from "react-native";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 
-import { useApp } from "@/context/AppContext";
+import { PLAID_BANKS, useApp } from "@/context/AppContext";
 import { useColors } from "@/hooks/useColors";
 
 type Step = "choose" | "type" | "form";
@@ -101,6 +101,8 @@ export default function AddAccountModal({ visible, onClose, onConnectBank }: Pro
   const [lastFour, setLastFour] = useState("");
   const [includeInNetworth, setIncludeInNetworth] = useState(true);
   const [isJoint, setIsJoint] = useState(false);
+  const [showBankPicker, setShowBankPicker] = useState(false);
+  const [bankSearch, setBankSearch] = useState("");
 
   const reset = () => {
     setStep("choose");
@@ -111,7 +113,13 @@ export default function AddAccountModal({ visible, onClose, onConnectBank }: Pro
     setLastFour("");
     setIncludeInNetworth(true);
     setIsJoint(false);
+    setShowBankPicker(false);
+    setBankSearch("");
   };
+
+  const filteredBanks = PLAID_BANKS.filter((b) =>
+    b.name.toLowerCase().includes(bankSearch.toLowerCase())
+  );
 
   const handleClose = () => {
     reset();
@@ -392,21 +400,31 @@ export default function AddAccountModal({ visible, onClose, onConnectBank }: Pro
 
                 <View style={[styles.fDivider, { backgroundColor: colors.border }]} />
 
-                {/* Row 2 — Bank / Institution */}
-                <View style={styles.fRow}>
-                  <View style={[styles.fIcon, { backgroundColor: "#e8f0fe" }]}>
-                    <Feather name="briefcase" size={18} color="#4a6fa5" />
-                  </View>
-                  <TextInput
-                    style={[styles.fInput, { color: colors.foreground }]}
-                    placeholder="Select Bank/Institution"
-                    placeholderTextColor={colors.mutedForeground}
-                    value={bank}
-                    onChangeText={setBank}
-                    returnKeyType="next"
-                  />
+                {/* Row 2 — Bank / Institution (tappable picker) */}
+                <TouchableOpacity
+                  style={styles.fRow}
+                  activeOpacity={0.7}
+                  onPress={() => { setBankSearch(""); setShowBankPicker(true); }}
+                >
+                  {bank ? (
+                    <>
+                      <View style={[styles.fIcon, { backgroundColor: (PLAID_BANKS.find(b => b.name === bank)?.color ?? "#4a6fa5") + "22" }]}>
+                        <Text style={{ fontSize: 17 }}>
+                          {PLAID_BANKS.find(b => b.name === bank)?.icon ?? "🏦"}
+                        </Text>
+                      </View>
+                      <Text style={[styles.fLabel, { color: colors.foreground, flex: 1 }]} numberOfLines={1}>{bank}</Text>
+                    </>
+                  ) : (
+                    <>
+                      <View style={[styles.fIcon, { backgroundColor: "#e8f0fe" }]}>
+                        <Feather name="briefcase" size={18} color="#4a6fa5" />
+                      </View>
+                      <Text style={[styles.fInput, { color: colors.mutedForeground }]}>Select Bank/Institution</Text>
+                    </>
+                  )}
                   <Feather name="chevron-right" size={18} color={colors.mutedForeground} />
-                </View>
+                </TouchableOpacity>
 
                 <View style={[styles.fDivider, { backgroundColor: colors.border }]} />
 
@@ -557,6 +575,88 @@ export default function AddAccountModal({ visible, onClose, onConnectBank }: Pro
           </>
         )}
       </KeyboardAvoidingView>
+
+      {/* ── Bank Picker Modal ── */}
+      <Modal
+        visible={showBankPicker}
+        animationType="slide"
+        presentationStyle="pageSheet"
+        onRequestClose={() => setShowBankPicker(false)}
+      >
+        <View style={[styles.pickerRoot, { backgroundColor: colors.background, paddingTop: Platform.OS === "web" ? 20 : insets.top + 12 }]}>
+          {/* Header */}
+          <View style={[styles.pickerHeader, { borderBottomColor: colors.border }]}>
+            <TouchableOpacity onPress={() => setShowBankPicker(false)} hitSlop={8}>
+              <Feather name="x" size={22} color={colors.foreground} />
+            </TouchableOpacity>
+            <Text style={[styles.pickerTitle, { color: colors.foreground }]}>Select Bank</Text>
+            <View style={{ width: 22 }} />
+          </View>
+
+          {/* Search */}
+          <View style={[styles.pickerSearchRow, { backgroundColor: colors.card, borderColor: colors.border }]}>
+            <Feather name="search" size={16} color={colors.mutedForeground} />
+            <TextInput
+              style={[styles.pickerSearchInput, { color: colors.foreground }]}
+              placeholder="Search banks…"
+              placeholderTextColor={colors.mutedForeground}
+              value={bankSearch}
+              onChangeText={setBankSearch}
+              autoFocus
+              clearButtonMode="while-editing"
+            />
+          </View>
+
+          {/* Bank list */}
+          <ScrollView
+            contentContainerStyle={{ paddingBottom: (Platform.OS === "web" ? 20 : insets.bottom) + 20 }}
+            showsVerticalScrollIndicator={false}
+            keyboardShouldPersistTaps="handled"
+          >
+            <View style={[styles.pickerCard, { backgroundColor: colors.card, borderColor: colors.border }]}>
+              {filteredBanks.length === 0 && (
+                <View style={{ padding: 24, alignItems: "center" }}>
+                  <Text style={{ color: colors.mutedForeground, fontFamily: "Inter_400Regular" }}>No banks found</Text>
+                </View>
+              )}
+              {filteredBanks.map((b, idx) => (
+                <View key={b.id}>
+                  <TouchableOpacity
+                    style={styles.bankRow}
+                    activeOpacity={0.7}
+                    onPress={() => {
+                      Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
+                      setBank(b.name);
+                      setShowBankPicker(false);
+                    }}
+                  >
+                    <View style={[styles.bankIconCircle, { backgroundColor: b.color + "22" }]}>
+                      <Text style={{ fontSize: 20 }}>{b.icon}</Text>
+                    </View>
+                    <View style={{ flex: 1 }}>
+                      <Text style={[styles.bankName, { color: colors.foreground }]}>{b.name}</Text>
+                      <Text style={[styles.bankSub, { color: colors.mutedForeground }]}>
+                        {b.accountTypes.map((t) =>
+                          t === "checking" ? "Chequing"
+                          : t === "savings" ? "Savings"
+                          : t === "credit" ? "Credit"
+                          : "Investment"
+                        ).join(" · ")}
+                      </Text>
+                    </View>
+                    {bank === b.name && (
+                      <Feather name="check-circle" size={20} color={colors.primary} />
+                    )}
+                  </TouchableOpacity>
+                  {idx < filteredBanks.length - 1 && (
+                    <View style={[styles.fDivider, { backgroundColor: colors.border, marginLeft: 68 }]} />
+                  )}
+                </View>
+              ))}
+            </View>
+          </ScrollView>
+        </View>
+      </Modal>
     </Modal>
   );
 }
@@ -662,4 +762,36 @@ const styles = StyleSheet.create({
     flex: 1, fontSize: 15, fontFamily: "Inter_400Regular",
     paddingVertical: 4,
   },
+
+  // Bank picker modal
+  pickerRoot: { flex: 1 },
+  pickerHeader: {
+    flexDirection: "row", alignItems: "center", justifyContent: "space-between",
+    paddingHorizontal: 20, paddingBottom: 14,
+    borderBottomWidth: StyleSheet.hairlineWidth,
+  },
+  pickerTitle: { fontSize: 17, fontFamily: "Inter_600SemiBold" },
+  pickerSearchRow: {
+    flexDirection: "row", alignItems: "center", gap: 10,
+    marginHorizontal: 16, marginVertical: 12,
+    borderRadius: 12, borderWidth: 1,
+    paddingHorizontal: 12, paddingVertical: 10,
+  },
+  pickerSearchInput: {
+    flex: 1, fontSize: 15, fontFamily: "Inter_400Regular",
+  },
+  pickerCard: {
+    marginHorizontal: 16, borderRadius: 14,
+    borderWidth: StyleSheet.hairlineWidth, overflow: "hidden",
+  },
+  bankRow: {
+    flexDirection: "row", alignItems: "center",
+    paddingHorizontal: 16, paddingVertical: 14, gap: 14,
+  },
+  bankIconCircle: {
+    width: 44, height: 44, borderRadius: 22,
+    alignItems: "center", justifyContent: "center", flexShrink: 0,
+  },
+  bankName: { fontSize: 15, fontFamily: "Inter_500Medium" },
+  bankSub: { fontSize: 12, fontFamily: "Inter_400Regular", marginTop: 2 },
 });
