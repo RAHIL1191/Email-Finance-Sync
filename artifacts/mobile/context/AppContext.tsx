@@ -450,6 +450,24 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
         return { imported: 0, error: data.error || "Sync failed" };
       }
 
+      const importedTransactions: Transaction[] = Array.isArray(data.transactions)
+        ? data.transactions.map((t: any) => ({
+            ...t,
+            id: t.id || genId(),
+            source: "email",
+            fromEmail: true,
+            accountId: t.accountId || "",
+          }))
+        : [];
+
+      if (importedTransactions.length > 0) {
+        setTransactions((prev) => {
+          const existing = new Set(prev.map(dedupKey));
+          const fresh = importedTransactions.filter((t) => !existing.has(dedupKey(t)));
+          return [...fresh, ...prev];
+        });
+      }
+
       setEmailSync((prev) => ({
         ...prev,
         lastSynced: new Date().toISOString(),
@@ -457,7 +475,7 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
         lastImported: data.transactionsFound,
       }));
       setIsSyncing(false);
-      return { imported: 0 };
+      return { imported: importedTransactions.length };
     } catch {
       setIsSyncing(false);
       return { imported: 0, error: "Network error during sync" };
