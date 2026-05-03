@@ -234,20 +234,6 @@ export default function InsightsScreen() {
       >
         <View style={[styles.header, { paddingTop: Platform.OS === "web" ? 64 : 12 }]}>
           <Text style={[styles.title, { color: colors.foreground }]}>AI Insights</Text>
-          <TouchableOpacity
-            style={[styles.genBtn, { backgroundColor: isGenerating ? colors.muted : colors.primary }]}
-            onPress={generateAiInsights}
-            disabled={isGenerating}
-          >
-            {isGenerating ? (
-              <ActivityIndicator size="small" color={colors.primary} />
-            ) : (
-              <Feather name="zap" size={16} color="#fff" />
-            )}
-            <Text style={[styles.genBtnText, { color: isGenerating ? colors.mutedForeground : "#fff" }]}>
-              {isGenerating ? "Analyzing..." : "Analyze"}
-            </Text>
-          </TouchableOpacity>
         </View>
 
           <>
