@@ -245,14 +245,14 @@ function DatePickerModal({
   return (
     <Modal visible={visible} transparent animationType="fade" onRequestClose={onClose}>
       <TouchableOpacity style={styles.overlay} activeOpacity={1} onPress={onClose} />
-      <View style={styles.centerPicker}>
-        <View style={[styles.centerPickerCard, { backgroundColor: colors.card, minHeight: 380, width: "100%" }]}>
+      <View style={[styles.centerPicker, { justifyContent: "flex-end", padding: 0 }]}>
+        <View style={[styles.centerPickerCard, { backgroundColor: colors.card, width: "100%", maxWidth: "100%", minHeight: 320, borderRadius: 20, paddingHorizontal: 18, paddingTop: 12, paddingBottom: 18 }]}>
           <View style={[styles.pickerHandle, { backgroundColor: colors.border }]} />
           <Text style={[styles.pickerTitle, { color: colors.foreground }]}>{title}</Text>
           <DateTimePicker
             value={date}
             mode={mode}
-            display="spinner"
+            display="inline"
             onChange={(_, d) => {
               if (d) onChange(d);
             }}
@@ -1362,15 +1362,11 @@ const styles = StyleSheet.create({
   centerPicker: {
     flex: 1,
     alignItems: "center",
-    justifyContent: "center",
-    padding: 20,
+    justifyContent: "flex-end",
   },
   centerPickerCard: {
     width: "100%",
-    maxWidth: 400,
-    borderTopLeftRadius: 22,
-    borderTopRightRadius: 22,
-    padding: 16,
+    maxWidth: 360,
     gap: 12,
   },
   pickerHandle: {
