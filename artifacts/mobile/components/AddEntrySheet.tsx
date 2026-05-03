@@ -605,6 +605,7 @@ function ExpenseTab({ onSave }: { onSave: () => void }) {
   const [accountId, setAccountId] = useState(accounts[0]?.id ?? "");
   const [date, setDate] = useState(new Date());
   const [notes, setNotes] = useState("");
+  const [tag, setTag] = useState("");
   const [projectId, setProjectId] = useState<string | undefined>(undefined);
   const [projectName, setProjectName] = useState<string | undefined>(undefined);
 
@@ -628,7 +629,7 @@ function ExpenseTab({ onSave }: { onSave: () => void }) {
       category: category || "Other",
       accountId,
       date: date.toISOString(),
-      note: notes || undefined,
+      note: [notes, tag ? `Tag: ${tag}` : ""].filter(Boolean).join(" · ") || undefined,
       projectId: projectId || undefined,
       projectName: projectName || undefined,
       source: "manual",
@@ -702,6 +703,27 @@ function ExpenseTab({ onSave }: { onSave: () => void }) {
           onClear={projectId ? () => { setProjectId(undefined); setProjectName(undefined); } : undefined}
           borderBottom={false}
         />
+      </View>
+
+      <View style={[styles.card, { backgroundColor: colors.card }]}>
+        <View style={[styles.row, { borderBottomWidth: 0 }]}>
+          <View style={[styles.rowIcon, { backgroundColor: colors.accent }]}>
+            <Feather name="tag" size={18} color={colors.primary} />
+          </View>
+          <TextInput
+            style={[styles.notesInput, { color: colors.foreground, flex: 1 }]}
+            placeholder="Add tag (optional)"
+            placeholderTextColor={colors.mutedForeground}
+            value={tag}
+            onChangeText={setTag}
+            returnKeyType="done"
+          />
+          {tag ? (
+            <TouchableOpacity onPress={() => setTag("")} hitSlop={10}>
+              <Feather name="x" size={18} color={colors.mutedForeground} />
+            </TouchableOpacity>
+          ) : null}
+        </View>
       </View>
 
       <TouchableOpacity style={[styles.addImagesRow, { backgroundColor: colors.card, borderColor: colors.border }]}>
