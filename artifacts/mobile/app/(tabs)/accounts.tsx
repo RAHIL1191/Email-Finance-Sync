@@ -728,7 +728,11 @@ export default function AccountsScreen() {
         )}
       </ScrollView>
 
-      <AddAccountModal visible={showAdd} onClose={() => setShowAdd(false)} />
+      <AddAccountModal
+        visible={showAdd}
+        onClose={() => setShowAdd(false)}
+        onConnectBank={() => setShowPlaidLink(true)}
+      />
       {showEmailConnect && <EmailConnectModal onClose={() => setShowEmailConnect(false)} />}
       {showPlaidLink && <PlaidLinkModal onClose={() => setShowPlaidLink(false)} />}
       <ConnectedInstitutionsModal
