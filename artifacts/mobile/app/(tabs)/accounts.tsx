@@ -377,7 +377,7 @@ function EmailConnectModal({ onClose }: { onClose: () => void }) {
 function PlaidItemPanel({ item }: { item: PlaidItem }) {
   const colors = useColors();
   const { syncPlaidTransactions, disconnectPlaid, isSyncing } = useApp();
-  const [syncResult, setSyncResult] = useState<{ imported: number; error?: string } | null>(null);
+  const [syncResult, setSyncResult] = useState<{ imported: number; parsed?: Array<{ title?: string; merchant?: string; amount: number; type?: string; bank?: string; rawSubject?: string }>; error?: string } | null>(null);
   const [showDisconnectConfirm, setShowDisconnectConfirm] = useState(false);
 
   const handleSync = async () => {
@@ -524,7 +524,7 @@ function ConnectedInstitutionsModal({
                   {emailSync.lastImported !== undefined ? `  ·  ${emailSync.lastImported} imported` : ""}
                 </Text>
               )}
-              {syncResult && (
+      {syncResult && (
                 <View style={[styles.syncResultBox, { backgroundColor: syncResult.error ? colors.expense + "12" : "#10b98112", borderColor: syncResult.error ? colors.expense + "30" : "#10b98130" }]}>
                   <Feather name={syncResult.error ? "alert-circle" : "check"} size={13} color={syncResult.error ? colors.expense : "#10b981"} />
                   <Text style={[styles.syncResultText, { color: syncResult.error ? colors.expense : "#10b981" }]}>
@@ -532,10 +532,10 @@ function ConnectedInstitutionsModal({
                   </Text>
                 </View>
               )}
-              {(emailSync.lastParsed?.length || 0) > 0 && (
+      {(syncResult?.parsed?.length || emailSync.lastParsed?.length || 0) > 0 && (
                 <View style={{ gap: 8 }}>
                   <Text style={[styles.plaidLastSync, { color: colors.mutedForeground }]}>Parsed transaction details:</Text>
-                  {emailSync.lastParsed.slice(0, 5).map((p, idx) => (
+          {(syncResult?.parsed || emailSync.lastParsed || []).slice(0, 5).map((p, idx) => (
                     <View
                       key={`${p.rawSubject}-${idx}`}
                       style={{
@@ -551,7 +551,7 @@ function ConnectedInstitutionsModal({
                         {p.merchant || p.title || "Transaction"}
                       </Text>
                       <Text style={[styles.plaidSub, { color: colors.mutedForeground }]} numberOfLines={1}>
-                        {p.bank} · ${p.amount.toFixed(2)} · {p.type}
+                    {p.bank} · ${Number(p.amount || 0).toFixed(2)} · {p.type}
                       </Text>
                       <Text style={[styles.plaidSub, { color: colors.mutedForeground }]} numberOfLines={1}>
                         {p.rawSubject}

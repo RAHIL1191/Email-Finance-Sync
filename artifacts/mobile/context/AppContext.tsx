@@ -438,7 +438,7 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
     setTransactions((prev) => prev.filter((t) => t.source !== "email"));
   }, []);
 
-  const syncEmailTransactions = useCallback(async (): Promise<{ imported: number; error?: string }> => {
+  const syncEmailTransactions = useCallback(async (): Promise<{ imported: number; parsed?: any[]; error?: string }> => {
     if (!emailSync.isConnected || !emailSync.email || !emailSync.appPassword) {
       return { imported: 0, error: "Email not connected" };
     }
@@ -485,7 +485,7 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
         lastParsed: Array.isArray(data.parsed) ? data.parsed : [],
       }));
       setIsSyncing(false);
-      return { imported: importedTransactions.length };
+      return { imported: importedTransactions.length, parsed: Array.isArray(data.parsed) ? data.parsed : [] };
     } catch {
       setIsSyncing(false);
       return { imported: 0, error: "Network error during sync" };
