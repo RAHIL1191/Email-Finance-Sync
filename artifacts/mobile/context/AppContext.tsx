@@ -191,6 +191,13 @@ function dedupKey(t: { amount: number; title: string; date: string; bank?: strin
   return `${source}|${bank}|${accountId}|${t.amount}|${t.title.toLowerCase().trim()}|${t.date.slice(0, 10)}`;
 }
 
+function upsertTransactions(prev: Transaction[], incoming: Transaction[]) {
+  const map = new Map<string, Transaction>();
+  prev.forEach((t) => map.set(dedupKey(t), t));
+  incoming.forEach((t) => map.set(dedupKey(t), t));
+  return Array.from(map.values()).sort((a, b) => b.date.localeCompare(a.date));
+}
+
 /** Find the best matching account for a bank name and optional last-4 digits */
 function findAccountMatch(
   accounts: Account[],
@@ -308,7 +315,7 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
   // ── CRUD: Transactions ────────────────────────────────────────────────────
   const addTransaction = useCallback((t: Omit<Transaction, "id">) => {
     const newT: Transaction = { ...t, id: genId() };
-    setTransactions((prev) => [newT, ...prev]);
+    setTransactions((prev) => upsertTransactions(prev, [newT]));
     apiCall("/api/transactions", "POST", householdIdRef.current, deviceIdRef.current, newT);
   }, []);
 
@@ -468,11 +475,7 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
         : [];
 
       if (importedTransactions.length > 0) {
-        setTransactions((prev) => {
-          const existing = new Set(prev.map(dedupKey));
-          const fresh = importedTransactions.filter((t) => !existing.has(dedupKey(t)));
-          return [...fresh, ...prev];
-        });
+        setTransactions((prev) => upsertTransactions(prev, importedTransactions));
       }
 
       setEmailSync((prev) => ({
@@ -564,7 +567,7 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
         const existingKeys = new Set(prev.map(dedupKey));
         const fresh = txsToAdd.filter((t) => !existingKeys.has(dedupKey(t)));
         imported = fresh.length;
-        return [...fresh, ...prev];
+        return upsertTransactions(prev, fresh);
       });
 
       // Register item with accountIds
@@ -642,7 +645,7 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
                 { transactions: fresh }
               );
             }
-            return [...fresh, ...prev];
+            return upsertTransactions(prev, fresh);
           });
         }
 
