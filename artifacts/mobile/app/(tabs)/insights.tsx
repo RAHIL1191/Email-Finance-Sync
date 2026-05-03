@@ -4,6 +4,7 @@ import React, { useMemo, useState } from "react";
 import {
   ActivityIndicator,
   Animated,
+  Modal,
   Platform,
   ScrollView,
   StyleSheet,
@@ -236,6 +237,7 @@ export default function InsightsScreen() {
         onPress={() => {
           Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
           setShowFilter(true);
+          requestAnimationFrame(() => setShowFilter(true));
         }}
         activeOpacity={0.85}
       >
