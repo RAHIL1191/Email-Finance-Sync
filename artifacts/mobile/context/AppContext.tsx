@@ -430,8 +430,39 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
   }, []);
 
   const syncEmailTransactions = useCallback(async (): Promise<{ imported: number; error?: string }> => {
-    return { imported: 0, error: "Email sync disabled" };
-  }, []);
+    if (!emailSync.isConnected || !emailSync.email || !emailSync.appPassword) {
+      return { imported: 0, error: "Email not connected" };
+    }
+    setIsSyncing(true);
+    try {
+      const res = await fetch(`${getApiBase()}/api/email/sync`, {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          "X-Household-ID": householdIdRef.current,
+          "X-Device-ID": deviceIdRef.current,
+        },
+        body: JSON.stringify({ email: emailSync.email, appPassword: emailSync.appPassword, daysBack: 30 }),
+      });
+      const data = await res.json();
+      if (!res.ok) {
+        setIsSyncing(false);
+        return { imported: 0, error: data.error || "Sync failed" };
+      }
+
+      setEmailSync((prev) => ({
+        ...prev,
+        lastSynced: new Date().toISOString(),
+        lastEmailsScanned: data.emailsScanned,
+        lastImported: data.transactionsFound,
+      }));
+      setIsSyncing(false);
+      return { imported: 0 };
+    } catch {
+      setIsSyncing(false);
+      return { imported: 0, error: "Network error during sync" };
+    }
+  }, [emailSync]);
 
   // ── Plaid sync ────────────────────────────────────────────────────────────
 
@@ -513,7 +544,7 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
       // Register item with accountIds
       const registeredItem: PlaidItem = {
         ...item,
-        accountIds: allItemAccountIds,
+        accountIds: [...toCreate.map((a) => a.id), ...toMerge.map((m) => m.id)],
         lastSynced: new Date().toISOString(),
         lastImported: imported,
       };
