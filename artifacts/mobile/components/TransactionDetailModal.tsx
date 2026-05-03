@@ -306,27 +306,40 @@ export default function TransactionDetailModal({ visible, onClose, transaction }
                 </View>
                 <Feather name="chevron-right" size={16} color={colors.mutedForeground} />
               </TouchableOpacity>
-              <Modal visible={showDatePicker} transparent animationType="fade" onRequestClose={() => setShowDatePicker(false)}>
-                <TouchableOpacity style={s.overlay} activeOpacity={1} onPress={() => setShowDatePicker(false)} />
-                <View style={[s.centerPicker, { justifyContent: "flex-end" }]}>
-                  <View style={[s.centerPickerCard, { backgroundColor: colors.card }]}>
-                    <View style={[s.pickerHandle, { backgroundColor: colors.border }]} />
-                    <Text style={[s.pickerTitle, { color: colors.foreground }]}>Edit Date</Text>
-                    <DateTimePicker
-                      value={editDate ?? dateObj}
-                      mode="date"
-                      display={Platform.OS === "ios" ? "spinner" : "default"}
-                      onChange={(_, d) => {
-                        if (d) setEditDate(d);
-                        if (Platform.OS !== "ios") setShowDatePicker(false);
-                      }}
-                    />
-                    <TouchableOpacity onPress={() => setShowDatePicker(false)} style={[s.centerPickerBtn, { backgroundColor: colors.primary }]}>
-                      <Text style={s.centerPickerBtnText}>Done</Text>
-                    </TouchableOpacity>
+              {Platform.OS === "android" ? (
+                showDatePicker && (
+                  <DateTimePicker
+                    value={editDate ?? dateObj}
+                    mode="date"
+                    display="calendar"
+                    onChange={(_, d) => {
+                      setShowDatePicker(false);
+                      if (d) setEditDate(d);
+                    }}
+                  />
+                )
+              ) : (
+                <Modal visible={showDatePicker} transparent animationType="slide" onRequestClose={() => setShowDatePicker(false)}>
+                  <TouchableOpacity style={s.overlay} activeOpacity={1} onPress={() => setShowDatePicker(false)} />
+                  <View style={[s.centerPicker, { justifyContent: "flex-end" }]}>
+                    <View style={[s.centerPickerCard, { backgroundColor: colors.card }]}>
+                      <View style={[s.pickerHandle, { backgroundColor: colors.border }]} />
+                      <Text style={[s.pickerTitle, { color: colors.foreground }]}>Edit Date</Text>
+                      <DateTimePicker
+                        value={editDate ?? dateObj}
+                        mode="date"
+                        display="spinner"
+                        onChange={(_, d) => {
+                          if (d) setEditDate(d);
+                        }}
+                      />
+                      <TouchableOpacity onPress={() => setShowDatePicker(false)} style={[s.centerPickerBtn, { backgroundColor: colors.primary }]}>
+                        <Text style={s.centerPickerBtnText}>Done</Text>
+                      </TouchableOpacity>
+                    </View>
                   </View>
-                </View>
-              </Modal>
+                </Modal>
+              )}
 
               {/* Notes */}
               <View style={[s.editRow, { borderBottomColor: colors.border }]}>

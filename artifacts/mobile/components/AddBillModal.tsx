@@ -13,10 +13,62 @@ import {
   TouchableOpacity,
   View,
 } from "react-native";
+
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 
 import { useApp } from "@/context/AppContext";
 import { useColors } from "@/hooks/useColors";
+
+function BillDatePickerModal({
+  visible,
+  date,
+  onChange,
+  onClose,
+  colors,
+}: {
+  visible: boolean;
+  date: Date;
+  onChange: (d: Date) => void;
+  onClose: () => void;
+  colors: any;
+}) {
+  if (Platform.OS === "android") {
+    if (!visible) return null;
+    return (
+      <DateTimePicker
+        value={date}
+        mode="date"
+        display="calendar"
+        onChange={(_, d) => {
+          onClose();
+          if (d) onChange(d);
+        }}
+      />
+    );
+  }
+  return (
+    <Modal visible={visible} transparent animationType="slide" onRequestClose={onClose}>
+      <TouchableOpacity style={styles.overlay} activeOpacity={1} onPress={onClose} />
+      <View style={[styles.centerPicker, { justifyContent: "flex-end" }]}>
+        <View style={[styles.centerPickerCard, { backgroundColor: colors.card }]}>
+          <View style={[styles.pickerHandle, { backgroundColor: colors.border }]} />
+          <Text style={[styles.pickerTitle, { color: colors.foreground }]}>Select Due Date</Text>
+          <DateTimePicker
+            value={date}
+            mode="date"
+            display="spinner"
+            onChange={(_, d) => {
+              if (d) onChange(d);
+            }}
+          />
+          <TouchableOpacity onPress={onClose} style={[styles.centerPickerBtn, { backgroundColor: colors.primary }]}>
+            <Text style={styles.centerPickerBtnText}>Done</Text>
+          </TouchableOpacity>
+        </View>
+      </View>
+    </Modal>
+  );
+}
 
 const CATEGORIES = [
   "Housing",
@@ -161,27 +213,13 @@ export default function AddBillModal({ visible, onClose }: Props) {
               </Text>
               <Feather name="calendar" size={16} color={colors.mutedForeground} />
             </TouchableOpacity>
-            <Modal visible={showDatePicker} transparent animationType="fade" onRequestClose={() => setShowDatePicker(false)}>
-              <TouchableOpacity style={styles.overlay} activeOpacity={1} onPress={() => setShowDatePicker(false)} />
-              <View style={[styles.centerPicker, { justifyContent: "flex-end" }]}>
-                <View style={[styles.centerPickerCard, { backgroundColor: colors.card }]}>
-                  <View style={[styles.pickerHandle, { backgroundColor: colors.border }]} />
-                  <Text style={[styles.pickerTitle, { color: colors.foreground }]}>Select Due Date</Text>
-                  <DateTimePicker
-                    value={dueDate}
-                    mode="date"
-                    display={Platform.OS === "ios" ? "spinner" : "default"}
-                    onChange={(_, date) => {
-                      if (date) setDueDate(date);
-                      if (Platform.OS !== "ios") setShowDatePicker(false);
-                    }}
-                  />
-                  <TouchableOpacity onPress={() => setShowDatePicker(false)} style={[styles.centerPickerBtn, { backgroundColor: colors.primary }]}>
-                    <Text style={styles.centerPickerBtnText}>Done</Text>
-                  </TouchableOpacity>
-                </View>
-              </View>
-            </Modal>
+            <BillDatePickerModal
+              visible={showDatePicker}
+              date={dueDate}
+              onChange={(d) => setDueDate(d)}
+              onClose={() => setShowDatePicker(false)}
+              colors={colors}
+            />
           </View>
 
           <View style={styles.section}>

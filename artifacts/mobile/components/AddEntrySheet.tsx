@@ -225,8 +225,29 @@ function DatePickerModal({
   onClose: () => void;
 }) {
   const colors = useColors();
+  const mode: "date" | "time" = title.toLowerCase().includes("time") ? "time" : "date";
+
+  // On Android the DateTimePicker itself renders as a native dialog —
+  // wrapping it in a custom Modal causes a modal-on-modal conflict that
+  // prevents it from opening. Render it directly instead.
+  if (Platform.OS === "android") {
+    if (!visible) return null;
+    return (
+      <DateTimePicker
+        value={date}
+        mode={mode}
+        display={mode === "date" ? "calendar" : "default"}
+        onChange={(_, d) => {
+          onClose();
+          if (d) onChange(d);
+        }}
+      />
+    );
+  }
+
+  // iOS — bottom-sheet style modal with inline spinner
   return (
-    <Modal visible={visible} transparent animationType="fade" onRequestClose={onClose}>
+    <Modal visible={visible} transparent animationType="slide" onRequestClose={onClose}>
       <TouchableOpacity style={styles.overlay} activeOpacity={1} onPress={onClose} />
       <View style={[styles.centerPicker, { justifyContent: "flex-end" }]}>
         <View style={[styles.centerPickerCard, { backgroundColor: colors.card }]}>
@@ -234,11 +255,10 @@ function DatePickerModal({
           <Text style={[styles.pickerTitle, { color: colors.foreground }]}>{title}</Text>
           <DateTimePicker
             value={date}
-            mode={title.includes("Time") ? "time" : "date"}
-            display={Platform.OS === "ios" ? "spinner" : "default"}
+            mode={mode}
+            display="spinner"
             onChange={(_, d) => {
               if (d) onChange(d);
-              if (Platform.OS !== "ios") onClose();
             }}
           />
           <TouchableOpacity onPress={onClose} style={[styles.centerPickerBtn, { backgroundColor: colors.primary }]}>
@@ -706,46 +726,20 @@ function IncomeTab({ onSave }: { onSave: () => void }) {
         onSelect={setRepeat}
         onClose={() => setShowRepeatPicker(false)}
       />
-      <Modal visible={showDatePicker} transparent animationType="fade" onRequestClose={() => setShowDatePicker(false)}>
-        <TouchableOpacity style={styles.overlay} activeOpacity={1} onPress={() => setShowDatePicker(false)} />
-        <View style={styles.centerPicker}>
-          <View style={[styles.centerPickerCard, { backgroundColor: colors.card }]}>
-            <Text style={[styles.pickerTitle, { color: colors.foreground }]}>Select Date</Text>
-            <DateTimePicker
-              value={date}
-              mode="date"
-              display={Platform.OS === "ios" ? "spinner" : "default"}
-              onChange={(_, d) => {
-                if (d) setDate(d);
-                if (Platform.OS !== "ios") setShowDatePicker(false);
-              }}
-            />
-            <TouchableOpacity onPress={() => setShowDatePicker(false)} style={styles.centerPickerBtn}>
-              <Text style={styles.centerPickerBtnText}>Done</Text>
-            </TouchableOpacity>
-          </View>
-        </View>
-      </Modal>
-      <Modal visible={showTimePicker} transparent animationType="fade" onRequestClose={() => setShowTimePicker(false)}>
-        <TouchableOpacity style={styles.overlay} activeOpacity={1} onPress={() => setShowTimePicker(false)} />
-        <View style={styles.centerPicker}>
-          <View style={[styles.centerPickerCard, { backgroundColor: colors.card }]}>
-            <Text style={[styles.pickerTitle, { color: colors.foreground }]}>Select Time</Text>
-            <DateTimePicker
-              value={date}
-              mode="time"
-              display={Platform.OS === "ios" ? "spinner" : "default"}
-              onChange={(_, d) => {
-                if (d) setDate(d);
-                if (Platform.OS !== "ios") setShowTimePicker(false);
-              }}
-            />
-            <TouchableOpacity onPress={() => setShowTimePicker(false)} style={styles.centerPickerBtn}>
-              <Text style={styles.centerPickerBtnText}>Done</Text>
-            </TouchableOpacity>
-          </View>
-        </View>
-      </Modal>
+      <DatePickerModal
+        visible={showDatePicker}
+        title="Select Date"
+        date={date}
+        onChange={(d) => setDate((prev) => { const n = new Date(d); n.setHours(prev.getHours(), prev.getMinutes()); return n; })}
+        onClose={() => setShowDatePicker(false)}
+      />
+      <DatePickerModal
+        visible={showTimePicker}
+        title="Select Time"
+        date={date}
+        onChange={(d) => setDate((prev) => { const n = new Date(prev); n.setHours(d.getHours(), d.getMinutes()); return n; })}
+        onClose={() => setShowTimePicker(false)}
+      />
     </ScrollView>
   );
 }
@@ -767,6 +761,8 @@ function TransferTab({ onSave }: { onSave: () => void }) {
   const [showFromPicker, setShowFromPicker] = useState(false);
   const [showToPicker, setShowToPicker] = useState(false);
   const [showRepeatPicker, setShowRepeatPicker] = useState(false);
+  const [showDatePicker, setShowDatePicker] = useState(false);
+  const [showTimePicker, setShowTimePicker] = useState(false);
 
   const fromAcc = accounts.find((a) => a.id === fromId);
   const toAcc = accounts.find((a) => a.id === toId);
@@ -870,6 +866,8 @@ function TransferTab({ onSave }: { onSave: () => void }) {
           date={date}
           onDateChange={(d) => setDate((prev) => { const n = new Date(d); n.setHours(prev.getHours(), prev.getMinutes()); return n; })}
           onTimeChange={(d) => setDate((prev) => { const n = new Date(prev); n.setHours(d.getHours(), d.getMinutes()); return n; })}
+          onOpenDate={() => setShowDatePicker(true)}
+          onOpenTime={() => setShowTimePicker(true)}
           borderBottom={false}
         />
       </View>
@@ -913,6 +911,20 @@ function TransferTab({ onSave }: { onSave: () => void }) {
         selected={repeat}
         onSelect={setRepeat}
         onClose={() => setShowRepeatPicker(false)}
+      />
+      <DatePickerModal
+        visible={showDatePicker}
+        title="Select Date"
+        date={date}
+        onChange={(d) => setDate((prev) => { const n = new Date(d); n.setHours(prev.getHours(), prev.getMinutes()); return n; })}
+        onClose={() => setShowDatePicker(false)}
+      />
+      <DatePickerModal
+        visible={showTimePicker}
+        title="Select Time"
+        date={date}
+        onChange={(d) => setDate((prev) => { const n = new Date(prev); n.setHours(d.getHours(), d.getMinutes()); return n; })}
+        onClose={() => setShowTimePicker(false)}
       />
     </ScrollView>
   );
@@ -1016,14 +1028,13 @@ function BillsTab({ onSave }: { onSave: () => void }) {
           </View>
           <Feather name="chevron-right" size={18} color={colors.mutedForeground} />
         </TouchableOpacity>
-        {showDatePicker && (
-          <DateTimePicker
-            value={dueDate}
-            mode="date"
-            display={Platform.OS === "ios" ? "spinner" : "default"}
-            onChange={(_, d) => { setShowDatePicker(false); if (d) setDueDate(d); }}
-          />
-        )}
+        <DatePickerModal
+          visible={showDatePicker}
+          title="Select Due Date"
+          date={dueDate}
+          onChange={(d) => setDueDate(d)}
+          onClose={() => setShowDatePicker(false)}
+        />
 
         <RowItem icon="repeat" placeholder="Select repeat option" value={repeat !== "Never" ? repeat : undefined} onPress={() => setShowRepeatPicker(true)} />
 
