@@ -150,6 +150,27 @@ export default function Drawer() {
           {/* Divider */}
           <View style={[styles.divider, { backgroundColor: colors.border }]} />
 
+          {/* Refunds */}
+          <TouchableOpacity
+            style={styles.menuItem}
+            onPress={() => navigateTo("/refunds")}
+            activeOpacity={0.8}
+          >
+            <View style={[styles.menuIconWrap, { backgroundColor: "#10b981" + "18" }]}>
+              <Feather name="rotate-ccw" size={15} color="#10b981" />
+            </View>
+            <View style={styles.menuTextWrap}>
+              <Text style={[styles.menuTitle, { color: colors.foreground }]}>Refunds</Text>
+              <Text style={[styles.menuSub, { color: colors.mutedForeground }]}>
+                Review completed refunds
+              </Text>
+            </View>
+            <Feather name="chevron-right" size={16} color={colors.mutedForeground} />
+          </TouchableOpacity>
+
+          {/* Divider */}
+          <View style={[styles.divider, { backgroundColor: colors.border }]} />
+
           {/* Projects section */}
           <View style={styles.sectionHeader}>
             <Text style={[styles.sectionLabel, { color: colors.mutedForeground }]}>PROJECTS</Text>
