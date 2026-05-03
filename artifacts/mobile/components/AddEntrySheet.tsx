@@ -630,6 +630,7 @@ function ExpenseTab({ onSave }: { onSave: () => void }) {
       accountId,
       date: date.toISOString(),
       note: [notes, tag ? `Tag: ${tag}` : ""].filter(Boolean).join(" · ") || undefined,
+      isRefund: tag.trim().toLowerCase() === "refund" ? true : undefined,
       projectId: projectId || undefined,
       projectName: projectName || undefined,
       source: "manual",
@@ -808,7 +809,7 @@ function IncomeTab({ onSave }: { onSave: () => void }) {
       note: [notes, repeat !== "Never" ? `Repeats ${repeat}` : ""].filter(Boolean).join(" · ") || undefined,
       projectId: projectId || undefined,
       projectName: projectName || undefined,
-      isRefund: category === "Refund" ? true : undefined,
+      isRefund: category.trim().toLowerCase() === "refund" ? true : undefined,
       source: "manual",
     });
     onSave();

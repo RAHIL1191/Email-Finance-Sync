@@ -19,7 +19,10 @@ export default function RefundsScreen() {
   const { transactions } = useApp();
 
   const refundTxs = useMemo(
-    () => transactions.filter((t) => t.isRefund).sort((a, b) => b.date.localeCompare(a.date)),
+    () =>
+      transactions
+        .filter((t) => t.isRefund || t.category.trim().toLowerCase() === "refund")
+        .sort((a, b) => b.date.localeCompare(a.date)),
     [transactions]
   );
 
