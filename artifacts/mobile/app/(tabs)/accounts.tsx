@@ -560,7 +560,7 @@ function ConnectedInstitutionsModal({
                   ))}
                 </View>
               )}
-              {!emailSync.lastParsed?.length && syncResult && !syncResult.error && (
+              {(!emailSync.lastParsed || emailSync.lastParsed.length === 0) && syncResult && !syncResult.error && (
                 <Text style={[styles.plaidSub, { color: colors.mutedForeground }]}>
                   Parsed preview will appear after the next sync.
                 </Text>
