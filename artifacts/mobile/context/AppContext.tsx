@@ -107,7 +107,7 @@ interface AppContextType {
   connectEmail: (email: string, appPassword: string) => Promise<{ success: boolean; error?: string }>;
   disconnectEmail: () => void;
   resetEmailTransactions: () => void;
-  syncEmailTransactions: () => Promise<{ imported: number; error?: string }>;
+  syncEmailTransactions: () => Promise<{ imported: number; parsed?: any[]; error?: string }>;
   connectPlaid: (item: PlaidItem, newAccounts: Omit<Account, "id">[], initialTransactions: Omit<Transaction, "id">[]) => Promise<{ imported: number }>;
   syncPlaidTransactions: (itemId: string) => Promise<{ imported: number; error?: string }>;
   disconnectPlaid: (itemId: string) => void;

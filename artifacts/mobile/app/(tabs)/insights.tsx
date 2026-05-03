@@ -42,6 +42,7 @@ const CATEGORY_COLORS: Record<string, string> = {
 };
 
 type EntryTab = "EXPENSE" | "INCOME" | "TRANSFER" | "BILLS";
+type InsightsSection = "summary" | "review";
 
 // ── FAB ───────────────────────────────────────────────────────────────────────
 
@@ -165,9 +166,11 @@ function InsightsFAB({
 
 export default function InsightsScreen() {
   const colors = useColors();
-  const { transactions, accounts, bills, monthlyIncome, monthlyExpense } = useApp();
+  const { transactions, accounts, bills, monthlyIncome, monthlyExpense, addTransaction } = useApp();
   const [isGenerating, setIsGenerating] = useState(false);
   const [aiInsights, setAiInsights] = useState<string[]>([]);
+  const [section, setSection] = useState<InsightsSection>("summary");
+  const [reviewedIds, setReviewedIds] = useState<string[]>([]);
 
   const [sheetVisible, setSheetVisible] = useState(false);
   const [sheetTab, setSheetTab] = useState<EntryTab>("EXPENSE");
@@ -189,6 +192,25 @@ export default function InsightsScreen() {
   const totalSpend = categorySpend.reduce((s, [, v]) => s + v, 0);
   const savingsRate = monthlyIncome > 0 ? ((monthlyIncome - monthlyExpense) / monthlyIncome) * 100 : 0;
   const emailTxCount = transactions.filter((t) => t.fromEmail).length;
+  const reviewTxs = useMemo(() => transactions.filter((t) => t.fromEmail && !reviewedIds.includes(t.id)), [transactions, reviewedIds]);
+
+  const addFromReview = (txId: string) => {
+    const tx = transactions.find((t) => t.id === txId);
+    if (!tx) return;
+    addTransaction({
+      title: tx.title,
+      merchant: tx.merchant,
+      amount: tx.amount,
+      type: tx.type,
+      category: tx.category,
+      accountId: tx.accountId,
+      date: tx.date,
+      source: "manual",
+      bank: tx.bank,
+      note: tx.note,
+    });
+    setReviewedIds((prev) => [...prev, txId]);
+  };
 
   const insights: Insight[] = useMemo(() => {
     const result: Insight[] = [];
@@ -234,6 +256,14 @@ export default function InsightsScreen() {
       >
         <View style={[styles.header, { paddingTop: Platform.OS === "web" ? 64 : 12 }]}>
           <Text style={[styles.title, { color: colors.foreground }]}>AI Insights</Text>
+          <View style={[styles.segment, { backgroundColor: colors.card, borderColor: colors.border }]}>
+            <TouchableOpacity onPress={() => setSection("summary")} style={[styles.segmentBtn, section === "summary" && { backgroundColor: colors.primary }]}>
+              <Text style={[styles.segmentText, { color: section === "summary" ? "#fff" : colors.mutedForeground }]}>Summary</Text>
+            </TouchableOpacity>
+            <TouchableOpacity onPress={() => setSection("review")} style={[styles.segmentBtn, section === "review" && { backgroundColor: colors.primary }]}>
+              <Text style={[styles.segmentText, { color: section === "review" ? "#fff" : colors.mutedForeground }]}>Review</Text>
+            </TouchableOpacity>
+          </View>
           <TouchableOpacity
             style={[styles.genBtn, { backgroundColor: isGenerating ? colors.muted : colors.primary }]}
             onPress={generateAiInsights}
@@ -250,89 +280,113 @@ export default function InsightsScreen() {
           </TouchableOpacity>
         </View>
 
-        {/* Spending Breakdown */}
-        <View style={[styles.card, { backgroundColor: colors.card }]}>
-          <Text style={[styles.cardTitle, { color: colors.foreground }]}>This Month's Spending</Text>
-          {categorySpend.length === 0 ? (
-            <Text style={[styles.noData, { color: colors.mutedForeground }]}>Add transactions to see breakdown</Text>
-          ) : (
-            categorySpend.map(([cat, amount]) => {
-              const pct = totalSpend > 0 ? (amount / totalSpend) * 100 : 0;
-              const catColor = CATEGORY_COLORS[cat] || colors.primary;
-              return (
-                <View key={cat} style={styles.catRow}>
-                  <View style={styles.catLabel}>
-                    <View style={[styles.catDot, { backgroundColor: catColor }]} />
-                    <Text style={[styles.catName, { color: colors.foreground }]}>{cat}</Text>
+        {section === "review" ? (
+          <View style={[styles.card, { backgroundColor: colors.card }]}>
+            <Text style={[styles.cardTitle, { color: colors.foreground }]}>Review Email Transactions</Text>
+            {reviewTxs.length === 0 ? (
+              <Text style={[styles.noData, { color: colors.mutedForeground }]}>No email transactions to review</Text>
+            ) : (
+              reviewTxs.map((tx) => (
+                <View key={tx.id} style={[styles.reviewRow, { borderColor: colors.border }]}>
+                  <View style={{ flex: 1, gap: 3 }}>
+                    <Text style={[styles.reviewTitle, { color: colors.foreground }]} numberOfLines={1}>
+                      {tx.merchant || tx.title}
+                    </Text>
+                    <Text style={[styles.reviewSub, { color: colors.mutedForeground }]} numberOfLines={1}>
+                      {tx.bank || "Email"} · {tx.category} · {new Date(tx.date).toLocaleDateString()}
+                    </Text>
                   </View>
-                  <View style={styles.catBarContainer}>
-                    <View style={[styles.catBar, { backgroundColor: catColor + "30", width: "100%" }]}>
-                      <View style={[styles.catBarFill, { backgroundColor: catColor, width: `${Math.min(pct, 100)}%` as any }]} />
-                    </View>
-                  </View>
-                  <Text style={[styles.catAmount, { color: colors.foreground }]}>${amount.toFixed(0)}</Text>
+                  <Text style={[styles.reviewAmt, { color: tx.type === "expense" ? colors.expense : colors.success }]}>
+                    ${tx.amount.toFixed(2)}
+                  </Text>
+                  <TouchableOpacity style={[styles.reviewBtn, { backgroundColor: colors.primary }]} onPress={() => addFromReview(tx.id)}>
+                    <Text style={styles.reviewBtnText}>Add</Text>
+                  </TouchableOpacity>
                 </View>
-              );
-            })
-          )}
-        </View>
-
-        {/* Financial Health */}
-        <View style={[styles.card, { backgroundColor: colors.card }]}>
-          <Text style={[styles.cardTitle, { color: colors.foreground }]}>Financial Health</Text>
-          <View style={styles.healthRow}>
-            <View style={styles.healthItem}>
-              <Text style={[styles.healthScore, { color: savingsRate >= 20 ? colors.success : savingsRate >= 10 ? colors.warning : colors.expense }]}>
-                {Math.max(0, Math.round(savingsRate))}%
-              </Text>
-              <Text style={[styles.healthLabel, { color: colors.mutedForeground }]}>Savings Rate</Text>
-            </View>
-            <View style={[styles.healthDivider, { backgroundColor: colors.border }]} />
-            <View style={styles.healthItem}>
-              <Text style={[styles.healthScore, { color: accounts.length > 0 ? colors.success : colors.expense }]}>{accounts.length}</Text>
-              <Text style={[styles.healthLabel, { color: colors.mutedForeground }]}>Accounts</Text>
-            </View>
-            <View style={[styles.healthDivider, { backgroundColor: colors.border }]} />
-            <View style={styles.healthItem}>
-              <Text style={[styles.healthScore, { color: bills.filter((b) => !b.isPaid).length === 0 ? colors.success : colors.warning }]}>
-                {bills.filter((b) => !b.isPaid).length}
-              </Text>
-              <Text style={[styles.healthLabel, { color: colors.mutedForeground }]}>Pending Bills</Text>
-            </View>
+              ))
+            )}
           </View>
-        </View>
-
-        {/* AI Generated Insights */}
-        {aiInsights.length > 0 && (
-          <View style={styles.sectionHeader}>
-            <Feather name="zap" size={14} color={colors.primary} />
-            <Text style={[styles.sectionTitle, { color: colors.foreground }]}>AI Analysis</Text>
-          </View>
-        )}
-        {aiInsights.map((insight, i) => (
-          <View key={i} style={[styles.aiCard, { backgroundColor: colors.accent, borderColor: colors.primary + "30" }]}>
-            <Feather name="cpu" size={14} color={colors.primary} />
-            <Text style={[styles.aiText, { color: colors.foreground }]}>{insight}</Text>
-          </View>
-        ))}
-
-        <Text style={[styles.sectionTitle, { color: colors.foreground, marginTop: 4 }]}>Smart Insights</Text>
-        {insights.map((insight) => (
-          <View key={insight.id} style={[styles.insightCard, { backgroundColor: colors.card }]}>
-            <View style={[styles.insightIcon, { backgroundColor: insight.color + "18" }]}>
-              <Feather name={insight.icon as any} size={18} color={insight.color} />
+        ) : (
+          <>
+            <View style={[styles.card, { backgroundColor: colors.card }]}>
+              <Text style={[styles.cardTitle, { color: colors.foreground }]}>This Month's Spending</Text>
+              {categorySpend.length === 0 ? (
+                <Text style={[styles.noData, { color: colors.mutedForeground }]}>Add transactions to see breakdown</Text>
+              ) : (
+                categorySpend.map(([cat, amount]) => {
+                  const pct = totalSpend > 0 ? (amount / totalSpend) * 100 : 0;
+                  const catColor = CATEGORY_COLORS[cat] || colors.primary;
+                  return (
+                    <View key={cat} style={styles.catRow}>
+                      <View style={styles.catLabel}>
+                        <View style={[styles.catDot, { backgroundColor: catColor }]} />
+                        <Text style={[styles.catName, { color: colors.foreground }]}>{cat}</Text>
+                      </View>
+                      <View style={styles.catBarContainer}>
+                        <View style={[styles.catBar, { backgroundColor: catColor + "30", width: "100%" }]}>
+                          <View style={[styles.catBarFill, { backgroundColor: catColor, width: `${Math.min(pct, 100)}%` as any }]} />
+                        </View>
+                      </View>
+                      <Text style={[styles.catAmount, { color: colors.foreground }]}>${amount.toFixed(0)}</Text>
+                    </View>
+                  );
+                })
+              )}
             </View>
-            <View style={styles.insightContent}>
-              <View style={styles.insightHeader}>
-                <Text style={[styles.insightTitle, { color: colors.foreground }]}>{insight.title}</Text>
-                <View style={[styles.insightBadge, { backgroundColor: insight.color + "18" }]}>
-                  <Text style={[styles.insightBadgeText, { color: insight.color }]}>{insight.type}</Text>
+            <View style={[styles.card, { backgroundColor: colors.card }]}>
+              <Text style={[styles.cardTitle, { color: colors.foreground }]}>Financial Health</Text>
+              <View style={styles.healthRow}>
+                <View style={styles.healthItem}>
+                  <Text style={[styles.healthScore, { color: savingsRate >= 20 ? colors.success : savingsRate >= 10 ? colors.warning : colors.expense }]}>
+                    {Math.max(0, Math.round(savingsRate))}%
+                  </Text>
+                  <Text style={[styles.healthLabel, { color: colors.mutedForeground }]}>Savings Rate</Text>
+                </View>
+                <View style={[styles.healthDivider, { backgroundColor: colors.border }]} />
+                <View style={styles.healthItem}>
+                  <Text style={[styles.healthScore, { color: accounts.length > 0 ? colors.success : colors.expense }]}>{accounts.length}</Text>
+                  <Text style={[styles.healthLabel, { color: colors.mutedForeground }]}>Accounts</Text>
+                </View>
+                <View style={[styles.healthDivider, { backgroundColor: colors.border }]} />
+                <View style={styles.healthItem}>
+                  <Text style={[styles.healthScore, { color: bills.filter((b) => !b.isPaid).length === 0 ? colors.success : colors.warning }]}>
+                    {bills.filter((b) => !b.isPaid).length}
+                  </Text>
+                  <Text style={[styles.healthLabel, { color: colors.mutedForeground }]}>Pending Bills</Text>
                 </View>
               </View>
-              <Text style={[styles.insightDesc, { color: colors.mutedForeground }]}>{insight.description}</Text>
             </View>
-          </View>
-        ))}
+            {aiInsights.length > 0 && (
+              <View style={styles.sectionHeader}>
+                <Feather name="zap" size={14} color={colors.primary} />
+                <Text style={[styles.sectionTitle, { color: colors.foreground }]}>AI Analysis</Text>
+              </View>
+            )}
+            {aiInsights.map((insight, i) => (
+              <View key={i} style={[styles.aiCard, { backgroundColor: colors.accent, borderColor: colors.primary + "30" }]}>
+                <Feather name="cpu" size={14} color={colors.primary} />
+                <Text style={[styles.aiText, { color: colors.foreground }]}>{insight}</Text>
+              </View>
+            ))}
+            <Text style={[styles.sectionTitle, { color: colors.foreground, marginTop: 4 }]}>Smart Insights</Text>
+            {insights.map((insight) => (
+              <View key={insight.id} style={[styles.insightCard, { backgroundColor: colors.card }]}>
+                <View style={[styles.insightIcon, { backgroundColor: insight.color + "18" }]}>
+                  <Feather name={insight.icon as any} size={18} color={insight.color} />
+                </View>
+                <View style={styles.insightContent}>
+                  <View style={styles.insightHeader}>
+                    <Text style={[styles.insightTitle, { color: colors.foreground }]}>{insight.title}</Text>
+                    <View style={[styles.insightBadge, { backgroundColor: insight.color + "18" }]}>
+                      <Text style={[styles.insightBadgeText, { color: insight.color }]}>{insight.type}</Text>
+                    </View>
+                  </View>
+                  <Text style={[styles.insightDesc, { color: colors.mutedForeground }]}>{insight.description}</Text>
+                </View>
+              </View>
+            ))}
+          </>
+        )}
       </ScrollView>
 
       {/* FAB */}
@@ -356,6 +410,9 @@ const styles = StyleSheet.create({
   scroll: { paddingHorizontal: 16, gap: 14 },
   header: { flexDirection: "row", justifyContent: "space-between", alignItems: "center" },
   title: { fontSize: 24, fontFamily: "Inter_700Bold" },
+  segment: { flexDirection: "row", borderRadius: 12, overflow: "hidden", borderWidth: 1 },
+  segmentBtn: { paddingHorizontal: 12, paddingVertical: 8 },
+  segmentText: { fontSize: 13, fontFamily: "Inter_600SemiBold" },
   genBtn: { flexDirection: "row", alignItems: "center", gap: 6, paddingHorizontal: 14, paddingVertical: 9, borderRadius: 12 },
   genBtnText: { fontSize: 14, fontFamily: "Inter_600SemiBold" },
   card: { borderRadius: 16, padding: 18, gap: 14 },
@@ -386,6 +443,12 @@ const styles = StyleSheet.create({
   insightBadge: { paddingHorizontal: 8, paddingVertical: 3, borderRadius: 6 },
   insightBadgeText: { fontSize: 10, fontFamily: "Inter_500Medium", textTransform: "capitalize" },
   insightDesc: { fontSize: 13, fontFamily: "Inter_400Regular", lineHeight: 18 },
+  reviewRow: { flexDirection: "row", alignItems: "center", gap: 10, paddingVertical: 12, borderBottomWidth: 1 },
+  reviewTitle: { fontSize: 14, fontFamily: "Inter_600SemiBold" },
+  reviewSub: { fontSize: 12, fontFamily: "Inter_400Regular" },
+  reviewAmt: { fontSize: 14, fontFamily: "Inter_700Bold" },
+  reviewBtn: { paddingHorizontal: 12, paddingVertical: 8, borderRadius: 10 },
+  reviewBtnText: { color: "#fff", fontSize: 13, fontFamily: "Inter_600SemiBold" },
 
   // FAB
   fabContainer: {
