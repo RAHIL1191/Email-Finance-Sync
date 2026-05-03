@@ -266,14 +266,15 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
         let parsedTx: Transaction[] = txRaw ? JSON.parse(txRaw) : [];
         let parsedBills: Bill[] = billRaw ? JSON.parse(billRaw) : [];
 
-        // Strip mock accounts and their manual transactions (runs until none remain)
+        // Always strip mock accounts and their manual transactions
         const hasMockAccounts = parsedAccounts.some((a) => MOCK_ACCOUNT_IDS.has(a.id));
         if (hasMockAccounts) {
           parsedAccounts = parsedAccounts.filter((a) => !MOCK_ACCOUNT_IDS.has(a.id));
-          parsedTx = parsedTx.filter(
-            (t) => !MOCK_TX_IDS.has(t.id) && !(MOCK_ACCOUNT_IDS.has(t.accountId ?? "") && t.source === "manual")
-          );
         }
+        // Always strip mock transactions by ID and any manual tx linked to mock accounts
+        parsedTx = parsedTx.filter(
+          (t) => !MOCK_TX_IDS.has(t.id) && !(MOCK_ACCOUNT_IDS.has(t.accountId ?? "") && t.source === "manual")
+        );
 
         // Always strip mock bills by ID (independent of whether mock accounts still exist)
         const MOCK_BILL_IDS = new Set(["b1", "b2", "b3", "b4", "b5"]);
@@ -348,11 +349,37 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
     // Dedup: if lastFour + bank already matches an existing account, return its ID
     if (a.lastFour && a.bank) {
       const existing = findAccountMatch(accountsRef.current, a.bank, a.lastFour);
-      if (existing) return existing.id;
+      if (existing) {
+        // Still remap stale email transactions to the existing account
+        if (existing.bank) {
+          const pat = existing.bank.trim().toLowerCase();
+          setTransactions((prev) =>
+            prev.map((t) => {
+              if (t.source !== "email" || !t.bank) return t;
+              const tb = t.bank.toLowerCase();
+              if (tb.includes(pat) || pat.includes(tb)) return { ...t, accountId: existing.id };
+              return t;
+            })
+          );
+        }
+        return existing.id;
+      }
     }
     const newA: Account = { ...a, id: genId() };
     setAccounts((prev) => [...prev, newA]);
     apiCall("/api/accounts", "POST", householdIdRef.current, deviceIdRef.current, newA);
+    // Auto-remap any email transactions whose bank matches this new account
+    if (newA.bank) {
+      const pat = newA.bank.trim().toLowerCase();
+      setTransactions((prev) =>
+        prev.map((t) => {
+          if (t.source !== "email" || !t.bank) return t;
+          const tb = t.bank.toLowerCase();
+          if (tb.includes(pat) || pat.includes(tb)) return { ...t, accountId: newA.id };
+          return t;
+        })
+      );
+    }
     return newA.id;
   }, []);
 
@@ -463,7 +490,7 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
       if (!res.ok) { setIsSyncing(false); return { imported: 0, error: data.error || "Sync failed" }; }
 
       const currentAccounts = accountsRef.current;
-      const defaultAccountId = currentAccounts[0]?.id || "acc1";
+      const defaultAccountId = currentAccounts[0]?.id || "";
       let imported = 0;
 
       if (data.transactions && Array.isArray(data.transactions)) {
