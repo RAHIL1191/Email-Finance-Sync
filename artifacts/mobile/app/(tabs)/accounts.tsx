@@ -502,7 +502,7 @@ function ConnectedInstitutionsModal({
                   </Text>
                 </View>
               )}
-      {(syncResult?.parsed?.length || emailSync.lastParsed?.length || 0) > 0 && (
+      {(syncResult?.imported ?? 0) > 0 && (syncResult?.parsed?.length || 0) > 0 && (
                 <View style={{ gap: 8 }}>
                   <Text style={[styles.plaidLastSync, { color: colors.mutedForeground }]}>Parsed transaction details:</Text>
           {(syncResult?.parsed || emailSync.lastParsed || []).slice(0, 5).map((p, idx) => (
