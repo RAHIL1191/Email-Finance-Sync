@@ -28,9 +28,11 @@ const { width: SCREEN_WIDTH } = Dimensions.get("window");
 
 export default function Drawer() {
   const { isOpen, closeDrawer } = useDrawer();
-  const { projects, transactions } = useApp();
+  const { projects, transactions, userName, setUserName } = useApp();
   const colors = useColors();
   const insets = useSafeAreaInsets();
+  const [editingName, setEditingName] = useState(false);
+  const [nameInput, setNameInput] = useState("");
 
   const translateX = useRef(new Animated.Value(-DRAWER_WIDTH)).current;
   const backdropOpacity = useRef(new Animated.Value(0)).current;
@@ -225,9 +227,44 @@ export default function Drawer() {
 
         {/* ── Footer ── */}
         <View style={[styles.footer, { borderTopColor: colors.border }]}>
-          <Text style={[styles.footerText, { color: colors.mutedForeground }]}>
-            FinTrack · Family Edition
-          </Text>
+          {editingName ? (
+            <View style={styles.nameRow}>
+              <TextInput
+                style={[styles.nameInput, { color: colors.foreground, borderColor: colors.border, backgroundColor: colors.background }]}
+                value={nameInput}
+                onChangeText={setNameInput}
+                placeholder="Your name"
+                placeholderTextColor={colors.mutedForeground}
+                autoFocus
+                returnKeyType="done"
+                onSubmitEditing={() => {
+                  if (nameInput.trim()) setUserName(nameInput.trim());
+                  setEditingName(false);
+                }}
+              />
+              <TouchableOpacity
+                onPress={() => {
+                  if (nameInput.trim()) setUserName(nameInput.trim());
+                  setEditingName(false);
+                }}
+                style={[styles.nameSaveBtn, { backgroundColor: colors.primary }]}
+              >
+                <Feather name="check" size={14} color="#fff" />
+              </TouchableOpacity>
+            </View>
+          ) : (
+            <TouchableOpacity
+              onPress={() => { setNameInput(userName); setEditingName(true); }}
+              style={styles.nameDisplayRow}
+              hitSlop={8}
+            >
+              <Feather name="user" size={13} color={colors.mutedForeground} />
+              <Text style={[styles.footerText, { color: colors.mutedForeground }]}>
+                {userName ? userName : "Set your name"}
+              </Text>
+              <Feather name="edit-2" size={11} color={colors.mutedForeground} />
+            </TouchableOpacity>
+          )}
         </View>
       </Animated.View>
     </View>
@@ -313,9 +350,37 @@ const styles = StyleSheet.create({
     borderTopWidth: 1,
     paddingTop: 12,
     paddingHorizontal: 20,
+    paddingBottom: 4,
     alignItems: "center",
   },
   footerText: { fontSize: 11, fontFamily: "Inter_400Regular" },
+  nameDisplayRow: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 6,
+  },
+  nameRow: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 8,
+    width: "100%",
+  },
+  nameInput: {
+    flex: 1,
+    fontSize: 13,
+    fontFamily: "Inter_400Regular",
+    borderWidth: 1,
+    borderRadius: 8,
+    paddingHorizontal: 10,
+    paddingVertical: 6,
+  },
+  nameSaveBtn: {
+    width: 30,
+    height: 30,
+    borderRadius: 8,
+    alignItems: "center",
+    justifyContent: "center",
+  },
 });
 
 const drawerStyles = StyleSheet.create({

@@ -160,6 +160,7 @@ export default function HomeScreen() {
     emailSync,
     isSyncing,
     syncEmailTransactions,
+    userName,
   } = useApp();
 
   const [showAddTx, setShowAddTx] = useState(false);
@@ -206,8 +207,9 @@ export default function HomeScreen() {
   const flowPct = monthlyIncome > 0 ? ((netFlow / monthlyIncome) * 100) : 0;
 
   const now = new Date();
-  const greeting =
+  const greetingBase =
     now.getHours() < 12 ? "Good morning" : now.getHours() < 17 ? "Good afternoon" : "Good evening";
+  const greeting = userName ? `${greetingBase}, ${userName}` : greetingBase;
   const monthName = now.toLocaleString("default", { month: "long" });
 
   const CATEGORY_COLORS: Record<string, string> = {
@@ -235,8 +237,8 @@ export default function HomeScreen() {
             <Feather name="menu" size={20} color={colors.foreground} />
           </TouchableOpacity>
           <View>
-            <Text style={[styles.greeting, { color: colors.mutedForeground }]}>{greeting}</Text>
-            <Text style={[styles.pageTitle, { color: colors.foreground }]}>My Finances</Text>
+            <Text style={[styles.greeting, { color: colors.mutedForeground }]}>Your finances</Text>
+            <Text style={[styles.pageTitle, { color: colors.foreground }]}>{greeting}</Text>
           </View>
         </View>
         <View style={styles.headerActions}>

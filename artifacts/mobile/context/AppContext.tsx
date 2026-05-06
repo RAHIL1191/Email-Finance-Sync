@@ -106,6 +106,8 @@ interface AppContextType {
   projects: Project[];
   emailSync: EmailSync;
   plaidSync: PlaidSync;
+  userName: string;
+  setUserName: (name: string) => void;
   addTransaction: (t: Omit<Transaction, "id">) => void;
   updateTransaction: (id: string, t: Partial<Transaction>) => void;
   deleteTransaction: (id: string) => void;
@@ -147,6 +149,7 @@ const STORAGE_KEYS = {
   plaidSync: "@fintrack/plaidSync",
   deviceId: "@fintrack/deviceId",
   householdId: "@fintrack/householdId",
+  userName: "@fintrack/userName",
 };
 
 // ── Helpers ──────────────────────────────────────────────────────────────────
@@ -268,6 +271,7 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
   const [initialized, setInitialized] = useState(false);
   const [deviceId, setDeviceId] = useState<string>("");
   const [householdId, setHouseholdId] = useState<string>("");
+  const [userName, setUserNameState] = useState<string>("");
   const deviceIdRef = useRef<string>("");
   const householdIdRef = useRef<string>("");
   const accountsRef = useRef<Account[]>([]);
@@ -275,7 +279,7 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
   useEffect(() => {
     (async () => {
       try {
-        const [txRaw, accRaw, billRaw, projectRaw, emailRaw, plaidRaw, storedDeviceId, storedHouseholdId] =
+        const [txRaw, accRaw, billRaw, projectRaw, emailRaw, plaidRaw, storedDeviceId, storedHouseholdId, storedUserName] =
           await Promise.all([
             AsyncStorage.getItem(STORAGE_KEYS.transactions),
             AsyncStorage.getItem(STORAGE_KEYS.accounts),
@@ -285,6 +289,7 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
             AsyncStorage.getItem(STORAGE_KEYS.plaidSync),
             AsyncStorage.getItem(STORAGE_KEYS.deviceId),
             AsyncStorage.getItem(STORAGE_KEYS.householdId),
+            AsyncStorage.getItem(STORAGE_KEYS.userName),
           ]);
 
         const dId = storedDeviceId || generateDeviceId();
@@ -303,6 +308,7 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
         setProjects(projectRaw ? JSON.parse(projectRaw) : []);
         if (emailRaw) setEmailSync(JSON.parse(emailRaw));
         if (plaidRaw) setPlaidSync(JSON.parse(plaidRaw));
+        if (storedUserName) setUserNameState(storedUserName);
       } catch {}
       setInitialized(true);
     })();
@@ -317,6 +323,11 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
   useEffect(() => { if (initialized) AsyncStorage.setItem(STORAGE_KEYS.projects, JSON.stringify(projects)); }, [projects, initialized]);
   useEffect(() => { if (initialized) AsyncStorage.setItem(STORAGE_KEYS.emailSync, JSON.stringify(emailSync)); }, [emailSync, initialized]);
   useEffect(() => { if (initialized) AsyncStorage.setItem(STORAGE_KEYS.plaidSync, JSON.stringify(plaidSync)); }, [plaidSync, initialized]);
+  useEffect(() => { if (initialized) AsyncStorage.setItem(STORAGE_KEYS.userName, userName); }, [userName, initialized]);
+
+  const setUserName = useCallback((name: string) => {
+    setUserNameState(name.trim());
+  }, []);
 
   const changeHouseholdId = useCallback(async (code: string) => {
     const normalized = code.trim().toUpperCase();
@@ -736,6 +747,7 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
     <AppContext.Provider
       value={{
         transactions, accounts, bills, projects, emailSync, plaidSync,
+        userName, setUserName,
         addTransaction, updateTransaction, deleteTransaction,
         addAccount, remapEmailTransactions, updateAccount, deleteAccount,
         addBill, updateBill, deleteBill, markBillPaid,
