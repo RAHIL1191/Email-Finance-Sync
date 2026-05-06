@@ -22,7 +22,7 @@ import { SafeAreaView, useSafeAreaInsets } from "react-native-safe-area-context"
 import AddAccountModal from "@/components/AddAccountModal";
 import ConfirmModal from "@/components/ConfirmModal";
 import PlaidLinkModal from "@/components/PlaidLinkModal";
-import { Account, PlaidItem, PLAID_BANKS, useApp } from "@/context/AppContext";
+import { Account, PlaidItem, PLAID_BANKS, computeBalance, useApp } from "@/context/AppContext";
 import { useColors } from "@/hooks/useColors";
 
 const { width: SCREEN_W } = Dimensions.get("window");
@@ -104,8 +104,9 @@ function AccountRow({
 }) {
   const colors = useColors();
   const [showDeleteConfirm, setShowDeleteConfirm] = React.useState(false);
-  const { deleteAccount } = useApp();
-  const isNeg = account.balance < 0;
+  const { deleteAccount, transactions } = useApp();
+  const liveBalance = computeBalance(account, transactions);
+  const isNeg = liveBalance < 0;
   const bankMeta = PLAID_BANKS.find(
     (b) => b.name.toLowerCase() === (account.bank ?? "").toLowerCase()
   );
@@ -151,7 +152,7 @@ function AccountRow({
         </View>
         <Text style={[styles.acctBal, { color: isNeg ? colors.expense : colors.foreground }]}>
           {isNeg ? "- " : ""}$
-          {Math.abs(account.balance).toLocaleString("en-US", {
+          {Math.abs(liveBalance).toLocaleString("en-US", {
             minimumFractionDigits: 2,
             maximumFractionDigits: 2,
           })}
@@ -612,6 +613,7 @@ export default function AccountsScreen() {
   const colors = useColors();
   const {
     accounts,
+    transactions,
     totalBalance,
     emailSync,
     plaidSync,
@@ -629,9 +631,9 @@ export default function AccountsScreen() {
   const creditAccounts = accounts.filter((a) => a.type === "credit");
   const investAccounts = accounts.filter((a) => a.type === "investment");
 
-  const cashTotal = cashAccounts.reduce((s, a) => s + a.balance, 0);
-  const creditTotal = creditAccounts.reduce((s, a) => s + a.balance, 0);
-  const investTotal = investAccounts.reduce((s, a) => s + a.balance, 0);
+  const cashTotal = cashAccounts.reduce((s, a) => s + computeBalance(a, transactions), 0);
+  const creditTotal = creditAccounts.reduce((s, a) => s + computeBalance(a, transactions), 0);
+  const investTotal = investAccounts.reduce((s, a) => s + computeBalance(a, transactions), 0);
 
   const connectedCount = plaidSync.items.length + (emailSync.isConnected ? 1 : 0);
 

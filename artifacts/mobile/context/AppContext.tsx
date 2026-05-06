@@ -258,6 +258,14 @@ function remapEmailTransactionsForAccount(
   });
 }
 
+/** Effective balance = stored base balance adjusted by all linked transactions */
+export function computeBalance(account: Account, transactions: Transaction[]): number {
+  const net = transactions
+    .filter((t) => t.accountId === account.id)
+    .reduce((s, t) => s + (t.type === "income" ? t.amount : -t.amount), 0);
+  return account.balance + net;
+}
+
 // ── Provider ─────────────────────────────────────────────────────────────────
 
 export function AppProvider({ children }: { children: React.ReactNode }) {
@@ -741,7 +749,7 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
   const monthlyExpense = thisMonthTx.filter((t) => t.type === "expense").reduce((s, t) => s + t.amount, 0);
   const totalBalance = accounts
     .filter((a) => a.includeInNetworth !== false)
-    .reduce((s, a) => s + a.balance, 0);
+    .reduce((s, a) => s + computeBalance(a, transactions), 0);
 
   return (
     <AppContext.Provider

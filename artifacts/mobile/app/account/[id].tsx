@@ -33,7 +33,7 @@ import ConfirmModal from "@/components/ConfirmModal";
 import TransactionDetailModal from "@/components/TransactionDetailModal";
 import { CATEGORY_COLORS, CATEGORY_ICONS } from "@/components/TransactionItem";
 import { ACCOUNT_CATEGORIES, SubType } from "@/components/AddAccountModal";
-import { PLAID_BANKS, Transaction, useApp } from "@/context/AppContext";
+import { PLAID_BANKS, Transaction, computeBalance, useApp } from "@/context/AppContext";
 import { useColors } from "@/hooks/useColors";
 
 const { width: SCREEN_W } = Dimensions.get("window");
@@ -943,7 +943,7 @@ export default function AccountDetailScreen() {
   const history = useMemo(
     () =>
       account
-        ? buildBalanceHistory(account.balance, accountTxns, 30)
+        ? buildBalanceHistory(liveBalance, accountTxns, 30)
         : [],
     [account, accountTxns]
   );
@@ -974,7 +974,8 @@ export default function AccountDetailScreen() {
     );
   }
 
-  const isNeg = account.balance < 0;
+  const liveBalance = computeBalance(account, accountTxns);
+  const isNeg = liveBalance < 0;
   const initials = bankInitials(account.bank, account.name);
   const recentTxns = accountTxns.slice(0, 8);
 
@@ -1074,7 +1075,7 @@ export default function AccountDetailScreen() {
           <View style={styles.balanceRow}>
             <Text style={[styles.balanceAmount, { color: isNeg ? colors.expense : colors.foreground }]}>
               {isNeg ? "-" : ""}$
-              {Math.abs(account.balance).toLocaleString("en-US", {
+              {Math.abs(liveBalance).toLocaleString("en-US", {
                 minimumFractionDigits: 2,
                 maximumFractionDigits: 2,
               })}
