@@ -491,7 +491,7 @@ function ConnectedInstitutionsModal({
               {emailSync.lastSynced && (
                 <Text style={[styles.plaidLastSync, { color: colors.mutedForeground }]}>
                   Last synced: {new Date(emailSync.lastSynced).toLocaleString()}
-                  {emailSync.lastImported !== undefined ? `  ·  ${emailSync.lastImported} imported` : ""}
+                  {!syncResult && emailSync.lastImported !== undefined ? `  ·  ${emailSync.lastImported} imported` : ""}
                 </Text>
               )}
       {syncResult && (
