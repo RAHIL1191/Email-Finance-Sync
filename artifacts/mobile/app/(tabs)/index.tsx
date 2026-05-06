@@ -237,7 +237,6 @@ export default function HomeScreen() {
             <Feather name="menu" size={20} color={colors.foreground} />
           </TouchableOpacity>
           <View>
-            <Text style={[styles.greeting, { color: colors.mutedForeground }]}>Your finances</Text>
             <Text style={[styles.pageTitle, { color: colors.foreground }]}>{greeting}</Text>
           </View>
         </View>
@@ -488,7 +487,7 @@ const styles = StyleSheet.create({
   headerLeft: { flexDirection: "row", alignItems: "center", gap: 10 },
   hamburgerBtn: { width: 38, height: 38, borderRadius: 11, alignItems: "center", justifyContent: "center", borderWidth: 1 },
   greeting: { fontSize: 12, fontFamily: "Inter_400Regular" },
-  pageTitle: { fontSize: 22, fontFamily: "Inter_700Bold", marginTop: 2 },
+  pageTitle: { fontSize: 16, fontFamily: "Inter_600SemiBold", marginTop: 2 },
   headerActions: { flexDirection: "row", gap: 8, alignItems: "center" },
   iconBtn: { width: 38, height: 38, borderRadius: 11, alignItems: "center", justifyContent: "center", borderWidth: 1, borderColor: "transparent" },
   // Net banner
