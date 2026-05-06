@@ -216,7 +216,13 @@ function dedupKey(t: { amount: number; title: string; date: string; bank?: strin
 function upsertTransactions(prev: Transaction[], incoming: Transaction[]) {
   const map = new Map<string, Transaction>();
   prev.forEach((t) => map.set(dedupKey(t), t));
-  incoming.forEach((t) => map.set(dedupKey(t), t));
+  incoming.forEach((t) => {
+    const key = dedupKey(t);
+    const existing = map.get(key);
+    // Never overwrite a confirmed/reviewed transaction with a re-synced email copy
+    if (existing && !existing.fromEmail && t.fromEmail) return;
+    map.set(key, t);
+  });
   return Array.from(map.values()).sort((a, b) => b.date.localeCompare(a.date));
 }
 
@@ -541,19 +547,25 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
           }))
         : [];
 
+      // Count truly new entries (didn't already exist in the store in any form)
+      let actuallyNew = 0;
       if (importedTransactions.length > 0) {
-        setTransactions((prev) => upsertTransactions(prev, importedTransactions));
+        setTransactions((prev) => {
+          const existingKeys = new Set(prev.map(dedupKey));
+          actuallyNew = importedTransactions.filter((t) => !existingKeys.has(dedupKey(t))).length;
+          return upsertTransactions(prev, importedTransactions);
+        });
       }
 
       setEmailSync((prev) => ({
         ...prev,
         lastSynced: new Date().toISOString(),
         lastEmailsScanned: data.emailsScanned,
-        lastImported: data.transactionsFound,
+        lastImported: actuallyNew,
         lastParsed: Array.isArray(data.parsed) ? data.parsed : [],
       }));
       setIsSyncing(false);
-      return { imported: importedTransactions.length, parsed: Array.isArray(data.parsed) ? data.parsed : [] };
+      return { imported: actuallyNew, parsed: Array.isArray(data.parsed) ? data.parsed : [] };
     } catch {
       setIsSyncing(false);
       return { imported: 0, error: "Network error during sync" };
