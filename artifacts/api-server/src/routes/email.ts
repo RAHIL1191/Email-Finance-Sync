@@ -55,81 +55,16 @@ router.post("/email/sync", async (req, res) => {
 
     const since = new Date(Date.now() - daysBack * 24 * 60 * 60 * 1000);
     const transactions: ReturnType<typeof parseEmailContent>[] = [];
-    const seen = new Set<string>();
+    // Dedup by UID so two separate searches don't process the same message twice
+    const seenUids = new Set<number>();
+    // Dedup by content so the same transaction isn't added twice
+    const seenContent = new Set<string>();
 
-    // Search for emails from known banks or with financial keywords.
-    // Forwarded emails arrive with the user's own address as the sender, so
-    // the subject-based criteria (including "fwd") is critical to catch them.
-    const searchCriteria = {
-      since,
-      or: [
-        // ── US banks ──────────────────────────────────────────
-        { from: "chase.com" },
-        { from: "bankofamerica.com" },
-        { from: "americanexpress.com" },
-        { from: "wellsfargo.com" },
-        { from: "capitalone.com" },
-        { from: "citi.com" },
-        { from: "citibank.com" },
-        { from: "discover.com" },
-        { from: "usbank.com" },
-        { from: "ally.com" },
-        // ── Canadian banks ────────────────────────────────────
-        { from: "td.com" },
-        { from: "tdbank.com" },
-        { from: "rbc.com" },
-        { from: "royalbank.com" },
-        { from: "scotiabank.com" },
-        { from: "scotiabankmessages.com" },
-        { from: "bmo.com" },
-        { from: "cibc.com" },
-        { from: "tangerine.ca" },
-        { from: "nbc.ca" },
-        { from: "bnc.ca" },
-        { from: "desjardins.com" },
-        { from: "eqbank.ca" },
-        { from: "hsbc.ca" },
-        { from: "hsbc.com" },
-        // ── Generic alert senders ─────────────────────────────
-        { from: "alert" },
-        { from: "notify" },
-        { from: "notification" },
-        { from: "noreply" },
-        { from: "no-reply" },
-        // ── Subject keywords (EN + FR) ────────────────────────
-        // "Fwd:" prefix is critical for forwarded bank emails
-        { subject: "fwd" },
-        { subject: "fw:" },
-        { subject: "transaction" },
-        { subject: "purchase" },
-        { subject: "charge" },
-        { subject: "payment" },
-        { subject: "alert" },
-        { subject: "alerte" },
-        { subject: "debit" },
-        { subject: "deposit" },
-        { subject: "statement" },
-        { subject: "banking" },
-        { subject: "achat" },
-        { subject: "point of sale" },
-        { subject: "card used" },
-        { subject: "card alert" },
-        { subject: "account activity" },
-        { subject: "e-transfer" },
-        { subject: "interac" },
-      ],
-    } as any;
-
-    let emailCount = 0;
-    for await (const message of client.fetch(searchCriteria, {
-      source: true,
-      envelope: true,
-    })) {
-      if (emailCount >= 100) break; // Limit to last 100 matching emails
-      emailCount++;
-
+    const processMessage = async (message: any) => {
+      if (!message.source) return;
+      if (seenUids.has(message.uid)) return;
+      seenUids.add(message.uid);
       try {
-        if (!message.source) continue;
         const parsed = await (simpleParser(message.source) as unknown as Promise<any>);
         const from = parsed.from?.text || "";
         const subject = parsed.subject || "";
@@ -139,16 +74,57 @@ router.post("/email/sync", async (req, res) => {
 
         const tx = parseEmailContent(from, subject, text, html, date);
         if (tx) {
-          // Deduplicate by amount + merchant + date (same day)
-          const dedupKey = `${tx.amount}-${tx.title}-${tx.date.slice(0, 10)}`;
-          if (!seen.has(dedupKey)) {
-            seen.add(dedupKey);
+          const contentKey = `${tx.amount}-${tx.title}-${tx.date.slice(0, 10)}`;
+          if (!seenContent.has(contentKey)) {
+            seenContent.add(contentKey);
             transactions.push(tx);
           }
         }
       } catch {
         // Skip unparseable emails
       }
+    };
+
+    // ── Fetch 1: emails from known bank senders ───────────────────────────
+    // Split into small OR pairs to stay within IMAP protocol limits.
+    const bankSenders = [
+      "chase.com", "bankofamerica.com", "americanexpress.com",
+      "wellsfargo.com", "capitalone.com", "citi.com", "citibank.com",
+      "discover.com", "usbank.com", "ally.com",
+      "td.com", "tdbank.com", "rbc.com", "royalbank.com",
+      "scotiabank.com", "scotiabankmessages.com", "bmo.com", "cibc.com",
+      "tangerine.ca", "nbc.ca", "bnc.ca", "desjardins.com", "eqbank.ca",
+      "hsbc.ca", "hsbc.com",
+    ];
+    // Build a balanced nested OR tree: [[a,b],[c,d],...]
+    const bankCriteria: any = { since, or: bankSenders.map((d) => ({ from: d })) };
+    try {
+      let bankCount = 0;
+      for await (const message of client.fetch(bankCriteria, { source: true, uid: true })) {
+        if (bankCount >= 100) break;
+        bankCount++;
+        await processMessage(message);
+      }
+    } catch {
+      // Some servers may not support complex OR — skip gracefully
+    }
+
+    // ── Fetch 2: subject-keyword search (catches forwarded emails) ────────
+    const subjectKeywords = [
+      "fwd", "transaction", "purchase", "charge", "payment",
+      "alert", "alerte", "debit", "deposit", "statement",
+      "banking", "achat", "interac", "e-transfer",
+    ];
+    const subjectCriteria: any = { since, or: subjectKeywords.map((k) => ({ subject: k })) };
+    try {
+      let subjectCount = 0;
+      for await (const message of client.fetch(subjectCriteria, { source: true, uid: true })) {
+        if (subjectCount >= 150) break;
+        subjectCount++;
+        await processMessage(message);
+      }
+    } catch {
+      // Skip gracefully
     }
 
     await client.logout();
