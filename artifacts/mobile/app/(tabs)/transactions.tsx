@@ -1,6 +1,6 @@
 import { Feather } from "@expo/vector-icons";
 import * as Haptics from "expo-haptics";
-import React, { useMemo, useState } from "react";
+import React, { useEffect, useMemo, useState } from "react";
 import {
   FlatList,
   Platform,
@@ -1064,13 +1064,20 @@ function ReviewTab({
   transactions,
   colors,
   addTransaction,
+  onAllReviewed,
 }: {
   transactions: Transaction[];
   colors: any;
   addTransaction: (t: Omit<Transaction, "id">) => void;
+  onAllReviewed: () => void;
 }) {
-  const [reviewedIds, setReviewedIds] = useState<string[]>([]);
-  const reviewTxs = useMemo(() => transactions.filter((t) => t.fromEmail && !reviewedIds.includes(t.id)), [transactions, reviewedIds]);
+  const { reviewedTransactionIds, markTransactionReviewed } = useApp();
+  const reviewTxs = useMemo(
+    () => transactions.filter(
+      (t) => (t.fromEmail || t.source === "email") && !reviewedTransactionIds.includes(t.id)
+    ),
+    [transactions, reviewedTransactionIds]
+  );
 
   const handleAdd = (tx: Transaction) => {
     addTransaction({
@@ -1085,12 +1092,17 @@ function ReviewTab({
       bank: tx.bank,
       note: tx.note,
     });
-    setReviewedIds((prev) => [...prev, tx.id]);
+    markTransactionReviewed(tx.id);
   };
 
   const handleReject = (txId: string) => {
-    setReviewedIds((prev) => [...prev, txId]);
+    markTransactionReviewed(txId);
   };
+
+  // Auto-switch away when all done
+  React.useEffect(() => {
+    if (reviewTxs.length === 0) onAllReviewed();
+  }, [reviewTxs.length]);
 
   return (
     <View style={{ flex: 1 }}>
@@ -1133,8 +1145,24 @@ function ReviewTab({
 
 export default function InsightsScreen() {
   const colors = useColors();
-  const { transactions, bills, accounts, addTransaction } = useApp();
+  const { transactions, bills, accounts, addTransaction, reviewedTransactionIds } = useApp();
   const [activeTab, setActiveTab] = useState<Subtab>("CASH FLOW");
+
+  const pendingReviewCount = useMemo(
+    () => transactions.filter((t) => (t.fromEmail || t.source === "email") && !reviewedTransactionIds.includes(t.id)).length,
+    [transactions, reviewedTransactionIds]
+  );
+  const visibleTabs = useMemo(
+    () => SUBTABS.filter((tab) => tab !== "REVIEW" || pendingReviewCount > 0),
+    [pendingReviewCount]
+  );
+  // If the active tab is no longer visible (e.g. REVIEW emptied), switch to CASH FLOW
+  useEffect(() => {
+    if (!visibleTabs.includes(activeTab)) {
+      setActiveTab("CASH FLOW");
+    }
+  }, [visibleTabs, activeTab]);
+
   const [chartView, setChartView] = useState<ChartView>("Chart");
   const [showAdd, setShowAdd] = useState(false);
   const currentMonthIdx = new Date().getMonth();
@@ -1169,7 +1197,7 @@ export default function InsightsScreen() {
 
       {/* Subtabs */}
       <View style={[styles.subtabRow, { borderBottomColor: colors.border }]}>
-        {SUBTABS.map((tab) => (
+        {visibleTabs.map((tab) => (
           <TouchableOpacity
             key={tab}
             style={[styles.subtab, activeTab === tab && { borderBottomColor: colors.primary, borderBottomWidth: 2 }]}
@@ -1182,6 +1210,9 @@ export default function InsightsScreen() {
               ]}
             >
               {tab}
+              {tab === "REVIEW" && pendingReviewCount > 0 && (
+                <Text style={{ color: colors.primary }}> ({pendingReviewCount})</Text>
+              )}
             </Text>
           </TouchableOpacity>
         ))}
@@ -1209,7 +1240,14 @@ export default function InsightsScreen() {
         {activeTab === "TRANSACTIONS" && (
           <TransactionsTab transactions={transactions} colors={colors} />
         )}
-        {activeTab === "REVIEW" && <ReviewTab transactions={transactions} colors={colors} addTransaction={addTransaction} />}
+        {activeTab === "REVIEW" && (
+          <ReviewTab
+            transactions={transactions}
+            colors={colors}
+            addTransaction={addTransaction}
+            onAllReviewed={() => setActiveTab("CASH FLOW")}
+          />
+        )}
       </View>
 
       {/* FAB */}

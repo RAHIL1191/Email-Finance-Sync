@@ -108,6 +108,8 @@ interface AppContextType {
   plaidSync: PlaidSync;
   userName: string;
   setUserName: (name: string) => void;
+  reviewedTransactionIds: string[];
+  markTransactionReviewed: (id: string) => void;
   addTransaction: (t: Omit<Transaction, "id">) => void;
   updateTransaction: (id: string, t: Partial<Transaction>) => void;
   deleteTransaction: (id: string) => void;
@@ -150,6 +152,7 @@ const STORAGE_KEYS = {
   deviceId: "@fintrack/deviceId",
   householdId: "@fintrack/householdId",
   userName: "@fintrack/userName",
+  reviewedTransactionIds: "@fintrack/reviewedTransactionIds",
 };
 
 // ── Helpers ──────────────────────────────────────────────────────────────────
@@ -280,6 +283,7 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
   const [deviceId, setDeviceId] = useState<string>("");
   const [householdId, setHouseholdId] = useState<string>("");
   const [userName, setUserNameState] = useState<string>("");
+  const [reviewedTransactionIds, setReviewedTransactionIds] = useState<string[]>([]);
   const deviceIdRef = useRef<string>("");
   const householdIdRef = useRef<string>("");
   const accountsRef = useRef<Account[]>([]);
@@ -287,7 +291,7 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
   useEffect(() => {
     (async () => {
       try {
-        const [txRaw, accRaw, billRaw, projectRaw, emailRaw, plaidRaw, storedDeviceId, storedHouseholdId, storedUserName] =
+        const [txRaw, accRaw, billRaw, projectRaw, emailRaw, plaidRaw, storedDeviceId, storedHouseholdId, storedUserName, storedReviewedIds] =
           await Promise.all([
             AsyncStorage.getItem(STORAGE_KEYS.transactions),
             AsyncStorage.getItem(STORAGE_KEYS.accounts),
@@ -298,6 +302,7 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
             AsyncStorage.getItem(STORAGE_KEYS.deviceId),
             AsyncStorage.getItem(STORAGE_KEYS.householdId),
             AsyncStorage.getItem(STORAGE_KEYS.userName),
+            AsyncStorage.getItem(STORAGE_KEYS.reviewedTransactionIds),
           ]);
 
         const dId = storedDeviceId || generateDeviceId();
@@ -317,6 +322,7 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
         if (emailRaw) setEmailSync(JSON.parse(emailRaw));
         if (plaidRaw) setPlaidSync(JSON.parse(plaidRaw));
         if (storedUserName) setUserNameState(storedUserName);
+        if (storedReviewedIds) setReviewedTransactionIds(JSON.parse(storedReviewedIds));
       } catch {}
       setInitialized(true);
     })();
@@ -332,9 +338,14 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
   useEffect(() => { if (initialized) AsyncStorage.setItem(STORAGE_KEYS.emailSync, JSON.stringify(emailSync)); }, [emailSync, initialized]);
   useEffect(() => { if (initialized) AsyncStorage.setItem(STORAGE_KEYS.plaidSync, JSON.stringify(plaidSync)); }, [plaidSync, initialized]);
   useEffect(() => { if (initialized) AsyncStorage.setItem(STORAGE_KEYS.userName, userName); }, [userName, initialized]);
+  useEffect(() => { if (initialized) AsyncStorage.setItem(STORAGE_KEYS.reviewedTransactionIds, JSON.stringify(reviewedTransactionIds)); }, [reviewedTransactionIds, initialized]);
 
   const setUserName = useCallback((name: string) => {
     setUserNameState(name.trim());
+  }, []);
+
+  const markTransactionReviewed = useCallback((id: string) => {
+    setReviewedTransactionIds((prev) => prev.includes(id) ? prev : [...prev, id]);
   }, []);
 
   const changeHouseholdId = useCallback(async (code: string) => {
@@ -756,6 +767,7 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
       value={{
         transactions, accounts, bills, projects, emailSync, plaidSync,
         userName, setUserName,
+        reviewedTransactionIds, markTransactionReviewed,
         addTransaction, updateTransaction, deleteTransaction,
         addAccount, remapEmailTransactions, updateAccount, deleteAccount,
         addBill, updateBill, deleteBill, markBillPaid,
