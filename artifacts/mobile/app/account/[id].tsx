@@ -940,12 +940,14 @@ export default function AccountDetailScreen() {
     [transactions, id]
   );
 
+  const liveBalance = account ? computeBalance(account, accountTxns) : 0;
+
   const history = useMemo(
     () =>
       account
         ? buildBalanceHistory(liveBalance, accountTxns, 30)
         : [],
-    [account, accountTxns]
+    [account, accountTxns, liveBalance]
   );
 
   const [selectedTx, setSelectedTx] = useState<Transaction | null>(null);
@@ -974,7 +976,6 @@ export default function AccountDetailScreen() {
     );
   }
 
-  const liveBalance = computeBalance(account, accountTxns);
   const isNeg = liveBalance < 0;
   const initials = bankInitials(account.bank, account.name);
   const recentTxns = accountTxns.slice(0, 8);
