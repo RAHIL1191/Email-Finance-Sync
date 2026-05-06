@@ -57,10 +57,13 @@ router.post("/email/sync", async (req, res) => {
     const transactions: ReturnType<typeof parseEmailContent>[] = [];
     const seen = new Set<string>();
 
-    // Search for emails from known banks or with financial keywords
+    // Search for emails from known banks or with financial keywords.
+    // Forwarded emails arrive with the user's own address as the sender, so
+    // the subject-based criteria (including "fwd") is critical to catch them.
     const searchCriteria = {
       since,
       or: [
+        // ── US banks ──────────────────────────────────────────
         { from: "chase.com" },
         { from: "bankofamerica.com" },
         { from: "americanexpress.com" },
@@ -71,17 +74,49 @@ router.post("/email/sync", async (req, res) => {
         { from: "discover.com" },
         { from: "usbank.com" },
         { from: "ally.com" },
-        { from: "alerts@bank" },
-        { from: "noreply@bank" },
-        { from: "notice@bank" },
+        // ── Canadian banks ────────────────────────────────────
+        { from: "td.com" },
+        { from: "tdbank.com" },
+        { from: "rbc.com" },
+        { from: "royalbank.com" },
+        { from: "scotiabank.com" },
+        { from: "scotiabankmessages.com" },
+        { from: "bmo.com" },
+        { from: "cibc.com" },
+        { from: "tangerine.ca" },
+        { from: "nbc.ca" },
+        { from: "bnc.ca" },
+        { from: "desjardins.com" },
+        { from: "eqbank.ca" },
+        { from: "hsbc.ca" },
+        { from: "hsbc.com" },
+        // ── Generic alert senders ─────────────────────────────
+        { from: "alert" },
+        { from: "notify" },
+        { from: "notification" },
+        { from: "noreply" },
+        { from: "no-reply" },
+        // ── Subject keywords (EN + FR) ────────────────────────
+        // "Fwd:" prefix is critical for forwarded bank emails
+        { subject: "fwd" },
+        { subject: "fw:" },
         { subject: "transaction" },
         { subject: "purchase" },
         { subject: "charge" },
         { subject: "payment" },
         { subject: "alert" },
+        { subject: "alerte" },
         { subject: "debit" },
         { subject: "deposit" },
         { subject: "statement" },
+        { subject: "banking" },
+        { subject: "achat" },
+        { subject: "point of sale" },
+        { subject: "card used" },
+        { subject: "card alert" },
+        { subject: "account activity" },
+        { subject: "e-transfer" },
+        { subject: "interac" },
       ],
     } as any;
 
