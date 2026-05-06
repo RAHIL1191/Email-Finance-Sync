@@ -206,12 +206,11 @@ async function apiCall(
   }
 }
 
-/** Canonical dedup key shared across all sync sources */
+/** Canonical dedup key shared across all sync sources (source-agnostic so email/plaid/manual don't duplicate) */
 function dedupKey(t: { amount: number; title: string; date: string; bank?: string; accountId?: string; source?: string }) {
   const bank = (t.bank ?? "").toLowerCase().trim();
   const accountId = (t.accountId ?? "").toLowerCase().trim();
-  const source = (t.source ?? "").toLowerCase().trim();
-  return `${source}|${bank}|${accountId}|${t.amount}|${t.title.toLowerCase().trim()}|${t.date.slice(0, 10)}`;
+  return `${bank}|${accountId}|${t.amount}|${t.title.toLowerCase().trim()}|${t.date.slice(0, 10)}`;
 }
 
 function upsertTransactions(prev: Transaction[], incoming: Transaction[]) {

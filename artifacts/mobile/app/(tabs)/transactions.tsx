@@ -1063,15 +1063,13 @@ function TransactionsTab({ transactions, colors }: { transactions: Transaction[]
 function ReviewTab({
   transactions,
   colors,
-  addTransaction,
   onAllReviewed,
 }: {
   transactions: Transaction[];
   colors: any;
-  addTransaction: (t: Omit<Transaction, "id">) => void;
   onAllReviewed: () => void;
 }) {
-  const { reviewedTransactionIds, markTransactionReviewed } = useApp();
+  const { reviewedTransactionIds, markTransactionReviewed, updateTransaction, deleteTransaction } = useApp();
   const reviewTxs = useMemo(
     () => transactions.filter(
       (t) => (t.fromEmail || t.source === "email") && !reviewedTransactionIds.includes(t.id)
@@ -1079,23 +1077,16 @@ function ReviewTab({
     [transactions, reviewedTransactionIds]
   );
 
+  // "Add" — keep the existing transaction, just clear the email flags so it
+  // appears as a normal confirmed transaction. No second copy is created.
   const handleAdd = (tx: Transaction) => {
-    addTransaction({
-      title: tx.title,
-      merchant: tx.merchant,
-      amount: tx.amount,
-      type: tx.type,
-      category: tx.category,
-      accountId: tx.accountId,
-      date: tx.date,
-      source: "manual",
-      bank: tx.bank,
-      note: tx.note,
-    });
+    updateTransaction(tx.id, { fromEmail: false, source: "manual" });
     markTransactionReviewed(tx.id);
   };
 
+  // "Reject" — remove the transaction from the store entirely.
   const handleReject = (txId: string) => {
+    deleteTransaction(txId);
     markTransactionReviewed(txId);
   };
 
@@ -1244,7 +1235,6 @@ export default function InsightsScreen() {
           <ReviewTab
             transactions={transactions}
             colors={colors}
-            addTransaction={addTransaction}
             onAllReviewed={() => setActiveTab("CASH FLOW")}
           />
         )}
