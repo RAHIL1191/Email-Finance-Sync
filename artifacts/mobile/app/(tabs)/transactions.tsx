@@ -1080,7 +1080,7 @@ function ReviewTab({
   // "Add" — keep the existing transaction, just clear the email flags so it
   // appears as a normal confirmed transaction. No second copy is created.
   const handleAdd = (tx: Transaction) => {
-    updateTransaction(tx.id, { fromEmail: false, source: "manual" });
+    updateTransaction(tx.id, { fromEmail: false });
     markTransactionReviewed(tx.id);
   };
 
