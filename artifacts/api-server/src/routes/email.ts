@@ -11,6 +11,23 @@ interface SyncRequest {
   daysBack?: number;
 }
 
+function getImapConfig(email: string): { host: string; port: number; isGmail: boolean } {
+  const domain = email.split("@")[1]?.toLowerCase() || "";
+  if (domain.includes("gmail") || domain.includes("googlemail")) {
+    return { host: "imap.gmail.com", port: 993, isGmail: true };
+  }
+  if (domain.includes("outlook") || domain.includes("hotmail") || domain.includes("live")) {
+    return { host: "outlook.office365.com", port: 993, isGmail: false };
+  }
+  if (domain.includes("yahoo")) {
+    return { host: "imap.mail.yahoo.com", port: 993, isGmail: false };
+  }
+  if (domain.includes("icloud") || domain.includes("me.com")) {
+    return { host: "imap.mail.me.com", port: 993, isGmail: false };
+  }
+  return { host: "imap.gmail.com", port: 993, isGmail: false };
+}
+
 router.post("/email/sync", async (req, res) => {
   const { email, appPassword, daysBack = 90 } = req.body as SyncRequest;
 
@@ -19,52 +36,49 @@ router.post("/email/sync", async (req, res) => {
     return;
   }
 
-  // Determine IMAP settings based on email domain
-  const domain = email.split("@")[1]?.toLowerCase() || "";
-  let imapHost = "imap.gmail.com";
-  let imapPort = 993;
-
-  if (domain.includes("outlook") || domain.includes("hotmail") || domain.includes("live")) {
-    imapHost = "outlook.office365.com";
-    imapPort = 993;
-  } else if (domain.includes("yahoo")) {
-    imapHost = "imap.mail.yahoo.com";
-    imapPort = 993;
-  } else if (domain.includes("icloud") || domain.includes("me.com")) {
-    imapHost = "imap.mail.me.com";
-    imapPort = 993;
-  }
+  const { host: imapHost, port: imapPort, isGmail } = getImapConfig(email);
 
   const client = new ImapFlow({
     host: imapHost,
     port: imapPort,
     secure: true,
-    auth: {
-      user: email,
-      pass: appPassword,
-    },
+    auth: { user: email, pass: appPassword },
     logger: false,
-    tls: {
-      rejectUnauthorized: false,
-    },
+    tls: { rejectUnauthorized: false },
   });
 
   try {
     await client.connect();
-    await client.mailboxOpen("INBOX");
+
+    // ── Choose the right mailbox ─────────────────────────────────────────────
+    // Gmail sorts bank alert emails into "Updates" / "Promotions" tabs, which
+    // are separate IMAP folders NOT visible in INBOX.
+    // "[Gmail]/All Mail" contains every message regardless of tab/label,
+    // so we always search there for Gmail accounts.
+    // For other providers, INBOX is the correct folder.
+    let mailboxName = "INBOX";
+    if (isGmail) {
+      try {
+        await client.mailboxOpen("[Gmail]/All Mail");
+        mailboxName = "[Gmail]/All Mail";
+      } catch {
+        // Fall back if All Mail isn't accessible
+        await client.mailboxOpen("INBOX");
+      }
+    } else {
+      await client.mailboxOpen("INBOX");
+    }
+
+    req.log.info({ mailbox: mailboxName, daysBack }, "Email sync started");
 
     const since = new Date(Date.now() - daysBack * 24 * 60 * 60 * 1000);
     const transactions: ReturnType<typeof parseEmailContent>[] = [];
-    // Dedup by UID — use a string key so undefined UIDs don't collapse into one slot
     const seenUids = new Set<string>();
     let uidCounter = 0;
-    // Dedup by content so the same transaction isn't added twice
     const seenContent = new Set<string>();
 
     const processMessage = async (message: any) => {
       if (!message.source) return;
-      // Build a reliable key: prefer the real UID, fall back to a counter so that
-      // messages without UIDs never share a slot and block each other.
       const uidKey = message.uid != null ? String(message.uid) : `__no_uid_${uidCounter++}`;
       if (seenUids.has(uidKey)) return;
       seenUids.add(uidKey);
@@ -89,63 +103,64 @@ router.post("/email/sync", async (req, res) => {
       }
     };
 
-    // Helper: chunk an array into groups of size n
-    const chunk = <T,>(arr: T[], n: number): T[][] =>
-      Array.from({ length: Math.ceil(arr.length / n) }, (_, i) => arr.slice(i * n, i * n + n));
+    // ── Search strategy ──────────────────────────────────────────────────────
+    //
+    // Gmail: use X-GM-RAW (Gmail's native query language) — far more reliable
+    // than standard IMAP SEARCH because it respects Gmail's actual search index
+    // and works across all tabs/labels. A single query covers all bank senders
+    // and financial keywords without any OR batching.
+    //
+    // Non-Gmail: use a simple date-range scan (fetch everything since the
+    // cutoff). The parser decides what counts as a transaction. We cap at 500
+    // messages so one noisy inbox can't stall the request.
 
-    // Helper: run a single IMAP fetch criteria and call processMessage for each result
     const runFetch = async (criteria: any, label: string) => {
       try {
         for await (const message of client.fetch(criteria, { source: true, uid: true })) {
           await processMessage(message);
         }
       } catch (e: any) {
-        // Some servers reject complex OR — skip this batch gracefully
-        req.log?.debug({ label, err: e?.message }, "IMAP fetch batch skipped");
+        req.log.debug({ label, err: e?.message }, "IMAP fetch batch skipped");
       }
     };
 
-    // ── Fetch 1: bank sender searches, batched in groups of 4 ────────────
-    // Sending one massive OR with 24 items often hits IMAP server limits and
-    // fails silently. Batching avoids this entirely.
-    const bankSenders = [
-      "chase.com", "bankofamerica.com", "americanexpress.com",
-      "wellsfargo.com", "capitalone.com", "citi.com", "citibank.com",
-      "discover.com", "usbank.com", "ally.com",
-      "td.com", "tdbank.com", "rbc.com", "royalbank.com",
-      "scotiabank.com", "scotiabankmessages.com", "bmo.com", "cibc.com",
-      "tangerine.ca", "nbc.ca", "bnc.ca", "desjardins.com", "eqbank.ca",
-      "hsbc.ca", "hsbc.com",
-    ];
-    for (const batch of chunk(bankSenders, 4)) {
-      const criteria: any = batch.length === 1
-        ? { since, from: batch[0] }
-        : { since, or: batch.map((d) => ({ from: d })) };
-      await runFetch(criteria, `bank-sender-batch`);
-    }
+    if (isGmail) {
+      // Build a Gmail search query that covers all common bank alert patterns.
+      // newer_than:Xd is more reliable than SINCE for Gmail.
+      const gmailQuery =
+        `newer_than:${daysBack}d ` +
+        `(` +
+        // Known bank domains
+        `from:(chase.com OR bankofamerica.com OR americanexpress.com OR wellsfargo.com ` +
+        `OR capitalone.com OR citi.com OR discover.com OR usbank.com OR ally.com ` +
+        `OR td.com OR tdbank.com OR rbc.com OR royalbank.com OR scotiabank.com ` +
+        `OR bmo.com OR cibc.com OR tangerine.ca OR nbc.ca OR bnc.ca ` +
+        `OR desjardins.com OR eqbank.ca OR hsbc.com OR hsbc.ca) ` +
+        // OR financial keywords in subject (catches forwarded emails + unknown banks)
+        `OR subject:(transaction OR purchase OR charge OR payment OR alert OR debit ` +
+        `OR deposit OR "e-transfer" OR interac OR alerte OR achat)` +
+        `)`;
 
-    // ── Fetch 2: subject-keyword search, batched in groups of 3 ──────────
-    // Catches forwarded bank emails whose sender won't match bank domains.
-    const subjectKeywords = [
-      "transaction", "purchase", "charge", "payment",
-      "alert", "alerte", "debit", "deposit", "statement",
-      "banking", "achat", "interac", "e-transfer", "fwd",
-    ];
-    for (const batch of chunk(subjectKeywords, 3)) {
-      const criteria: any = batch.length === 1
-        ? { since, subject: batch[0] }
-        : { since, or: batch.map((k) => ({ subject: k })) };
-      await runFetch(criteria, `subject-keyword-batch`);
-    }
+      await runFetch({ gmraw: gmailQuery }, "gmail-native-search");
 
-    // ── Fetch 3: catch-all fallback ───────────────────────────────────────
-    // If the two searches above returned nothing (server doesn't support OR),
-    // scan all messages since the cutoff date and let the parser decide.
-    if (seenUids.size === 0) {
-      await runFetch({ since }, "catch-all");
+      // If the Gmail native search found nothing (e.g. X-GM-EXT-1 not enabled),
+      // fall back to standard IMAP SEARCH.
+      if (seenUids.size === 0) {
+        req.log.info("Gmail native search empty, falling back to standard IMAP search");
+        await runFetch({ since }, "gmail-fallback-all");
+      }
+    } else {
+      // Non-Gmail: just scan all mail since the cutoff date.
+      // The parser filters what's actually a bank transaction.
+      await runFetch({ since }, "non-gmail-all");
     }
 
     await client.logout();
+
+    req.log.info(
+      { mailbox: mailboxName, scanned: seenUids.size, found: transactions.length },
+      "Email sync completed"
+    );
 
     res.json({
       success: true,
@@ -161,6 +176,7 @@ router.post("/email/sync", async (req, res) => {
       })),
       emailsScanned: seenUids.size,
       transactionsFound: transactions.length,
+      mailbox: mailboxName,
     });
   } catch (err: any) {
     let message = "Failed to connect to email server.";
@@ -190,19 +206,11 @@ router.post("/email/test", async (req, res) => {
     return;
   }
 
-  const domain = email.split("@")[1]?.toLowerCase() || "";
-  let imapHost = "imap.gmail.com";
-  if (domain.includes("outlook") || domain.includes("hotmail") || domain.includes("live")) {
-    imapHost = "outlook.office365.com";
-  } else if (domain.includes("yahoo")) {
-    imapHost = "imap.mail.yahoo.com";
-  } else if (domain.includes("icloud") || domain.includes("me.com")) {
-    imapHost = "imap.mail.me.com";
-  }
+  const { host: imapHost, port: imapPort } = getImapConfig(email);
 
   const client = new ImapFlow({
     host: imapHost,
-    port: 993,
+    port: imapPort,
     secure: true,
     auth: { user: email, pass: appPassword },
     logger: false,
