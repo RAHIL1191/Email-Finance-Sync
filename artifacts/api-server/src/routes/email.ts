@@ -56,7 +56,7 @@ router.post("/email/sync", async (req, res) => {
     const since = new Date(Date.now() - daysBack * 24 * 60 * 60 * 1000);
     const transactions: ReturnType<typeof parseEmailContent>[] = [];
     // Dedup by UID so two separate searches don't process the same message twice
-    const seenUids = new Set<number>();
+    const seenUids = new Set<number | undefined>();
     // Dedup by content so the same transaction isn't added twice
     const seenContent = new Set<string>();
 
@@ -141,7 +141,7 @@ router.post("/email/sync", async (req, res) => {
         rawSubject: t.rawSubject,
         lastFour: t.lastFour,
       })),
-      emailsScanned: emailCount,
+      emailsScanned: seenUids.size,
       transactionsFound: transactions.length,
     });
   } catch (err: any) {
