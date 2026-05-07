@@ -678,6 +678,9 @@ export function parseEmailContent(
   // -----------------------------------------------------------------------
 
   for (const bankPattern of BANK_PATTERNS) {
+    // Skip the generic "Bank" fallback in this loop — it runs unconditionally below
+    if (bankPattern.bankName === "Bank") continue;
+
     const fromMatch =
       bankPattern.fromPatterns.some((p) => p.test(fromAddress)) ||
       // Check the recovered original sender
@@ -689,9 +692,9 @@ export function parseEmailContent(
       (p) => p.test(cleanSubject) || p.test(subject)
     );
 
-    const hintMatch =
-      bankHints.some((hint) => bankPattern.bankName === "Bank" || hint.includes(bankPattern.bankName.toLowerCase())) ||
-      (bankPattern.bankName === "Bank" && bankHints.length > 0);
+    const hintMatch = bankHints.some((hint) =>
+      hint.includes(bankPattern.bankName.toLowerCase())
+    );
 
     if (!fromMatch && !subjectMatch && !hintMatch) continue;
 
@@ -699,14 +702,34 @@ export function parseEmailContent(
       const result = parser(combined, cleanSubject);
       if (result) {
         result.date = emailDate.toISOString();
-        result.bank = bankPattern.bankName !== "Bank" ? bankPattern.bankName : result.bank;
-        // Extract last 4 digits of the card/account if mentioned in the email
+        result.bank = bankPattern.bankName;
         result.lastFour = extractLastFour(combined);
-        // Tag forwarded transactions so the UI can show it if needed
         if (isForwarded) (result as any).forwarded = true;
         return result;
       }
     }
   }
+
+  // ── Unconditional generic fallback ─────────────────────────────────────────
+  // Run this on every email that wasn't matched above. Any email containing a
+  // dollar amount is considered a potential transaction — this ensures we never
+  // silently drop an email just because its bank isn't in the specific list.
+  const genericPattern = BANK_PATTERNS.find((p) => p.bankName === "Bank");
+  if (genericPattern) {
+    for (const parser of genericPattern.parsers) {
+      const result = parser(combined, cleanSubject);
+      if (result) {
+        result.date = emailDate.toISOString();
+        result.lastFour = extractLastFour(combined);
+        // Try to identify the bank from hints even in generic mode
+        if (bankHints.length > 0) {
+          result.bank = bankHints[0].charAt(0).toUpperCase() + bankHints[0].slice(1);
+        }
+        if (isForwarded) (result as any).forwarded = true;
+        return result;
+      }
+    }
+  }
+
   return null;
 }

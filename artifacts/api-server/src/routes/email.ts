@@ -55,15 +55,19 @@ router.post("/email/sync", async (req, res) => {
 
     const since = new Date(Date.now() - daysBack * 24 * 60 * 60 * 1000);
     const transactions: ReturnType<typeof parseEmailContent>[] = [];
-    // Dedup by UID so two separate searches don't process the same message twice
-    const seenUids = new Set<number | undefined>();
+    // Dedup by UID — use a string key so undefined UIDs don't collapse into one slot
+    const seenUids = new Set<string>();
+    let uidCounter = 0;
     // Dedup by content so the same transaction isn't added twice
     const seenContent = new Set<string>();
 
     const processMessage = async (message: any) => {
       if (!message.source) return;
-      if (seenUids.has(message.uid)) return;
-      seenUids.add(message.uid);
+      // Build a reliable key: prefer the real UID, fall back to a counter so that
+      // messages without UIDs never share a slot and block each other.
+      const uidKey = message.uid != null ? String(message.uid) : `__no_uid_${uidCounter++}`;
+      if (seenUids.has(uidKey)) return;
+      seenUids.add(uidKey);
       try {
         const parsed = await (simpleParser(message.source) as unknown as Promise<any>);
         const from = parsed.from?.text || "";
@@ -80,8 +84,8 @@ router.post("/email/sync", async (req, res) => {
             transactions.push(tx);
           }
         }
-      } catch {
-        // Skip unparseable emails
+      } catch (e: any) {
+        req.log.debug({ err: e?.message }, "Skipping unparseable email");
       }
     };
 
