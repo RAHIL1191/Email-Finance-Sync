@@ -247,8 +247,9 @@ function EmailConnectModal({ onClose }: { onClose: () => void }) {
 
   return (
     <Modal visible animationType="slide" presentationStyle="pageSheet" onRequestClose={onClose}>
-      <KeyboardAvoidingView style={{ flex: 1, backgroundColor: colors.background }} behavior={Platform.OS === "ios" ? "padding" : "height"}>
-        <View style={[styles.modalHeader, { paddingTop: (Platform.OS === "web" ? 20 : insets.top) + 16, borderBottomColor: colors.border }]}>
+      <SafeAreaView style={{ flex: 1, backgroundColor: colors.background }}>
+      <KeyboardAvoidingView style={{ flex: 1 }} behavior={Platform.OS === "ios" ? "padding" : "height"}>
+        <View style={[styles.modalHeader, { paddingTop: 16, borderBottomColor: colors.border }]}>
           <TouchableOpacity onPress={onClose}><Feather name="x" size={22} color={colors.foreground} /></TouchableOpacity>
           <Text style={[styles.modalTitle, { color: colors.foreground }]}>{wasConnected ? "Update Email" : "Connect Email"}</Text>
           <View style={{ width: 22 }} />
@@ -338,6 +339,7 @@ function EmailConnectModal({ onClose }: { onClose: () => void }) {
           )}
         </ScrollView>
       </KeyboardAvoidingView>
+      </SafeAreaView>
     </Modal>
   );
 }
