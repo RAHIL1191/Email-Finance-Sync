@@ -529,7 +529,7 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
           "X-Household-ID": householdIdRef.current,
           "X-Device-ID": deviceIdRef.current,
         },
-        body: JSON.stringify({ email: emailSync.email, appPassword: emailSync.appPassword, daysBack: 30 }),
+        body: JSON.stringify({ email: emailSync.email, appPassword: emailSync.appPassword, daysBack: 90 }),
       });
       const data = await res.json();
       if (!res.ok) {

@@ -280,7 +280,7 @@ const BANK_PATTERNS: BankPattern[] = [
           if (m) {
             const amount = parseFloat(m[1].replace(/,/g, ""));
             const merchant = m[2].trim();
-            if (amount > 0) return { title: merchant, amount, type: "expense", category: categorizeFrom(merchant), bank: "TD", date: new Date().toISOString(), rawSubject: subject };
+            if (amount > 0) return { title: merchant, merchant, amount, type: "expense", category: categorizeFrom(merchant), bank: "TD", date: new Date().toISOString(), rawSubject: subject };
           }
         }
         // French: "Un achat de 1 234,56 $ a été effectué chez MERCHANT"
@@ -290,7 +290,7 @@ const BANK_PATTERNS: BankPattern[] = [
           const amount2 = parseFrenchAmount(frM[1]);
           const finalAmt = amount2 ?? amount;
           const merchant = frM[2].trim();
-          if (finalAmt && finalAmt > 0) return { title: merchant, amount: finalAmt, type: "expense", category: categorizeFrom(merchant), bank: "TD", date: new Date().toISOString(), rawSubject: subject };
+          if (finalAmt && finalAmt > 0) return { title: merchant, merchant, amount: finalAmt, type: "expense", category: categorizeFrom(merchant), bank: "TD", date: new Date().toISOString(), rawSubject: subject };
         }
         return null;
       },
@@ -316,7 +316,7 @@ const BANK_PATTERNS: BankPattern[] = [
           if (m) {
             const amount = parseFloat(m[1].replace(/,/g, ""));
             const merchant = m[2].trim();
-            if (amount > 0) return { title: merchant, amount, type: "expense", category: categorizeFrom(merchant), bank: "RBC", date: new Date().toISOString(), rawSubject: subject };
+            if (amount > 0) return { title: merchant, merchant, amount, type: "expense", category: categorizeFrom(merchant), bank: "RBC", date: new Date().toISOString(), rawSubject: subject };
           }
         }
         // French
@@ -324,7 +324,7 @@ const BANK_PATTERNS: BankPattern[] = [
         if (frM) {
           const amount = parseFrenchAmount(frM[1]);
           const merchant = frM[2].trim();
-          if (amount && amount > 0) return { title: merchant, amount, type: "expense", category: categorizeFrom(merchant), bank: "RBC", date: new Date().toISOString(), rawSubject: subject };
+          if (amount && amount > 0) return { title: merchant, merchant, amount, type: "expense", category: categorizeFrom(merchant), bank: "RBC", date: new Date().toISOString(), rawSubject: subject };
         }
         return null;
       },
@@ -350,7 +350,7 @@ const BANK_PATTERNS: BankPattern[] = [
           if (m) {
             const amount = parseFloat(m[1].replace(/,/g, ""));
             const merchant = m[2].trim();
-            if (amount > 0) return { title: merchant, amount, type: "expense", category: categorizeFrom(merchant), bank: "Scotiabank", date: new Date().toISOString(), rawSubject: subject };
+            if (amount > 0) return { title: merchant, merchant, amount, type: "expense", category: categorizeFrom(merchant), bank: "Scotiabank", date: new Date().toISOString(), rawSubject: subject };
           }
         }
         // French
@@ -358,7 +358,7 @@ const BANK_PATTERNS: BankPattern[] = [
         if (frM) {
           const amount = parseFrenchAmount(frM[1]);
           const merchant = frM[2].trim();
-          if (amount && amount > 0) return { title: merchant, amount, type: "expense", category: categorizeFrom(merchant), bank: "Scotiabank", date: new Date().toISOString(), rawSubject: subject };
+          if (amount && amount > 0) return { title: merchant, merchant, amount, type: "expense", category: categorizeFrom(merchant), bank: "Scotiabank", date: new Date().toISOString(), rawSubject: subject };
         }
         return null;
       },
@@ -384,7 +384,7 @@ const BANK_PATTERNS: BankPattern[] = [
           if (m) {
             const amount = parseFloat(m[1].replace(/,/g, ""));
             const merchant = m[2].trim();
-            if (amount > 0) return { title: merchant, amount, type: "expense", category: categorizeFrom(merchant), bank: "BMO", date: new Date().toISOString(), rawSubject: subject };
+            if (amount > 0) return { title: merchant, merchant, amount, type: "expense", category: categorizeFrom(merchant), bank: "BMO", date: new Date().toISOString(), rawSubject: subject };
           }
         }
         // French: "Un achat de 1 234,56 $ a été effectué chez MERCHANT avec votre carte BMO"
@@ -392,7 +392,7 @@ const BANK_PATTERNS: BankPattern[] = [
         if (frM) {
           const amount = parseFrenchAmount(frM[1]);
           const merchant = frM[2].trim();
-          if (amount && amount > 0) return { title: merchant, amount, type: "expense", category: categorizeFrom(merchant), bank: "BMO", date: new Date().toISOString(), rawSubject: subject };
+          if (amount && amount > 0) return { title: merchant, merchant, amount, type: "expense", category: categorizeFrom(merchant), bank: "BMO", date: new Date().toISOString(), rawSubject: subject };
         }
         return null;
       },
@@ -420,7 +420,7 @@ const BANK_PATTERNS: BankPattern[] = [
           if (m) {
             const merchant = m[2] ? m[2].trim() : m[1].trim();
             const amount = parseFloat((m[1] || m[2] || "").replace(/,/g, ""));
-            if (amount > 0) return { title: merchant, amount, type: "expense", category: categorizeFrom(merchant), bank: "CIBC", date: new Date().toISOString(), rawSubject: subject };
+            if (amount > 0) return { title: merchant, merchant, amount, type: "expense", category: categorizeFrom(merchant), bank: "CIBC", date: new Date().toISOString(), rawSubject: subject };
           }
         }
         // French
@@ -428,7 +428,7 @@ const BANK_PATTERNS: BankPattern[] = [
         if (frM) {
           const amount = parseFrenchAmount(frM[1]);
           const merchant = frM[2].trim();
-          if (amount && amount > 0) return { title: merchant, amount, type: "expense", category: categorizeFrom(merchant), bank: "CIBC", date: new Date().toISOString(), rawSubject: subject };
+          if (amount && amount > 0) return { title: merchant, merchant, amount, type: "expense", category: categorizeFrom(merchant), bank: "CIBC", date: new Date().toISOString(), rawSubject: subject };
         }
         return null;
       },
@@ -454,7 +454,7 @@ const BANK_PATTERNS: BankPattern[] = [
           if (m) {
             const amount = parseFloat(m[1].replace(/,/g, ""));
             const merchant = m[2].trim();
-            if (amount > 0) return { title: merchant, amount, type: "expense", category: categorizeFrom(merchant), bank: "Tangerine", date: new Date().toISOString(), rawSubject: subject };
+            if (amount > 0) return { title: merchant, merchant, amount, type: "expense", category: categorizeFrom(merchant), bank: "Tangerine", date: new Date().toISOString(), rawSubject: subject };
           }
         }
         return null;
@@ -474,14 +474,14 @@ const BANK_PATTERNS: BankPattern[] = [
         if (enM) {
           const amount = parseFloat(enM[1].replace(/,/g, ""));
           const merchant = enM[2].trim();
-          if (amount > 0) return { title: merchant, amount, type: "expense", category: categorizeFrom(merchant), bank: "National Bank", date: new Date().toISOString(), rawSubject: subject };
+          if (amount > 0) return { title: merchant, merchant, amount, type: "expense", category: categorizeFrom(merchant), bank: "National Bank", date: new Date().toISOString(), rawSubject: subject };
         }
         // French: "Une transaction de 1 234,56 $ a été effectuée chez MERCHANT"
         const frM = text.match(/(?:transaction|achat)\s+de\s+([\d\s]+,\d{2})\s*\$\s+(?:a été effectué(?:e)?\s+)?(?:chez|à|de)\s+([^<\n\r,\.]+)/i);
         if (frM) {
           const amount = parseFrenchAmount(frM[1]);
           const merchant = frM[2].trim();
-          if (amount && amount > 0) return { title: merchant, amount, type: "expense", category: categorizeFrom(merchant), bank: "National Bank", date: new Date().toISOString(), rawSubject: subject };
+          if (amount && amount > 0) return { title: merchant, merchant, amount, type: "expense", category: categorizeFrom(merchant), bank: "National Bank", date: new Date().toISOString(), rawSubject: subject };
         }
         return null;
       },
@@ -500,14 +500,14 @@ const BANK_PATTERNS: BankPattern[] = [
         if (frM) {
           const amount = parseFrenchAmount(frM[1]);
           const merchant = frM[2].trim();
-          if (amount && amount > 0) return { title: merchant, amount, type: "expense", category: categorizeFrom(merchant), bank: "Desjardins", date: new Date().toISOString(), rawSubject: subject };
+          if (amount && amount > 0) return { title: merchant, merchant, amount, type: "expense", category: categorizeFrom(merchant), bank: "Desjardins", date: new Date().toISOString(), rawSubject: subject };
         }
         // English fallback
         const enM = text.match(/(?:purchase|transaction|charge)\s+of\s+\$?([\d,]+\.?\d*)\s+(?:at|from|chez)\s+([^<\n\r,\.]+)/i);
         if (enM) {
           const amount = parseFloat(enM[1].replace(/,/g, ""));
           const merchant = enM[2].trim();
-          if (amount > 0) return { title: merchant, amount, type: "expense", category: categorizeFrom(merchant), bank: "Desjardins", date: new Date().toISOString(), rawSubject: subject };
+          if (amount > 0) return { title: merchant, merchant, amount, type: "expense", category: categorizeFrom(merchant), bank: "Desjardins", date: new Date().toISOString(), rawSubject: subject };
         }
         return null;
       },
@@ -526,7 +526,7 @@ const BANK_PATTERNS: BankPattern[] = [
           const amount = parseFloat(m[1].replace(/,/g, ""));
           const merchant = m[2]?.trim() || "EQ Bank Transfer";
           const isCredit = /deposit|received|credit/i.test(text.slice(0, 200));
-          if (amount > 0) return { title: merchant || "EQ Bank Transfer", amount, type: isCredit ? "income" : "expense", category: isCredit ? "Income" : categorizeFrom(merchant), bank: "EQ Bank", date: new Date().toISOString(), rawSubject: subject };
+          if (amount > 0) return { title: merchant || "EQ Bank Transfer", merchant: merchant || "EQ Bank Transfer", amount, type: isCredit ? "income" : "expense", category: isCredit ? "Income" : categorizeFrom(merchant), bank: "EQ Bank", date: new Date().toISOString(), rawSubject: subject };
         }
         return null;
       },
@@ -567,6 +567,7 @@ const BANK_PATTERNS: BankPattern[] = [
 
         return {
           title: merchant,
+          merchant,
           amount,
           type,
           category: isCredit ? "Income" : categorizeFrom(merchant),

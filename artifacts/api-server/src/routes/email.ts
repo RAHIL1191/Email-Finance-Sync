@@ -85,8 +85,25 @@ router.post("/email/sync", async (req, res) => {
       }
     };
 
-    // ── Fetch 1: emails from known bank senders ───────────────────────────
-    // Split into small OR pairs to stay within IMAP protocol limits.
+    // Helper: chunk an array into groups of size n
+    const chunk = <T,>(arr: T[], n: number): T[][] =>
+      Array.from({ length: Math.ceil(arr.length / n) }, (_, i) => arr.slice(i * n, i * n + n));
+
+    // Helper: run a single IMAP fetch criteria and call processMessage for each result
+    const runFetch = async (criteria: any, label: string) => {
+      try {
+        for await (const message of client.fetch(criteria, { source: true, uid: true })) {
+          await processMessage(message);
+        }
+      } catch (e: any) {
+        // Some servers reject complex OR — skip this batch gracefully
+        req.log?.debug({ label, err: e?.message }, "IMAP fetch batch skipped");
+      }
+    };
+
+    // ── Fetch 1: bank sender searches, batched in groups of 4 ────────────
+    // Sending one massive OR with 24 items often hits IMAP server limits and
+    // fails silently. Batching avoids this entirely.
     const bankSenders = [
       "chase.com", "bankofamerica.com", "americanexpress.com",
       "wellsfargo.com", "capitalone.com", "citi.com", "citibank.com",
@@ -96,35 +113,32 @@ router.post("/email/sync", async (req, res) => {
       "tangerine.ca", "nbc.ca", "bnc.ca", "desjardins.com", "eqbank.ca",
       "hsbc.ca", "hsbc.com",
     ];
-    // Build a balanced nested OR tree: [[a,b],[c,d],...]
-    const bankCriteria: any = { since, or: bankSenders.map((d) => ({ from: d })) };
-    try {
-      let bankCount = 0;
-      for await (const message of client.fetch(bankCriteria, { source: true, uid: true })) {
-        if (bankCount >= 100) break;
-        bankCount++;
-        await processMessage(message);
-      }
-    } catch {
-      // Some servers may not support complex OR — skip gracefully
+    for (const batch of chunk(bankSenders, 4)) {
+      const criteria: any = batch.length === 1
+        ? { since, from: batch[0] }
+        : { since, or: batch.map((d) => ({ from: d })) };
+      await runFetch(criteria, `bank-sender-batch`);
     }
 
-    // ── Fetch 2: subject-keyword search (catches forwarded emails) ────────
+    // ── Fetch 2: subject-keyword search, batched in groups of 3 ──────────
+    // Catches forwarded bank emails whose sender won't match bank domains.
     const subjectKeywords = [
-      "fwd", "transaction", "purchase", "charge", "payment",
+      "transaction", "purchase", "charge", "payment",
       "alert", "alerte", "debit", "deposit", "statement",
-      "banking", "achat", "interac", "e-transfer",
+      "banking", "achat", "interac", "e-transfer", "fwd",
     ];
-    const subjectCriteria: any = { since, or: subjectKeywords.map((k) => ({ subject: k })) };
-    try {
-      let subjectCount = 0;
-      for await (const message of client.fetch(subjectCriteria, { source: true, uid: true })) {
-        if (subjectCount >= 150) break;
-        subjectCount++;
-        await processMessage(message);
-      }
-    } catch {
-      // Skip gracefully
+    for (const batch of chunk(subjectKeywords, 3)) {
+      const criteria: any = batch.length === 1
+        ? { since, subject: batch[0] }
+        : { since, or: batch.map((k) => ({ subject: k })) };
+      await runFetch(criteria, `subject-keyword-batch`);
+    }
+
+    // ── Fetch 3: catch-all fallback ───────────────────────────────────────
+    // If the two searches above returned nothing (server doesn't support OR),
+    // scan all messages since the cutoff date and let the parser decide.
+    if (seenUids.size === 0) {
+      await runFetch({ since }, "catch-all");
     }
 
     await client.logout();
@@ -132,14 +146,14 @@ router.post("/email/sync", async (req, res) => {
     res.json({
       success: true,
       transactions,
-      parsed: transactions.map((t) => ({
-        title: t.title,
-        merchant: t.merchant,
-        amount: t.amount,
-        type: t.type,
-        bank: t.bank,
-        rawSubject: t.rawSubject,
-        lastFour: t.lastFour,
+      parsed: transactions.filter((t) => t !== null).map((t) => ({
+        title: t!.title,
+        merchant: t!.merchant,
+        amount: t!.amount,
+        type: t!.type,
+        bank: t!.bank,
+        rawSubject: t!.rawSubject,
+        lastFour: t!.lastFour,
       })),
       emailsScanned: seenUids.size,
       transactionsFound: transactions.length,
