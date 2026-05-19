@@ -1,15 +1,13 @@
 import { Feather } from "@expo/vector-icons";
 import * as Haptics from "expo-haptics";
 import { router } from "expo-router";
-import React, { useMemo, useState } from "react";
+import React, { useState } from "react";
 import {
   Platform,
-  Pressable,
   ScrollView,
   StyleSheet,
   Switch,
   Text,
-  TextInput,
   TouchableOpacity,
   View,
 } from "react-native";
@@ -17,10 +15,8 @@ import { useSafeAreaInsets } from "react-native-safe-area-context";
 
 import { useApp } from "@/context/AppContext";
 import { useColors } from "@/hooks/useColors";
-
-// ── Types ─────────────────────────────────────────────────────────────────────
-
-type PickerTarget = "merchant" | "fromCategory" | "toCategory" | null;
+import CategoryPickerModal from "@/components/CategoryPickerModal";
+import MerchantPickerModal from "@/components/MerchantPickerModal";
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
 
@@ -37,62 +33,19 @@ function normalizeMerchant(title: string): string {
 export default function CategoryMappingScreen() {
   const colors = useColors();
   const insets = useSafeAreaInsets();
-  const { categories, categoryRules, transactions, addCategoryMappingRule } = useApp();
+  const { addCategoryMappingRule } = useApp();
 
-  // ── Form state ──────────────────────────────────────────────────────────────
+  // ── Form state ───────────────────────────────────────────────────
   const [merchantEnabled, setMerchantEnabled] = useState(false);
-  const [merchant, setMerchant] = useState<string>("");
+  const [merchant, setMerchant] = useState("");
   const [fromCatEnabled, setFromCatEnabled] = useState(false);
-  const [fromCategory, setFromCategory] = useState<string>("");
-  const [toCategory, setToCategory] = useState<string>("");
-  const [pickerTarget, setPickerTarget] = useState<PickerTarget>(null);
-  const [merchantSearch, setMerchantSearch] = useState("");
-  const [catSearch, setCatSearch] = useState("");
+  const [fromCategory, setFromCategory] = useState("");
+  const [toCategory, setToCategory] = useState("");
+  const [showMerchantPicker, setShowMerchantPicker] = useState(false);
+  const [showFromCatPicker, setShowFromCatPicker] = useState(false);
+  const [showToCatPicker, setShowToCatPicker] = useState(false);
   const [saving, setSaving] = useState(false);
   const [savedMsg, setSavedMsg] = useState("");
-
-  // ── Derived lists ───────────────────────────────────────────────────────────
-  const uniqueMerchants = useMemo(() => {
-    const fromRules = categoryRules
-      .filter((r) => r.merchantExact || r.merchantPattern)
-      .map((r) => r.merchantExact || r.merchantPattern);
-    const fromTxs = transactions
-      .map((t) => t.merchant || t.title || "")
-      .filter(Boolean);
-    const all = Array.from(new Set([...fromRules, ...fromTxs]))
-      .filter(Boolean)
-      .sort((a, b) => a.localeCompare(b));
-    return all;
-  }, [categoryRules, transactions]);
-
-  const categoryNames = useMemo(
-    () =>
-      categories
-        .map((c) => c.name)
-        .filter(Boolean)
-        .sort((a, b) => a.localeCompare(b)),
-    [categories]
-  );
-
-  const filteredMerchants = useMemo(
-    () =>
-      merchantSearch.trim()
-        ? uniqueMerchants.filter((m) =>
-            m.toLowerCase().includes(merchantSearch.toLowerCase())
-          )
-        : uniqueMerchants,
-    [uniqueMerchants, merchantSearch]
-  );
-
-  const filteredCategories = useMemo(
-    () =>
-      catSearch.trim()
-        ? categoryNames.filter((c) =>
-            c.toLowerCase().includes(catSearch.toLowerCase())
-          )
-        : categoryNames,
-    [categoryNames, catSearch]
-  );
 
   // ── Validation ──────────────────────────────────────────────────────────────
   const isValid =
@@ -123,15 +76,6 @@ export default function CategoryMappingScreen() {
       router.back();
     }, 1200);
   };
-
-  // ── Picker open/close helpers ────────────────────────────────────────────────
-  const openPicker = (target: PickerTarget) => {
-    Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
-    setMerchantSearch("");
-    setCatSearch("");
-    setPickerTarget(target);
-  };
-  const closePicker = () => setPickerTarget(null);
 
   // ── Render ───────────────────────────────────────────────────────────────────
 
@@ -180,8 +124,9 @@ export default function CategoryMappingScreen() {
           ]}
           activeOpacity={0.7}
           onPress={() => {
+            Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
             if (!merchantEnabled) setMerchantEnabled(true);
-            openPicker("merchant");
+            setShowMerchantPicker(true);
           }}
         >
           <View style={[s.rowIconWrap, { backgroundColor: "#ec4899" + "18" }]}>
@@ -232,8 +177,9 @@ export default function CategoryMappingScreen() {
           ]}
           activeOpacity={0.7}
           onPress={() => {
+            Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
             if (!fromCatEnabled) setFromCatEnabled(true);
-            openPicker("fromCategory");
+            setShowFromCatPicker(true);
           }}
         >
           <View style={[s.rowIconWrap, { backgroundColor: "#8b5cf6" + "18" }]}>
@@ -281,7 +227,10 @@ export default function CategoryMappingScreen() {
             },
           ]}
           activeOpacity={0.7}
-          onPress={() => openPicker("toCategory")}
+          onPress={() => {
+            Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
+            setShowToCatPicker(true);
+          }}
         >
           <View style={[s.rowIconWrap, { backgroundColor: "#3b82f6" + "18" }]}>
             <Feather name="grid" size={16} color="#3b82f6" />
@@ -350,94 +299,24 @@ export default function CategoryMappingScreen() {
         <ExistingRules colors={colors} />
       </ScrollView>
 
-      {/* ── In-surface picker overlay ── */}
-      {pickerTarget !== null && (
-        <Pressable style={[p.backdrop]} onPress={closePicker}>
-          <Pressable
-            style={[p.sheet, { backgroundColor: colors.card, borderColor: colors.border }]}
-            onPress={(e) => e.stopPropagation()}
-          >
-            <View style={[p.sheetHeader, { borderBottomColor: colors.border }]}>
-              <Text style={[p.sheetTitle, { color: colors.foreground }]}>
-                {pickerTarget === "merchant"
-                  ? "Select Merchant"
-                  : pickerTarget === "fromCategory"
-                  ? "Select From Category"
-                  : "Select To Category"}
-              </Text>
-              <TouchableOpacity onPress={closePicker} hitSlop={8}>
-                <Feather name="x" size={18} color={colors.mutedForeground} />
-              </TouchableOpacity>
-            </View>
-
-            {/* Search */}
-            <View style={[p.searchWrap, { backgroundColor: colors.background, borderColor: colors.border }]}>
-              <Feather name="search" size={14} color={colors.mutedForeground} />
-              <TextInput
-                style={[p.searchInput, { color: colors.foreground }]}
-                placeholder={pickerTarget === "merchant" ? "Search merchants..." : "Search categories..."}
-                placeholderTextColor={colors.mutedForeground}
-                value={pickerTarget === "merchant" ? merchantSearch : catSearch}
-                onChangeText={pickerTarget === "merchant" ? setMerchantSearch : setCatSearch}
-              />
-            </View>
-
-            <ScrollView style={p.list} keyboardShouldPersistTaps="handled" showsVerticalScrollIndicator={false}>
-              {pickerTarget === "merchant"
-                ? filteredMerchants.map((m, i) => (
-                    <TouchableOpacity
-                      key={`m-${i}-${m}`}
-                      style={[p.item, { borderBottomColor: colors.border }]}
-                      activeOpacity={0.7}
-                      onPress={() => {
-                        Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
-                        setMerchant(m);
-                        closePicker();
-                      }}
-                    >
-                      <Text style={[p.itemText, { color: colors.foreground }]}>{m}</Text>
-                      {merchant === m && <Feather name="check" size={15} color={colors.primary} />}
-                    </TouchableOpacity>
-                  ))
-                : filteredCategories.map((c, i) => {
-                    const current = pickerTarget === "fromCategory" ? fromCategory : toCategory;
-                    return (
-                      <TouchableOpacity
-                        key={`c-${i}-${c}`}
-                        style={[p.item, { borderBottomColor: colors.border }]}
-                        activeOpacity={0.7}
-                        onPress={() => {
-                          Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
-                          if (pickerTarget === "fromCategory") setFromCategory(c);
-                          else setToCategory(c);
-                          closePicker();
-                        }}
-                      >
-                        <Text style={[p.itemText, { color: colors.foreground }]}>{c}</Text>
-                        {current === c && <Feather name="check" size={15} color={colors.primary} />}
-                      </TouchableOpacity>
-                    );
-                  })}
-              {pickerTarget === "merchant" && filteredMerchants.length === 0 && merchantSearch.trim() && (
-                <TouchableOpacity
-                  style={[p.item, { borderBottomColor: colors.border }]}
-                  activeOpacity={0.7}
-                  onPress={() => {
-                    Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
-                    setMerchant(merchantSearch.trim());
-                    closePicker();
-                  }}
-                >
-                  <Feather name="plus" size={14} color={colors.primary} />
-                  <Text style={[p.itemText, { color: colors.primary }]}>
-                    Use "{merchantSearch.trim()}"
-                  </Text>
-                </TouchableOpacity>
-              )}
-            </ScrollView>
-          </Pressable>
-        </Pressable>
-      )}
+      <MerchantPickerModal
+        visible={showMerchantPicker}
+        onClose={() => setShowMerchantPicker(false)}
+        onSelect={(m) => { setMerchant(m); setMerchantEnabled(true); }}
+        selected={merchant}
+      />
+      <CategoryPickerModal
+        visible={showFromCatPicker}
+        onClose={() => setShowFromCatPicker(false)}
+        onSelect={(cat, sub) => { setFromCategory(sub ? `${cat} - ${sub}` : cat); setFromCatEnabled(true); }}
+        type="both"
+      />
+      <CategoryPickerModal
+        visible={showToCatPicker}
+        onClose={() => setShowToCatPicker(false)}
+        onSelect={(cat, sub) => setToCategory(sub ? `${cat} - ${sub}` : cat)}
+        type="both"
+      />
     </View>
   );
 }
@@ -639,59 +518,3 @@ const s = StyleSheet.create({
   deleteBtn: { padding: 4 },
 });
 
-// ── Picker overlay styles ─────────────────────────────────────────────────────
-
-const p = StyleSheet.create({
-  backdrop: {
-    ...StyleSheet.absoluteFillObject,
-    backgroundColor: "rgba(0,0,0,0.55)",
-    justifyContent: "flex-end",
-    zIndex: 100,
-    elevation: 10,
-  },
-  sheet: {
-    borderTopLeftRadius: 20,
-    borderTopRightRadius: 20,
-    borderWidth: 1,
-    height: "65%",
-  },
-  sheetHeader: {
-    flexDirection: "row",
-    alignItems: "center",
-    justifyContent: "space-between",
-    paddingHorizontal: 18,
-    paddingVertical: 14,
-    borderBottomWidth: 1,
-  },
-  sheetTitle: {
-    fontSize: 15,
-    fontFamily: "Inter_700Bold",
-  },
-  searchWrap: {
-    flexDirection: "row",
-    alignItems: "center",
-    gap: 8,
-    margin: 12,
-    borderRadius: 10,
-    borderWidth: 1,
-    paddingHorizontal: 12,
-    paddingVertical: 8,
-  },
-  searchInput: {
-    flex: 1,
-    fontSize: 14,
-    fontFamily: "Inter_400Regular",
-    paddingVertical: 2,
-  },
-  list: { flex: 1 },
-  item: {
-    flexDirection: "row",
-    alignItems: "center",
-    justifyContent: "space-between",
-    paddingHorizontal: 18,
-    paddingVertical: 14,
-    borderBottomWidth: StyleSheet.hairlineWidth,
-    gap: 10,
-  },
-  itemText: { flex: 1, fontSize: 14, fontFamily: "Inter_400Regular" },
-});
