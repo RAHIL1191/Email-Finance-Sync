@@ -205,9 +205,22 @@ export default function PlaidLinkModal({
     }, 1400);
 
     try {
-      // Update mode: no public token — just sync existing item
-      if (!publicToken && itemId) {
+      // Relink mode: existing item — update access token then force-sync, never create duplicate
+      if (itemId) {
         clearInterval(msgTimer);
+        setConnectingMsg("Updating connection…");
+        if (publicToken) {
+          // Exchange token to refresh access_token in DB (fire-and-wait)
+          await fetch(`${getApiBase()}/api/plaid/exchange-token`, {
+            method: "POST",
+            headers: {
+              "Content-Type": "application/json",
+              "X-Household-ID": householdId,
+              "X-Device-ID": deviceId,
+            },
+            body: JSON.stringify({ public_token: publicToken, existing_item_id: itemId }),
+          });
+        }
         setConnectingMsg("Syncing transactions…");
         const result = await syncPlaidTransactions(itemId, true);
         setImportResult({ accounts: 0, transactions: result.imported });

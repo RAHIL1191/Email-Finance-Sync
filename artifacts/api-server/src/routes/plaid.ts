@@ -122,10 +122,11 @@ router.post("/plaid/create-link-token", async (req, res) => {
 // ── POST /api/plaid/exchange-token ────────────────────────────────────────
 
 router.post("/plaid/exchange-token", async (req, res) => {
-  const { public_token, bank_name, bank_color } = req.body as {
+  const { public_token, bank_name, bank_color, existing_item_id } = req.body as {
     public_token?: string;
     bank_name?: string;
     bank_color?: string;
+    existing_item_id?: string;
   };
 
   if (!public_token) {
@@ -145,6 +146,21 @@ router.post("/plaid/exchange-token", async (req, res) => {
     // 1. Exchange public token for access token
     const exchangeRes = await client.itemPublicTokenExchange({ public_token });
     const { access_token, item_id } = exchangeRes.data;
+
+    // Relink mode: just update the stored access_token — do NOT create a duplicate item
+    if (existing_item_id) {
+      await db
+        .update(plaidItemsTable)
+        .set({ accessToken: access_token, lastSyncedAt: new Date() })
+        .where(
+          and(
+            eq(plaidItemsTable.id, existing_item_id),
+            eq(plaidItemsTable.householdId, res.locals.householdId)
+          )
+        );
+      res.json({ updated: true, itemId: existing_item_id });
+      return;
+    }
 
     // 2. Fetch accounts
     const accountsRes = await client.accountsGet({ access_token });
