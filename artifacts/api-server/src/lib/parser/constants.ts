@@ -1,0 +1,103 @@
+export interface BankDomain {
+  pattern: RegExp;
+  name: string;
+}
+
+export const BANK_DOMAINS: BankDomain[] = [
+  // Canadian Big 6
+  { pattern: /@(alerts\.|no-?reply\.|donotreply\.|notification\.)?bmo\.com/i,        name: "BMO" },
+  { pattern: /@(alerts\.|donotreply\.|no-?reply\.|notification\.)?cibc\.com/i,       name: "CIBC" },
+  { pattern: /@(alerts\.|no-?reply\.|online\.|notification\.)?td\.com/i,             name: "TD" },
+  { pattern: /@tdbank\.com/i,                                          name: "TD" },
+  { pattern: /@(alerts\.|no-?reply\.|notification\.)?rbc\.com/i,                     name: "RBC" },
+  { pattern: /@royalbank\.com/i,                                       name: "RBC" },
+  { pattern: /@(alerts\.|no-?reply\.|notification\.)?scotiabank\.com/i,              name: "Scotiabank" },
+  { pattern: /@scotiabankmessages\.com/i,                              name: "Scotiabank" },
+  { pattern: /@(alerts\.|no-?reply\.|notification\.)?nbc\.ca/i,                      name: "National Bank" },
+  { pattern: /@bnc\.ca/i,                                              name: "National Bank" },
+  // Digital banks
+  { pattern: /@(alerts\.|no-?reply\.|notification\.)?tangerine\.ca/i,                name: "Tangerine" },
+  { pattern: /@simplii\.com/i,                                         name: "Simplii" },
+  { pattern: /@(alerts\.|no-?reply\.|notification\.)?eqbank\.ca/i,                   name: "EQ Bank" },
+  { pattern: /@pcfinancial\.ca/i,                                      name: "PC Financial" },
+  { pattern: /@laurentianbank\.ca/i,                                   name: "Laurentian" },
+  { pattern: /@atb\.com/i,                                             name: "ATB Financial" },
+  { pattern: /@(alerts\.|no-?reply\.|notification\.)?desjardins\.com/i,              name: "Desjardins" },
+  { pattern: /@caisse\.desjardins\.com/i,                              name: "Desjardins" },
+  { pattern: /@(alerts\.|no-?reply\.|notification\.)?hsbc\.ca/i,                     name: "HSBC" },
+  // Interac + Payments
+  { pattern: /@(payments\.|notification\.)?interac\.ca/i,                            name: "Interac" },
+  { pattern: /@paypal\.com/i,                                          name: "PayPal" },
+  // US Banks
+  { pattern: /@(alerts\.|no-?reply\.|notification\.)?chase\.com/i,                   name: "Chase" },
+  { pattern: /@bankofamerica\.com/i,                                   name: "Bank of America" },
+  { pattern: /@americanexpress\.com/i,                                 name: "Amex" },
+  { pattern: /@(alerts\.|no-?reply\.|notification\.)?capitalone\.com/i,              name: "Capital One" },
+  { pattern: /@(citi|citibank)\.com/i,                                 name: "Citi" },
+  { pattern: /@wellsfargo\.com/i,                                      name: "Wells Fargo" },
+  { pattern: /@discover\.com/i,                                        name: "Discover" },
+  { pattern: /@ally\.com/i,                                            name: "Ally" },
+];
+
+// Subjects that match these are rejected immediately — banks send security
+// alerts and marketing from the same domain as transaction alerts.
+export const REJECT_SUBJECT_PATTERNS: RegExp[] = [
+  /security\s+alert/i,
+  /sign[\s-]?in\s+(alert|attempt)/i,
+  /new\s+device/i,
+  /password\s+(reset|changed|update)/i,
+  /verification\s+code/i,
+  /access\s+code/i,
+  /one[\s-]?time\s+(code|password|passcode|pin)/i,
+  /statement\s+(is\s+)?ready/i,
+  /statement\s+available/i,
+  /your\s+statement/i,
+  /e[\s-]?statement/i,
+  /account\s+summary/i,
+  /monthly\s+summary/i,
+  /welcome\s+to/i,
+  /thank\s+you\s+for\s+(opening|joining|registering|banking)/i,
+  /successfully\s+(enrolled|registered|updated|verified)/i,
+  /terms\s+(and|&)\s+conditions/i,
+  /privacy\s+policy/i,
+  /important\s+(notice|update|information)/i,
+  /newsletter/i,
+  /rewards?\s+(points?|balance|program|summary|earned)/i,
+  /pre[\s-]?approv/i,
+  /credit\s+score/i,
+  /interest\s+rate/i,
+  /rate\s+change/i,
+  /promotional\s+(offer|rate)/i,
+  /special\s+offer/i,
+  /upgrade\s+your/i,
+  /payment\s+due/i,
+  /minimum\s+payment/i,
+  /balance\s+reminder/i,
+];
+
+export const GMAIL_QUERY = [
+  "from:bmo.com", "from:cibc.com", "from:td.com", "from:tdbank.com",
+  "from:rbc.com", "from:royalbank.com", "from:scotiabank.com",
+  "from:scotiabankmessages.com", "from:tangerine.ca", "from:nbc.ca",
+  "from:bnc.ca", "from:desjardins.com", "from:eqbank.ca",
+  "from:simplii.com", "from:pcfinancial.ca", "from:interac.ca",
+  "from:payments.interac.ca", "from:paypal.com", "from:chase.com",
+  "from:bankofamerica.com", "from:americanexpress.com", "from:capitalone.com",
+  "subject:(Fwd BMO) OR subject:(FW BMO)",
+  "subject:(Fwd CIBC) OR subject:(FW CIBC)",
+  "subject:(Fwd TD) OR subject:(FW TD)",
+  "subject:(Fwd RBC) OR subject:(FW RBC)",
+  "subject:(Fwd Scotiabank) OR subject:(FW Scotiabank)",
+  "subject:(Fwd Interac) OR subject:(FW Interac)",
+  "subject:(Transaction Alert)",
+  "subject:(Purchase Alert)",
+  "subject:(Debit Alert)",
+  "subject:(Withdrawal Alert)",
+  "subject:(Point of Sale Purchase)",
+  "subject:(Card Alert)",
+  "subject:(BMO Alert)",
+  "subject:(CIBC Alert)",
+  "subject:(Interac e-Transfer)",
+  "subject:(e-Transfer)",
+  "subject:(Achat effectué)",
+].join(" OR ");

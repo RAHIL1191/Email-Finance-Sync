@@ -46,11 +46,20 @@ router.post("/transactions/bulk", async (req, res) => {
       res.status(400).json({ error: "transactions array is required" });
       return;
     }
-    const payload = transactions.map((t) => ({
-      ...t,
-      householdId: res.locals.householdId,
-      deviceId: res.locals.deviceId,
-    }));
+    const now = new Date();
+    const payload = transactions.map((t) => {
+      // Strip client-supplied timestamp fields — Drizzle expects Date objects for
+      // timestamp columns but the mobile client sends ISO strings, which causes
+      // "value.toISOString is not a function". Let the DB defaults handle createdAt
+      // and supply a fresh Date for updatedAt.
+      const { createdAt: _c, updatedAt: _u, ...rest } = t as any;
+      return {
+        ...rest,
+        householdId: res.locals.householdId,
+        deviceId: res.locals.deviceId,
+        updatedAt: now,
+      };
+    });
     const rows = await db
       .insert(transactionsTable)
       .values(payload)
@@ -61,7 +70,13 @@ router.post("/transactions/bulk", async (req, res) => {
           amount: transactionsTable.amount,
           type: transactionsTable.type,
           category: transactionsTable.category,
+          accountId: transactionsTable.accountId,
           date: transactionsTable.date,
+          source: transactionsTable.source,
+          merchant: transactionsTable.merchant,
+          plaidItemId: transactionsTable.plaidItemId,
+          plaidAccountId: transactionsTable.plaidAccountId,
+          bank: transactionsTable.bank,
           note: transactionsTable.note,
           updatedAt: new Date(),
         },
@@ -98,6 +113,25 @@ router.put("/transactions/:id", validate(updateTransactionSchema), async (req, r
   }
 });
 
+/** DELETE /api/transactions — delete all transactions for this household */
+router.delete("/transactions", async (req, res) => {
+  try {
+    const rows = await db
+      .delete(transactionsTable)
+      .where(eq(transactionsTable.householdId, res.locals.householdId))
+      .returning();
+    res.json({ success: true, count: rows.length });
+  } catch (err: any) {
+    // If the table doesn't exist yet, treat as 0 deletions
+    if (err?.cause?.code === "42P01" || /relation .* does not exist/.test(err?.message ?? "")) {
+      res.json({ success: true, count: 0 });
+      return;
+    }
+    req.log.error({ err }, "Failed to wipe transactions");
+    res.status(500).json({ error: "Failed to wipe transactions" });
+  }
+});
+
 /** DELETE /api/transactions/:id — delete a transaction */
 router.delete("/transactions/:id", async (req, res) => {
   try {
@@ -122,3 +156,4 @@ router.delete("/transactions/:id", async (req, res) => {
 });
 
 export default router;
+

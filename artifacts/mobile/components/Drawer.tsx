@@ -28,7 +28,7 @@ const { width: SCREEN_WIDTH } = Dimensions.get("window");
 
 export default function Drawer() {
   const { isOpen, closeDrawer } = useDrawer();
-  const { projects, transactions, userName, setUserName } = useApp();
+  const { projects, userName, setUserName } = useApp();
   const colors = useColors();
   const insets = useSafeAreaInsets();
   const [editingName, setEditingName] = useState(false);
@@ -173,56 +173,88 @@ export default function Drawer() {
           {/* Divider */}
           <View style={[styles.divider, { backgroundColor: colors.border }]} />
 
-          {/* Projects section */}
-          <View style={styles.sectionHeader}>
-            <Text style={[styles.sectionLabel, { color: colors.mutedForeground }]}>PROJECTS</Text>
-            <TouchableOpacity
-              onPress={() => navigateTo("/project-detail?mode=create")}
-              hitSlop={10}
-              style={[styles.addBtn, { backgroundColor: colors.primary + "18" }]}
-            >
-              <Feather name="plus" size={14} color={colors.primary} />
-            </TouchableOpacity>
-          </View>
-
-          {projects.length === 0 ? (
-            <TouchableOpacity
-              style={[styles.emptyProjects, { borderColor: colors.border }]}
-              onPress={() => navigateTo("/project-detail?mode=create")}
-              activeOpacity={0.7}
-            >
-              <Feather name="folder-plus" size={18} color={colors.mutedForeground} />
-              <Text style={[styles.emptyProjectsText, { color: colors.mutedForeground }]}>
-                Create a project to track{"\n"}trip, event, or goal spending
+          {/* Budget */}
+          <TouchableOpacity
+            style={styles.menuItem}
+            onPress={() => navigateTo("/(tabs)/budget")}
+            activeOpacity={0.8}
+          >
+            <View style={[styles.menuIconWrap, { backgroundColor: "#6366f1" + "18" }]}>
+              <Feather name="pie-chart" size={15} color="#6366f1" />
+            </View>
+            <View style={styles.menuTextWrap}>
+              <Text style={[styles.menuTitle, { color: colors.foreground }]}>Budget</Text>
+              <Text style={[styles.menuSub, { color: colors.mutedForeground }]}>
+                Track budgets & savings goals
               </Text>
-            </TouchableOpacity>
-          ) : (
-            projects.map((p) => {
-              const txCount = transactions.filter((t) => t.projectId === p.id).length;
-              const total = transactions
-                .filter((t) => t.projectId === p.id && t.type === "expense")
-                .reduce((s, t) => s + t.amount, 0);
-              return (
-                <TouchableOpacity
-                  key={p.id}
-                  style={styles.menuItem}
-                  onPress={() => navigateTo(`/project-detail?id=${p.id}`)}
-                  activeOpacity={0.8}
-                >
-                  <View style={[styles.menuIconWrap, { backgroundColor: p.color + "22" }]}>
-                    <Feather name="folder" size={15} color={p.color} />
-                  </View>
-                  <View style={styles.menuTextWrap}>
-                    <Text style={[styles.menuTitle, { color: colors.foreground }]} numberOfLines={1}>{p.name}</Text>
-                    <Text style={[styles.menuSub, { color: colors.mutedForeground }]}>
-                      {txCount} transaction{txCount !== 1 ? "s" : ""}{total > 0 ? ` · $${total.toFixed(2)}` : ""}
-                    </Text>
-                  </View>
-                  <Feather name="chevron-right" size={16} color={colors.mutedForeground} />
-                </TouchableOpacity>
-              );
-            })
-          )}
+            </View>
+            <Feather name="chevron-right" size={16} color={colors.mutedForeground} />
+          </TouchableOpacity>
+
+          {/* Divider */}
+          <View style={[styles.divider, { backgroundColor: colors.border }]} />
+
+          {/* Tasks */}
+          <TouchableOpacity
+            style={styles.menuItem}
+            onPress={() => navigateTo("/(tabs)/tasks")}
+            activeOpacity={0.8}
+          >
+            <View style={[styles.menuIconWrap, { backgroundColor: "#f59e0b18" }]}>
+              <Feather name="check-square" size={15} color="#f59e0b" />
+            </View>
+            <View style={styles.menuTextWrap}>
+              <Text style={[styles.menuTitle, { color: colors.foreground }]}>Tasks</Text>
+              <Text style={[styles.menuSub, { color: colors.mutedForeground }]}>
+                Track subscriptions & reminders
+              </Text>
+            </View>
+            <Feather name="chevron-right" size={16} color={colors.mutedForeground} />
+          </TouchableOpacity>
+
+          {/* Divider */}
+          <View style={[styles.divider, { backgroundColor: colors.border }]} />
+
+          {/* Projects */}
+          <TouchableOpacity
+            style={styles.menuItem}
+            onPress={() => navigateTo("/projects")}
+            activeOpacity={0.8}
+          >
+            <View style={[styles.menuIconWrap, { backgroundColor: "#f97316" + "18" }]}>
+              <Feather name="folder" size={15} color="#f97316" />
+            </View>
+            <View style={styles.menuTextWrap}>
+              <Text style={[styles.menuTitle, { color: colors.foreground }]}>Projects</Text>
+              <Text style={[styles.menuSub, { color: colors.mutedForeground }]}>
+                {projects.length > 0
+                  ? `${projects.length} project${projects.length !== 1 ? "s" : ""} · tap to manage`
+                  : "Track trips, events & goals"}
+              </Text>
+            </View>
+            <Feather name="chevron-right" size={16} color={colors.mutedForeground} />
+          </TouchableOpacity>
+
+          {/* Divider */}
+          <View style={[styles.divider, { backgroundColor: colors.border }]} />
+
+          {/* Notifications */}
+          <TouchableOpacity
+            style={styles.menuItem}
+            onPress={() => navigateTo("/notifications")}
+            activeOpacity={0.8}
+          >
+            <View style={[styles.menuIconWrap, { backgroundColor: "#3b82f6" + "18" }]}>
+              <Feather name="bell" size={15} color="#3b82f6" />
+            </View>
+            <View style={styles.menuTextWrap}>
+              <Text style={[styles.menuTitle, { color: colors.foreground }]}>Notifications</Text>
+              <Text style={[styles.menuSub, { color: colors.mutedForeground }]}>
+                Manage alerts & reminders
+              </Text>
+            </View>
+            <Feather name="chevron-right" size={16} color={colors.mutedForeground} />
+          </TouchableOpacity>
         </ScrollView>
 
         {/* ── Footer ── */}

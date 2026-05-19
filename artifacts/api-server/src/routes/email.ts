@@ -2,6 +2,9 @@ import { Router } from "express";
 import { ImapFlow } from "imapflow";
 import { simpleParser } from "mailparser";
 import { parseEmailContent } from "../lib/emailParser.js";
+import { GMAIL_QUERY } from "../lib/parser/index.js";
+import { debugParseEmail } from "../lib/parser/debug.js";
+import { htmlToText } from "../lib/parser/index.js";
 
 const router = Router();
 
@@ -90,6 +93,8 @@ router.post("/email/sync", async (req, res) => {
         const html = (typeof parsed.html === "string" ? parsed.html : "") || "";
         const date = parsed.date || new Date();
 
+        req.log.info({ from, subject }, "Processing fetched email");
+
         const tx = parseEmailContent(from, subject, text, html, date);
         if (tx) {
           const contentKey = `${tx.amount}-${tx.title}-${tx.date.slice(0, 10)}`;
@@ -125,33 +130,24 @@ router.post("/email/sync", async (req, res) => {
     };
 
     if (isGmail) {
-      // Build a Gmail search query that covers all common bank alert patterns.
-      // newer_than:Xd is more reliable than SINCE for Gmail.
-      const gmailQuery =
-        `newer_than:${daysBack}d ` +
-        `(` +
-        // Known bank domains
-        `from:(chase.com OR bankofamerica.com OR americanexpress.com OR wellsfargo.com ` +
-        `OR capitalone.com OR citi.com OR discover.com OR usbank.com OR ally.com ` +
-        `OR td.com OR tdbank.com OR rbc.com OR royalbank.com OR scotiabank.com ` +
-        `OR bmo.com OR cibc.com OR tangerine.ca OR nbc.ca OR bnc.ca ` +
-        `OR desjardins.com OR eqbank.ca OR hsbc.com OR hsbc.ca) ` +
-        // OR financial keywords in subject (catches forwarded emails + unknown banks)
-        `OR subject:(transaction OR purchase OR charge OR payment OR alert OR debit ` +
-        `OR deposit OR "e-transfer" OR interac OR alerte OR achat)` +
-        `)`;
+      // Use the comprehensive query from the parser constants which covers
+      // all known bank domains plus forwarded-email subject patterns.
+      const gmailQuery = `newer_than:${daysBack}d (${GMAIL_QUERY})`;
 
+      req.log.info({ gmailQuery }, "Running Gmail native search");
       await runFetch({ gmraw: gmailQuery }, "gmail-native-search");
 
-      // If the Gmail native search found nothing (e.g. X-GM-EXT-1 not enabled),
-      // fall back to standard IMAP SEARCH.
-      if (seenUids.size === 0) {
-        req.log.info("Gmail native search empty, falling back to standard IMAP search");
+      // Fallback: if native search returns suspiciously few results (complex Gmail queries
+      // can hit limits or be incomplete), fall back to standard IMAP date-range scan.
+      // The parser will still filter out non-transaction emails.
+      if (seenUids.size < 10) {
+        req.log.info(
+          { nativeSearchResults: seenUids.size },
+          "Gmail native search returned few results, falling back to standard IMAP search"
+        );
         await runFetch({ since }, "gmail-fallback-all");
       }
     } else {
-      // Non-Gmail: just scan all mail since the cutoff date.
-      // The parser filters what's actually a bank transaction.
       await runFetch({ since }, "non-gmail-all");
     }
 
@@ -228,6 +224,91 @@ router.post("/email/test", async (req, res) => {
       message = "Invalid credentials. For Gmail, use an App Password.";
     }
     res.status(400).json({ error: message });
+  }
+});
+
+// Debug endpoint — returns every email with verbose parse info (matched + skipped + reason)
+router.post("/email/debug-sync", async (req, res) => {
+  const { email, appPassword, daysBack = 30 } = req.body as SyncRequest;
+
+  if (!email || !appPassword) {
+    res.status(400).json({ error: "email and appPassword are required" });
+    return;
+  }
+
+  const { host: imapHost, port: imapPort, isGmail } = getImapConfig(email);
+  const client = new ImapFlow({
+    host: imapHost, port: imapPort, secure: true,
+    auth: { user: email, pass: appPassword },
+    logger: false, tls: { rejectUnauthorized: false },
+  });
+
+  try {
+    await client.connect();
+    if (isGmail) {
+      try { await client.mailboxOpen("[Gmail]/All Mail"); }
+      catch { await client.mailboxOpen("INBOX"); }
+    } else {
+      await client.mailboxOpen("INBOX");
+    }
+
+    const since = new Date(Date.now() - daysBack * 24 * 60 * 60 * 1000);
+    const results: any[] = [];
+    const seenUids = new Set<string>();
+    let uidCounter = 0;
+
+    const processMessage = async (message: any) => {
+      if (!message.source) return;
+      const uidKey = message.uid != null ? String(message.uid) : `__no_uid_${uidCounter++}`;
+      if (seenUids.has(uidKey)) return;
+      seenUids.add(uidKey);
+      try {
+        const parsed = await (simpleParser(message.source) as unknown as Promise<any>);
+        const from = parsed.from?.text || "";
+        const subject = parsed.subject || "";
+        const plainText = parsed.text || "";
+        const htmlContent = (typeof parsed.html === "string" ? parsed.html : "") || "";
+        const htmlText = htmlContent ? htmlToText(htmlContent) : "";
+        const date = parsed.date ? parsed.date.toISOString() : new Date().toISOString();
+        const debugResult = debugParseEmail({ emailId: uidKey, from, subject, date, plainText, htmlText });
+        results.push(debugResult);
+      } catch (e: any) {
+        results.push({ from: "?", subject: "?", parseStatus: "failed", rejectReason: e?.message });
+      }
+    };
+
+    const runFetch = async (criteria: any) => {
+      try {
+        for await (const message of client.fetch(criteria, { source: true, uid: true })) {
+          await processMessage(message);
+        }
+      } catch {}
+    };
+
+    if (isGmail) {
+      const gmailQuery = `newer_than:${daysBack}d (${GMAIL_QUERY})`;
+      await runFetch({ gmraw: gmailQuery });
+      if (seenUids.size < 10) await runFetch({ since });
+    } else {
+      await runFetch({ since });
+    }
+
+    await client.logout();
+
+    const matched = results.filter((r) => r.parseStatus === "matched");
+    const skipped = results.filter((r) => r.parseStatus !== "matched");
+
+    res.json({
+      emailsScanned: seenUids.size,
+      matchedCount: matched.length,
+      skippedCount: skipped.length,
+      results: results.sort((a, b) => {
+        const order = { matched: 0, skipped_no_pattern: 1, skipped_non_transaction: 2, skipped_unknown_bank: 3 };
+        return (order[a.parseStatus as keyof typeof order] ?? 4) - (order[b.parseStatus as keyof typeof order] ?? 4);
+      }),
+    });
+  } catch (err: any) {
+    res.status(400).json({ error: err?.message || "Failed to connect" });
   }
 });
 

@@ -14,6 +14,7 @@ import { useSafeAreaInsets } from "react-native-safe-area-context";
 
 import { Account, Bill, Transaction } from "@/context/AppContext";
 import { useColors } from "@/hooks/useColors";
+import TransactionDetailModal from "@/components/TransactionDetailModal";
 
 const FULL_MONTHS = [
   "January", "February", "March", "April", "May", "June",
@@ -120,6 +121,7 @@ export default function MonthDetailModal({
   const colors = useColors();
   const insets = useSafeAreaInsets();
   const [drillDown, setDrillDown] = useState<DrillDown | null>(null);
+  const [editingTransaction, setEditingTransaction] = useState<Transaction | null>(null);
 
   const today = new Date();
   const todayStr = today.toISOString().slice(0, 10);
@@ -467,8 +469,17 @@ export default function MonthDetailModal({
                     const isIncome = item.type === "income";
                     const accountLabel = getAccountLabel(item.accountId);
 
+                    const fullTx = item.isBill ? null : transactions.find((t) => t.id === item.id) ?? null;
+
                     return (
-                      <View
+                      <TouchableOpacity
+                        activeOpacity={fullTx ? 0.7 : 1}
+                        onPress={() => {
+                          if (fullTx) {
+                            Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
+                            setEditingTransaction(fullTx);
+                          }
+                        }}
                         style={[
                           styles.listItem,
                           {
@@ -524,7 +535,7 @@ export default function MonthDetailModal({
                         >
                           {isIncome ? "+" : ""}${item.amount.toFixed(2)}
                         </Text>
-                      </View>
+                      </TouchableOpacity>
                     );
                   }}
                 />
@@ -533,6 +544,14 @@ export default function MonthDetailModal({
           )}
         </View>
       </View>
+
+      {editingTransaction && (
+        <TransactionDetailModal
+          visible={!!editingTransaction}
+          transaction={editingTransaction}
+          onClose={() => setEditingTransaction(null)}
+        />
+      )}
     </Modal>
   );
 }

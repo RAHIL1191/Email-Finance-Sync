@@ -14,9 +14,16 @@
       "backgroundColor": "#0f1923"
     },
     "ios": {
-      "supportsTablet": false
+      "supportsTablet": false,
+      "infoPlist": {
+        "NSUserNotificationsUsageDescription": "FinTrack sends bill reminders and spending alerts.",
+        "NSCameraUsageDescription": "FinTrack uses the camera to capture receipts.",
+        "NSPhotoLibraryUsageDescription": "FinTrack accesses your photo library to attach receipts."
+      }
     },
-    "android": {},
+    "android": {
+      "package": "com.rahil1191.mobile"
+    },
     "web": {
       "favicon": "./assets/images/icon.png"
     },
@@ -28,7 +35,16 @@
         }
       ],
       "expo-font",
-      "expo-web-browser"
+      "expo-web-browser",
+      [
+        "expo-notifications",
+        {
+          "icon": "./assets/images/icon.png",
+          "color": "#ffffff",
+          "sounds": []
+        }
+      ],
+      "@react-native-community/datetimepicker"
     ],
     "experiments": {
       "typedRoutes": true,

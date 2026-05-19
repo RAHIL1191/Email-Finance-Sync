@@ -15,6 +15,7 @@ import {
 import { SafeAreaView, useSafeAreaInsets } from "react-native-safe-area-context";
 
 import { getApiBase, useApp } from "@/context/AppContext";
+import { useAIProvider } from "@/context/AIProviderContext";
 import { useColors } from "@/hooks/useColors";
 
 type Verdict = "Good spend" | "Reasonable" | "Worth reviewing" | "Consider cutting";
@@ -97,6 +98,7 @@ export default function AIReviewScreen() {
   const colors = useColors();
   const insets = useSafeAreaInsets();
   const { transactions, deviceId, householdId } = useApp();
+  const { mode } = useAIProvider();
 
   const [threshold, setThreshold] = useState(50);
   const [windowDays, setWindowDays] = useState(90);
@@ -173,6 +175,16 @@ export default function AIReviewScreen() {
           <Text style={[styles.introTitle, { color: "#8b5cf6" }]}>How it works</Text>
           <Text style={[styles.introText, { color: colors.foreground }]}>
             FinTrack uses AI to scan your bigger purchases and tell you if each one was a good deal, reasonable, or worth reconsidering. You'll also get an overall spend score and a personalized tip.
+          </Text>
+        </View>
+
+        {/* Provider badge */}
+        <View style={[styles.providerBadge, { backgroundColor: mode === "local" ? "#f59e0b12" : colors.muted, borderColor: mode === "local" ? "#f59e0b40" : colors.border }]}>
+          <Feather name={mode === "local" ? "cpu" : "globe"} size={13} color={mode === "local" ? "#f59e0b" : colors.mutedForeground} />
+          <Text style={[styles.providerBadgeText, { color: mode === "local" ? "#f59e0b" : colors.mutedForeground }]}>
+            {mode === "local"
+              ? "On-Device mode active \u2014 Spend Review uses API for reliable structured output"
+              : "Using API (configure model in api-server/.env)"}
           </Text>
         </View>
 
@@ -371,6 +383,8 @@ const styles = StyleSheet.create({
   },
   introTitle: { fontSize: 13, fontFamily: "Inter_700Bold" },
   introText: { fontSize: 13, fontFamily: "Inter_400Regular", lineHeight: 19 },
+  providerBadge: { flexDirection: "row", alignItems: "flex-start", gap: 8, borderWidth: 1, borderRadius: 12, padding: 12 },
+  providerBadgeText: { flex: 1, fontSize: 12, fontFamily: "Inter_400Regular", lineHeight: 17 },
 
   section: {
     borderRadius: 14,

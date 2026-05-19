@@ -7,7 +7,7 @@ import {
   CountryCode,
 } from "plaid";
 import { eq, and } from "drizzle-orm";
-import { db, plaidItemsTable } from "@workspace/db";
+import { db, plaidItemsTable, accountsTable } from "@workspace/db";
 import { requireHouseholdId } from "../middlewares/validate.js";
 
 const router = Router();
@@ -48,9 +48,38 @@ function plaidError(err: unknown): string {
   );
 }
 
+// ── GET /api/plaid/items ──────────────────────────────────────────────────
+
+router.get("/plaid/items", async (req, res) => {
+  const [rows, accts] = await Promise.all([
+    db.select().from(plaidItemsTable).where(eq(plaidItemsTable.householdId, res.locals.householdId)),
+    db.select().from(accountsTable).where(eq(accountsTable.householdId, res.locals.householdId)),
+  ]);
+
+  res.json(
+    rows.map((r) => {
+      const itemAccounts = accts.filter((a) => a.plaidItemId === r.id);
+      const plaidAccountMap: Record<string, string> = {};
+      itemAccounts.forEach((a) => {
+        if (a.plaidAccountId) plaidAccountMap[a.plaidAccountId] = a.id;
+      });
+      return {
+        itemId: r.id,
+        bankName: r.bankName,
+        bankColor: r.bankColor,
+        connectedAt: r.connectedAt?.toISOString() ?? new Date().toISOString(),
+        lastSynced: r.lastSyncedAt?.toISOString() ?? undefined,
+        accountIds: itemAccounts.map((a) => a.id),
+        plaidAccountMap,
+      };
+    })
+  );
+});
+
 // ── POST /api/plaid/create-link-token ─────────────────────────────────────
 
 router.post("/plaid/create-link-token", async (req, res) => {
+  const { item_id } = req.body as { item_id?: string };
   let client: PlaidApi;
   try {
     client = getPlaidClient();
@@ -62,14 +91,28 @@ router.post("/plaid/create-link-token", async (req, res) => {
   }
 
   try {
-    const response = await client.linkTokenCreate({
+    const base = {
       user: { client_user_id: res.locals.householdId },
       client_name: "Finance Tracker",
-      products: [Products.Transactions],
       country_codes: [CountryCode.Ca, CountryCode.Us],
       language: "en",
-    });
-    res.json({ link_token: response.data.link_token });
+    };
+
+    if (item_id) {
+      // Update mode — relink an existing item without creating a new one
+      const rows = await db.select().from(plaidItemsTable)
+        .where(and(eq(plaidItemsTable.id, item_id), eq(plaidItemsTable.householdId, res.locals.householdId)))
+        .limit(1);
+      if (!rows[0]) {
+        res.status(404).json({ error: "Plaid item not found" });
+        return;
+      }
+      const response = await client.linkTokenCreate({ ...base, access_token: rows[0].accessToken });
+      res.json({ link_token: response.data.link_token, update_mode: true });
+    } else {
+      const response = await client.linkTokenCreate({ ...base, products: [Products.Transactions] });
+      res.json({ link_token: response.data.link_token, update_mode: false });
+    }
   } catch (err) {
     req.log.error({ err }, "Failed to create Plaid link token");
     res.status(500).json({ error: plaidError(err) });
@@ -121,7 +164,6 @@ router.post("/plaid/exchange-token", async (req, res) => {
         transactions = [...transactions, ...syncRes.data.added];
         cursor = syncRes.data.next_cursor;
         hasMore = syncRes.data.has_more;
-        if (transactions.length >= 200) break;
       }
     } catch {
       // Fall back to /transactions/get if sync fails
@@ -199,8 +241,15 @@ router.post("/plaid/sync/:itemId", async (req, res) => {
   }
 
   try {
+    const force = !!(req.body as any)?.force;
     let transactions: any[] = [];
-    let cursor = record.cursor ?? undefined;
+    let cursor = force ? undefined : (record.cursor ?? undefined);
+
+    // Fetch accounts + transactions in parallel
+    const [accountsRes] = await Promise.all([
+      client.accountsGet({ access_token: record.accessToken }),
+    ]);
+    const plaidAccounts = accountsRes.data.accounts;
 
     let hasMore = true;
     while (hasMore) {
@@ -212,7 +261,25 @@ router.post("/plaid/sync/:itemId", async (req, res) => {
       transactions = [...transactions, ...syncRes.data.added];
       cursor = syncRes.data.next_cursor;
       hasMore = syncRes.data.has_more;
-      if (transactions.length >= 500) break;
+    }
+
+    // Backfill plaid_item_id + plaid_account_id on DB accounts that are missing them.
+    // This self-heals accounts created before these columns existed.
+    const dbAccts = await db
+      .select()
+      .from(accountsTable)
+      .where(eq(accountsTable.householdId, res.locals.householdId));
+    for (const pa of plaidAccounts) {
+      const match = dbAccts.find(
+        (a) => a.plaidAccountId === pa.account_id ||
+               (a.lastFour === (pa.mask ?? "") && !a.plaidItemId)
+      );
+      if (match && (!match.plaidItemId || !match.plaidAccountId)) {
+        await db
+          .update(accountsTable)
+          .set({ plaidItemId: itemId, plaidAccountId: pa.account_id })
+          .where(eq(accountsTable.id, match.id));
+      }
     }
 
     // Update cursor + last synced timestamp
@@ -224,6 +291,14 @@ router.post("/plaid/sync/:itemId", async (req, res) => {
     res.json({
       transactions: transactions.map(mapPlaidTransaction),
       count: transactions.length,
+      // Return Plaid accounts so client can self-heal accountIds / plaidAccMap
+      plaidAccounts: plaidAccounts.map((a) => ({
+        plaidAccountId: a.account_id,
+        name: a.name ?? a.official_name ?? "Account",
+        type: mapAccountType(a.type as string, a.subtype as string | null),
+        balance: a.balances.current ?? a.balances.available ?? 0,
+        lastFour: a.mask ?? "",
+      })),
     });
   } catch (err) {
     req.log.error({ err }, "Failed to sync Plaid transactions");
@@ -274,45 +349,131 @@ function mapAccountType(
   return "checking";
 }
 
+const LOWERCASE_PREP = new Set(["from","to","and","or","of","in","at","by","for","the","a","an"]);
+function toTitleCase(str: string): string {
+  return str
+    .trim()
+    .replace(/\b\w+/g, (w, offset) => {
+      const lower = w.toLowerCase();
+      if (offset > 0 && LOWERCASE_PREP.has(lower)) return lower;
+      return w.charAt(0).toUpperCase() + w.slice(1).toLowerCase();
+    });
+}
+
+function cleanPlaidName(merchantName: string | null | undefined, rawName: string | null | undefined): string {
+  const raw = (rawName ?? "").trim();
+  const merchant = (merchantName ?? "").trim();
+
+  // Strip BMO / Canadian-bank bracket prefix codes e.g. [CW], [TF], [IN], [SC]
+  let s = raw.replace(/^\[[A-Z]{2,3}\]\s*/i, "");
+
+  // Empty after stripping → interest charge
+  if (!s) return "Interest";
+
+  // Interac e-Transfer received
+  const interacIn = s.match(/^VIR\s+INTERAC\s+REC[UÇ]?\s+([A-Z][A-Z\s]+?)(?:\s+\d{10,})?$/i);
+  if (interacIn) return `Interac from ${toTitleCase(interacIn[1])}`;
+
+  // Interac e-Transfer sent
+  const interacOut = s.match(/^VIR\s+INTERAC\s+ENV[OO]Y[EÉ]?\s+([A-Z][A-Z\s]+?)(?:\s+\d{10,})?$/i);
+  if (interacOut) return `Interac to ${toTitleCase(interacOut[1])}`;
+
+  // Wire / internal transfer (TF XXXX#ref)
+  if (/^TF[\s#]/i.test(s) || /^VIREMENT/i.test(s)) {
+    const clean = s
+      .replace(/^TF\s*/i, "")
+      .replace(/\s*#[\d\-]+/g, "")
+      .replace(/\b\d+\b/g, "")
+      .replace(/\s+/g, " ")
+      .trim();
+    return clean.length >= 3 ? toTitleCase(clean) : "Wire Transfer";
+  }
+
+  // Mortgage
+  if (/MTG|HYP/i.test(s)) return "Mortgage Payment";
+
+  // Strip trailing transaction IDs and reference codes
+  s = s.replace(/\s+\d{10,}$/, "").replace(/\s+#[\d\-]+$/, "").replace(/\s+\d{4}$/, "").trim();
+
+  // French service charge refund
+  if (/remboursement des frais/i.test(s)) return "Service Fee Refund";
+  if (/programme performance/i.test(s)) return "Programmes & Fees";
+
+  // If raw still looks like a garbled abbreviation (all-caps run-together ≤ 10 chars)
+  // prefer merchant_name if it's longer and more readable
+  if (s.length <= 10 && /^[A-Z]+$/.test(s) && merchant && merchant.length > s.length) {
+    s = merchant;
+  }
+
+  // If cleaned raw is meaningful use it; otherwise fall back to merchant_name or raw
+  const candidate = s.length >= 3 ? s : (merchant || raw);
+  return toTitleCase(candidate) || "Transaction";
+}
+
+/** Map Plaid primary + optional detailed category → exact app category name */
+function mapPlaidCategory(primary: string, detailed?: string): string {
+  const d = (detailed ?? "").toUpperCase();
+  switch (primary) {
+    case "FOOD_AND_DRINK":
+      if (d.includes("GROCERIES") || d.includes("SUPERMARKETS")) return "Food & Grocery";
+      return "Drink & Dine"; // restaurants, fast food, coffee, bars
+    case "GENERAL_MERCHANDISE":
+      return "Shopping";
+    case "TRANSPORTATION":
+      return "Transport";
+    case "TRAVEL":
+      return "Travel & Vacation";
+    case "ENTERTAINMENT":
+      return "Entertainment";
+    case "PERSONAL_CARE":
+      return "Personal Care";
+    case "MEDICAL":
+      return "Health & Fitness";
+    case "RENT_AND_UTILITIES":
+      return "Bills & Utilities";
+    case "HOME_IMPROVEMENT":
+      return "House";
+    case "INCOME":
+      if (d.includes("WAGES") || d.includes("PAYROLL") || d.includes("SALARY")) return "Salary";
+      return "Business";
+    case "TRANSFER_IN":
+    case "TRANSFER_OUT":
+      return "Transfer";
+    case "LOAN_PAYMENTS":
+      return "Loan & Debts";
+    case "BANK_FEES":
+      return "Fees & Charges";
+    case "GOVERNMENT_AND_NON_PROFIT":
+      return "Others";
+    case "GENERAL_SERVICES":
+      return "Others";
+    default:
+      return "Others";
+  }
+}
+
 function mapPlaidTransaction(t: any) {
   const amount = typeof t.amount === "number" ? t.amount : 0;
-  const category =
+  const primary: string =
     t.personal_finance_category?.primary ??
     (Array.isArray(t.category) ? t.category[0] : null) ??
-    "Other";
+    "OTHER";
+  const detailed: string | undefined = t.personal_finance_category?.detailed;
+  const merchant: string = t.merchant_name ?? "";
+  const title = cleanPlaidName(merchant, t.name);
 
   return {
     plaidTransactionId: t.transaction_id as string,
-    title: (t.merchant_name ?? t.name ?? "Transaction") as string,
+    title,
+    merchant: merchant || title,
     amount: Math.abs(amount),
-    type: amount > 0 ? "expense" : "income",
-    category: humanCategory(category),
+    type: amount > 0 ? ("expense" as const) : ("income" as const),
+    category: mapPlaidCategory(primary, detailed),
     date: (t.date ?? new Date().toISOString().slice(0, 10)) as string,
     accountId: t.account_id as string,
-    bank: (t.merchant_name ?? t.name ?? "") as string,
+    plaidAccountId: t.account_id as string,
+    bank: title,
   };
-}
-
-const CATEGORY_MAP: Record<string, string> = {
-  FOOD_AND_DRINK: "Food",
-  GENERAL_MERCHANDISE: "Shopping",
-  TRANSPORTATION: "Transport",
-  TRAVEL: "Travel",
-  ENTERTAINMENT: "Entertainment",
-  PERSONAL_CARE: "Health",
-  MEDICAL: "Health",
-  RENT_AND_UTILITIES: "Utilities",
-  HOME_IMPROVEMENT: "Home",
-  INCOME: "Income",
-  TRANSFER_IN: "Income",
-  TRANSFER_OUT: "Transfer",
-  LOAN_PAYMENTS: "Bills",
-  BANK_FEES: "Fees",
-  GENERAL_SERVICES: "Services",
-};
-
-function humanCategory(raw: string): string {
-  return CATEGORY_MAP[raw] ?? raw.replace(/_/g, " ").replace(/\b\w/g, (c) => c.toUpperCase());
 }
 
 // ── GET /api/plaid/link-page (exported for public registration in routes/index.ts) ──

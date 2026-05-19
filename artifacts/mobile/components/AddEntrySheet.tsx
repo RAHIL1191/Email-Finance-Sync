@@ -1,8 +1,10 @@
 import { Feather } from "@expo/vector-icons";
 import * as Haptics from "expo-haptics";
 import DateTimePicker from "@react-native-community/datetimepicker";
-import React, { useEffect, useRef, useState } from "react";
+import React, { useCallback, useEffect, useRef, useState } from "react";
 import {
+  Alert,
+  Image,
   KeyboardAvoidingView,
   Modal,
   Platform,
@@ -14,10 +16,13 @@ import {
   TouchableOpacity,
   View,
 } from "react-native";
+import * as ImagePicker from "expo-image-picker";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 
-import { useApp } from "@/context/AppContext";
+import { Bill, useApp } from "@/context/AppContext";
 import { useColors } from "@/hooks/useColors";
+import CategoryPickerModal from "./CategoryPickerModal";
+import MerchantPickerModal from "./MerchantPickerModal";
 
 // ─── Constants ────────────────────────────────────────────────────────────────
 
@@ -105,7 +110,7 @@ function formatTime(d: Date) {
   });
 }
 
-function AmountCalcButton({ onPress }: { onPress: () => void }) {
+function AmountCalcButton({ onPress, icon = "menu" }: { onPress: () => void; icon?: string }) {
   const colors = useColors();
   return (
     <TouchableOpacity
@@ -113,8 +118,143 @@ function AmountCalcButton({ onPress }: { onPress: () => void }) {
       style={[styles.calcButton, { borderColor: colors.border, backgroundColor: colors.card }]}
       activeOpacity={0.75}
     >
-      <Feather name="menu" size={16} color={colors.mutedForeground} />
+      <Feather name={icon as any} size={16} color={colors.mutedForeground} />
     </TouchableOpacity>
+  );
+}
+
+// ─── Calculator Modal ─────────────────────────────────────────────────────────
+
+function CalculatorModal({
+  visible,
+  initialValue,
+  onClose,
+  onApply,
+}: {
+  visible: boolean;
+  initialValue: string;
+  onClose: () => void;
+  onApply: (value: string) => void;
+}) {
+  const colors = useColors();
+  const insets = useSafeAreaInsets();
+  const [expr, setExpr] = useState(initialValue || "");
+
+  useEffect(() => { if (visible) setExpr(initialValue || ""); }, [visible, initialValue]);
+
+  const append = (ch: string) => setExpr((prev) => prev + ch);
+  const backspace = () => setExpr((prev) => prev.slice(0, -1));
+  const clear = () => setExpr("");
+
+  const calculate = () => {
+    try {
+      // Safe eval for basic arithmetic
+      const sanitized = expr
+        .replace(/[^0-9+\-*/.]/g, "")
+        .replace(/\/\//g, "/")
+        .replace(/\*\*/g, "*");
+      if (!sanitized) return;
+      // eslint-disable-next-line no-new-func
+      const result = new Function(`return (${sanitized})`)() as number;
+      if (typeof result === "number" && !isNaN(result)) {
+        const rounded = Math.round(result * 100) / 100;
+        setExpr(String(rounded));
+      }
+    } catch {
+      // ignore invalid expression
+    }
+  };
+
+  const apply = () => {
+    if (expr) onApply(expr);
+    onClose();
+  };
+
+  const keys = [
+    ["7", "8", "9", "÷"],
+    ["4", "5", "6", "×"],
+    ["1", "2", "3", "-"],
+    ["0", ".", "=", "+"],
+  ];
+
+  return (
+    <Modal visible={visible} transparent animationType="slide" onRequestClose={onClose}>
+      <TouchableOpacity style={styles.overlay} activeOpacity={1} onPress={onClose} />
+      <View style={[styles.pickerSheet, { backgroundColor: colors.card, paddingBottom: insets.bottom + 16 }]}>
+        <View style={[styles.pickerHeader, { borderBottomColor: colors.border }]}>
+          <Text style={[styles.pickerTitle, { color: colors.foreground }]}>Calculator</Text>
+          <TouchableOpacity onPress={onClose}>
+            <Feather name="x" size={20} color={colors.foreground} />
+          </TouchableOpacity>
+        </View>
+        <View style={{ padding: 16 }}>
+          <View
+            style={{
+              backgroundColor: colors.accent,
+              borderRadius: 12,
+              padding: 14,
+              marginBottom: 12,
+              alignItems: "flex-end",
+            }}
+          >
+            <Text style={{ fontSize: 28, fontFamily: "Inter_500Medium", color: colors.foreground }}>
+              {expr || "0"}
+            </Text>
+          </View>
+          <View style={{ flexDirection: "row", gap: 8, marginBottom: 12 }}>
+            <TouchableOpacity
+              style={{ flex: 1, backgroundColor: colors.expense + "18", borderRadius: 10, padding: 10, alignItems: "center" }}
+              onPress={clear}
+            >
+              <Text style={{ fontSize: 14, fontFamily: "Inter_600SemiBold", color: colors.expense }}>C</Text>
+            </TouchableOpacity>
+            <TouchableOpacity
+              style={{ flex: 1, backgroundColor: colors.accent, borderRadius: 10, padding: 10, alignItems: "center" }}
+              onPress={backspace}
+            >
+              <Feather name="delete" size={16} color={colors.foreground} />
+            </TouchableOpacity>
+            <TouchableOpacity
+              style={{ flex: 2, backgroundColor: colors.primary, borderRadius: 10, padding: 10, alignItems: "center" }}
+              onPress={apply}
+            >
+              <Text style={{ fontSize: 14, fontFamily: "Inter_600SemiBold", color: "#fff" }}>Apply</Text>
+            </TouchableOpacity>
+          </View>
+          {keys.map((row, ri) => (
+            <View key={ri} style={{ flexDirection: "row", gap: 8, marginBottom: 8 }}>
+              {row.map((k) => {
+                const isOp = ["÷", "×", "-", "+"].includes(k);
+                const display = k === "÷" ? "/" : k === "×" ? "*" : k;
+                return (
+                  <TouchableOpacity
+                    key={k}
+                    style={{
+                      flex: 1,
+                      backgroundColor: isOp ? colors.primary + "18" : colors.accent,
+                      borderRadius: 10,
+                      paddingVertical: 16,
+                      alignItems: "center",
+                    }}
+                    onPress={() => (k === "=" ? calculate() : append(display))}
+                  >
+                    <Text
+                      style={{
+                        fontSize: 20,
+                        fontFamily: "Inter_600SemiBold",
+                        color: isOp ? colors.primary : colors.foreground,
+                      }}
+                    >
+                      {k}
+                    </Text>
+                  </TouchableOpacity>
+                );
+              })}
+            </View>
+          ))}
+        </View>
+      </View>
+    </Modal>
   );
 }
 
@@ -338,55 +478,6 @@ function PickerModal({
   );
 }
 
-// ─── Category Picker modal ────────────────────────────────────────────────────
-
-function CategoryPickerModal({
-  visible,
-  categories,
-  selected,
-  onSelect,
-  onClose,
-}: {
-  visible: boolean;
-  categories: { label: string; icon: string }[];
-  selected?: string;
-  onSelect: (v: string) => void;
-  onClose: () => void;
-}) {
-  const colors = useColors();
-  const insets = useSafeAreaInsets();
-  return (
-    <Modal visible={visible} transparent animationType="slide" onRequestClose={onClose}>
-      <TouchableOpacity style={styles.overlay} activeOpacity={1} onPress={onClose} />
-      <View style={[styles.pickerSheet, { backgroundColor: colors.card, paddingBottom: insets.bottom + 16 }]}>
-        <View style={[styles.pickerHeader, { borderBottomColor: colors.border }]}>
-          <Text style={[styles.pickerTitle, { color: colors.foreground }]}>Select Category</Text>
-          <TouchableOpacity onPress={onClose}>
-            <Feather name="x" size={20} color={colors.foreground} />
-          </TouchableOpacity>
-        </View>
-        <ScrollView showsVerticalScrollIndicator={false}>
-          {categories.map((cat) => (
-            <TouchableOpacity
-              key={cat.label}
-              style={[styles.catPickerRow, { borderBottomColor: colors.border }]}
-              onPress={() => { onSelect(cat.label); onClose(); }}
-            >
-              <View style={[styles.catPickerIcon, { backgroundColor: selected === cat.label ? colors.primary : colors.accent }]}>
-                <Feather name={cat.icon as any} size={16} color={selected === cat.label ? "#fff" : colors.primary} />
-              </View>
-              <Text style={[styles.catPickerLabel, { color: selected === cat.label ? colors.primary : colors.foreground }]}>
-                {cat.label}
-              </Text>
-              {selected === cat.label && <Feather name="check" size={18} color={colors.primary} />}
-            </TouchableOpacity>
-          ))}
-        </ScrollView>
-      </View>
-    </Modal>
-  );
-}
-
 // ─── Account Picker modal ─────────────────────────────────────────────────────
 
 function AccountPickerModal({
@@ -453,7 +544,7 @@ export const PROJECT_COLORS = [
   "#eab308", "#22c55e", "#14b8a6", "#3b82f6", "#64748b",
 ];
 
-function ProjectPickerModal({
+export function ProjectPickerModal({
   visible,
   selected,
   onSelect,
@@ -572,7 +663,19 @@ function ProjectPickerModal({
 
 // ─── Amount header ─────────────────────────────────────────────────────────────
 
-function AmountHeader({ value, onChange, color }: { value: string; onChange: (v: string) => void; color?: string }) {
+function AmountHeader({
+  value,
+  onChange,
+  color,
+  onOpenCalculator,
+  onOpenSplit,
+}: {
+  value: string;
+  onChange: (v: string) => void;
+  color?: string;
+  onOpenCalculator?: () => void;
+  onOpenSplit?: () => void;
+}) {
   const colors = useColors();
   const ref = useRef<TextInput>(null);
   return (
@@ -588,14 +691,102 @@ function AmountHeader({ value, onChange, color }: { value: string; onChange: (v:
         onChangeText={onChange}
         returnKeyType="done"
       />
-      <AmountCalcButton onPress={() => ref.current?.focus()} />
+      <AmountCalcButton icon="grid" onPress={() => onOpenCalculator?.()} />
+      <AmountCalcButton icon="scissors" onPress={() => onOpenSplit?.()} />
+    </View>
+  );
+}
+
+// ─── Image attachments ────────────────────────────────────────────────────────
+
+function ImageAttachmentsRow({
+  images,
+  onChange,
+  label = "Add Images",
+}: {
+  images: string[];
+  onChange: (imgs: string[]) => void;
+  label?: string;
+}) {
+  const colors = useColors();
+
+  const pick = () => {
+    Alert.alert("Attach Image", undefined, [
+      {
+        text: "Take Photo",
+        onPress: async () => {
+          const perm = await ImagePicker.requestCameraPermissionsAsync();
+          if (perm.status !== "granted") {
+            Alert.alert("Permission Required", "Camera access is needed to take photos.");
+            return;
+          }
+          const result = await ImagePicker.launchCameraAsync({
+            mediaTypes: ImagePicker.MediaTypeOptions.Images,
+            quality: 0.7,
+            allowsEditing: true,
+            aspect: [4, 3],
+          });
+          if (!result.canceled && result.assets.length > 0)
+            onChange([...images, ...result.assets.map((a) => a.uri)]);
+        },
+      },
+      {
+        text: "Photo Library",
+        onPress: async () => {
+          const perm = await ImagePicker.requestMediaLibraryPermissionsAsync();
+          if (perm.status !== "granted") {
+            Alert.alert("Permission Required", "Photo library access is needed to attach images.");
+            return;
+          }
+          const result = await ImagePicker.launchImageLibraryAsync({
+            mediaTypes: ImagePicker.MediaTypeOptions.Images,
+            allowsMultipleSelection: true,
+            quality: 0.7,
+          });
+          if (!result.canceled && result.assets.length > 0)
+            onChange([...images, ...result.assets.map((a) => a.uri)]);
+        },
+      },
+      { text: "Cancel", style: "cancel" },
+    ]);
+  };
+
+  const remove = (index: number) => onChange(images.filter((_, i) => i !== index));
+
+  if (images.length === 0) {
+    return (
+      <TouchableOpacity
+        style={[styles.addImagesRow, { backgroundColor: colors.card, borderColor: colors.border }]}
+        onPress={pick}
+      >
+        <Feather name="camera" size={20} color={colors.mutedForeground} />
+        <Text style={[styles.addImagesText, { color: colors.mutedForeground }]}>{label}</Text>
+      </TouchableOpacity>
+    );
+  }
+
+  return (
+    <View style={[styles.attachmentsContainer, { backgroundColor: colors.card, borderColor: colors.border }]}>
+      <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={styles.attachmentsScroll}>
+        {images.map((uri, i) => (
+          <View key={`att-${i}`} style={styles.thumbWrap}>
+            <Image source={{ uri }} style={styles.thumb} resizeMode="cover" />
+            <TouchableOpacity style={styles.thumbRemove} onPress={() => remove(i)} hitSlop={6}>
+              <Feather name="x" size={12} color="#fff" />
+            </TouchableOpacity>
+          </View>
+        ))}
+        <TouchableOpacity style={[styles.thumbAdd, { borderColor: colors.border }]} onPress={pick}>
+          <Feather name="plus" size={22} color={colors.mutedForeground} />
+        </TouchableOpacity>
+      </ScrollView>
     </View>
   );
 }
 
 // ─── EXPENSE tab ──────────────────────────────────────────────────────────────
 
-function ExpenseTab({ onSave }: { onSave: () => void }) {
+function ExpenseTab({ onSave, onRegisterSave }: { onSave: () => void; onRegisterSave: (fn: () => void) => void }) {
   const colors = useColors();
   const { accounts, addTransaction } = useApp();
 
@@ -609,53 +800,197 @@ function ExpenseTab({ onSave }: { onSave: () => void }) {
   const [projectId, setProjectId] = useState<string | undefined>(undefined);
   const [projectName, setProjectName] = useState<string | undefined>(undefined);
 
+  // Split categories state
+  const [splitCategories, setSplitCategories] = useState<Array<{ category: string; amount: string }>>([]);
+  const [isSplitMode, setIsSplitMode] = useState(false);
   const [showCatPicker, setShowCatPicker] = useState(false);
+  const [showSplitCatPicker, setShowSplitCatPicker] = useState(false);
   const [showAccPicker, setShowAccPicker] = useState(false);
   const [showDatePicker, setShowDatePicker] = useState(false);
   const [showTimePicker, setShowTimePicker] = useState(false);
   const [showProjectPicker, setShowProjectPicker] = useState(false);
+  const [showMerchantPicker, setShowMerchantPicker] = useState(false);
+  const [showCalculator, setShowCalculator] = useState(false);
+  const [receipts, setReceipts] = useState<string[]>([]);
 
   const selectedAcc = accounts.find((a) => a.id === accountId);
+  const isSplit = splitCategories.length > 0;
+
+  const addSplitCategory = (cat: string) => {
+    setSplitCategories((prev) => [...prev, { category: cat, amount: "" }]);
+  };
+
+  const removeSplitCategory = (index: number) => {
+    setSplitCategories((prev) => prev.filter((_, i) => i !== index));
+  };
+
+  const updateSplitAmount = (index: number, value: string) => {
+    setSplitCategories((prev) =>
+      prev.map((s, i) => (i === index ? { ...s, amount: value } : s))
+    );
+  };
+
+  const splitTotal = splitCategories.reduce((sum, s) => sum + (parseFloat(s.amount) || 0), 0);
+
+  const saveRef = useRef<() => void>(() => {});
+  useEffect(() => { onRegisterSave(() => saveRef.current()); }, []); // eslint-disable-line react-hooks/exhaustive-deps
 
   const save = () => {
-    const parsed = parseFloat(amount);
-    if (isNaN(parsed) || parsed <= 0 || !accountId) return;
+    const parsedTotal = parseFloat(amount);
+    if (isNaN(parsedTotal) || parsedTotal <= 0 || !accountId) return;
+
+    if (isSplitMode) {
+      if (splitCategories.length === 0) {
+        Alert.alert("No Split Categories", "Add at least one category to split into.");
+        return;
+      }
+      const splitTotal = splitCategories.reduce((sum, s) => sum + (parseFloat(s.amount) || 0), 0);
+      if (Math.abs(splitTotal - parsedTotal) > 0.01) {
+        Alert.alert(
+          "Amount Mismatch",
+          `Split total ($${splitTotal.toFixed(2)}) must equal the transaction amount ($${parsedTotal.toFixed(2)}).`
+        );
+        return;
+      }
+    }
+
     Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
-    addTransaction({
-      title: merchant || category || "Expense",
-      merchant: merchant || undefined,
-      amount: parsed,
-      type: "expense",
-      category: category || "Other",
-      accountId,
-      date: date.toISOString(),
-      note: [notes, tag ? `Tag: ${tag}` : ""].filter(Boolean).join(" · ") || undefined,
-      isRefund: tag.trim().toLowerCase() === "refund" ? true : undefined,
-      projectId: projectId || undefined,
-      projectName: projectName || undefined,
-      source: "manual",
-    });
+
+    if (isSplitMode && splitCategories.length > 0) {
+      const groupId = `split_${Date.now()}_${Math.random().toString(36).slice(2)}`;
+      splitCategories.forEach((split) => {
+        const splitAmount = parseFloat(split.amount);
+        if (isNaN(splitAmount) || splitAmount <= 0) return;
+        addTransaction({
+          title: merchant || split.category || "Expense",
+          merchant: merchant || undefined,
+          amount: splitAmount,
+          type: "expense",
+          category: split.category || "Other",
+          accountId,
+          date: date.toISOString(),
+          note: [notes, tag ? `Tag: ${tag}` : ""].filter(Boolean).join(" · ") || undefined,
+          isRefund: tag.trim().toLowerCase() === "refund" ? true : undefined,
+          projectId: projectId || undefined,
+          projectName: projectName || undefined,
+          source: "manual",
+          splitGroupId: groupId,
+          receipts: receipts.length > 0 ? receipts : undefined,
+        });
+      });
+    } else {
+      addTransaction({
+        title: merchant || category || "Expense",
+        merchant: merchant || undefined,
+        amount: parsedTotal,
+        type: "expense",
+        category: category || "Other",
+        accountId,
+        date: date.toISOString(),
+        note: [notes, tag ? `Tag: ${tag}` : ""].filter(Boolean).join(" · ") || undefined,
+        isRefund: tag.trim().toLowerCase() === "refund" ? true : undefined,
+        projectId: projectId || undefined,
+        projectName: projectName || undefined,
+        source: "manual",
+        receipts: receipts.length > 0 ? receipts : undefined,
+      });
+    }
+    setReceipts([]);
     onSave();
   };
+  saveRef.current = save;
 
   return (
     <ScrollView contentContainerStyle={styles.tabContent} keyboardShouldPersistTaps="handled" showsVerticalScrollIndicator={false}>
-      <AmountHeader value={amount} onChange={setAmount} color={colors.expense} />
+      <AmountHeader
+        value={amount}
+        onChange={setAmount}
+        color={colors.expense}
+        onOpenCalculator={() => setShowCalculator(true)}
+        onOpenSplit={() => setIsSplitMode(true)}
+      />
 
+      {/* ── Category / Split ── */}
       <View style={[styles.card, { backgroundColor: colors.card }]}>
-        <RowItem
-          icon="grid"
-          label={category || undefined}
-          placeholder={category ? undefined : "Select category"}
-          onPress={() => setShowCatPicker(true)}
-        />
-        <RowItem
-          icon="shopping-bag"
-          placeholder="Select Merchant"
-          value={merchant || undefined}
-          onPress={() => {}}
-          borderBottom={false}
-        />
+        {!isSplitMode ? (
+          <RowItem
+            icon="grid"
+            label={category || undefined}
+            placeholder={category ? undefined : "Select category"}
+            onPress={() => setShowCatPicker(true)}
+          />
+        ) : (
+          <View style={{ paddingVertical: 8 }}>
+            <View style={{ flexDirection: "row", alignItems: "center", paddingHorizontal: 16, paddingVertical: 6, gap: 10 }}>
+              <View style={[styles.rowIcon, { backgroundColor: colors.primary + "18" }]}>
+                <Feather name="layers" size={18} color={colors.primary} />
+              </View>
+              <Text style={[styles.rowLabel, { color: colors.foreground, flex: 1 }]}>Multiple Categories</Text>
+              <TouchableOpacity onPress={() => { setIsSplitMode(false); setSplitCategories([]); }} hitSlop={10}>
+                <Feather name="x" size={16} color={colors.mutedForeground} />
+              </TouchableOpacity>
+            </View>
+            {splitCategories.map((split, i) => (
+              <View
+                key={i}
+                style={[
+                  styles.row,
+                  { borderBottomWidth: i < splitCategories.length - 1 ? StyleSheet.hairlineWidth : 0, borderBottomColor: colors.border },
+                ]}
+              >
+                <View style={[styles.rowIcon, { backgroundColor: colors.accent }]}>
+                  <Feather name="minus-circle" size={18} color={colors.expense} />
+                </View>
+                <Text style={[styles.rowLabel, { color: colors.foreground, flex: 1 }]} numberOfLines={1}>
+                  {split.category}
+                </Text>
+                <View style={{ flexDirection: "row", alignItems: "center", gap: 6 }}>
+                  <Text style={{ fontSize: 15, fontFamily: "Inter_400Regular", color: colors.mutedForeground }}>$</Text>
+                  <TextInput
+                    style={{
+                      fontSize: 15,
+                      fontFamily: "Inter_500Medium",
+                      color: colors.foreground,
+                      minWidth: 60,
+                      textAlign: "right",
+                      borderBottomWidth: StyleSheet.hairlineWidth,
+                      borderBottomColor: colors.border,
+                      paddingVertical: 2,
+                    }}
+                    placeholder="0.00"
+                    placeholderTextColor={colors.mutedForeground}
+                    keyboardType="decimal-pad"
+                    value={split.amount}
+                    onChangeText={(v) => updateSplitAmount(i, v)}
+                    returnKeyType="done"
+                  />
+                  <TouchableOpacity onPress={() => removeSplitCategory(i)} hitSlop={10}>
+                    <Feather name="x" size={18} color={colors.mutedForeground} />
+                  </TouchableOpacity>
+                </View>
+              </View>
+            ))}
+            <TouchableOpacity
+              style={[styles.row, { borderBottomWidth: 0, gap: 8 }]}
+              onPress={() => setShowSplitCatPicker(true)}
+            >
+              <View style={[styles.rowIcon, { backgroundColor: colors.accent }]}>
+                <Feather name="plus" size={18} color={colors.primary} />
+              </View>
+              <Text style={[styles.rowPlaceholder, { color: colors.primary }]}>Add a Category to split</Text>
+            </TouchableOpacity>
+          </View>
+        )}
+        {!isSplitMode && (
+          <RowItem
+            icon="shopping-bag"
+            placeholder="Select Merchant"
+            value={merchant || undefined}
+            onPress={() => setShowMerchantPicker(true)}
+            onClear={merchant ? () => setMerchant("") : undefined}
+            borderBottom={false}
+          />
+        )}
       </View>
 
       <View style={[styles.card, { backgroundColor: colors.card }]}>
@@ -727,10 +1062,22 @@ function ExpenseTab({ onSave }: { onSave: () => void }) {
         </View>
       </View>
 
-      <TouchableOpacity style={[styles.addImagesRow, { backgroundColor: colors.card, borderColor: colors.border }]}>
-        <Feather name="camera" size={20} color={colors.mutedForeground} />
-        <Text style={[styles.addImagesText, { color: colors.mutedForeground }]}>Add Receipts</Text>
-      </TouchableOpacity>
+      <ImageAttachmentsRow images={receipts} onChange={setReceipts} label="Add Receipts" />
+
+      {isSplitMode && splitCategories.length > 0 && (
+        <View style={{ paddingHorizontal: 16, marginTop: -4, marginBottom: 4 }}>
+          <Text style={{
+            fontSize: 12,
+            fontFamily: "Inter_400Regular",
+            color: amount && Math.abs(splitTotal - parseFloat(amount)) > 0.01 ? "#ef4444" : colors.mutedForeground,
+          }}>
+            Split total: ${splitTotal.toFixed(2)}{amount ? ` / $${parseFloat(amount).toFixed(2)}` : ""}
+            {amount && Math.abs(splitTotal - parseFloat(amount)) > 0.01
+              ? `  ·  $${Math.abs(parseFloat(amount) - splitTotal).toFixed(2)} ${splitTotal < parseFloat(amount) ? "remaining" : "over"}`
+              : "  ✓"}
+          </Text>
+        </View>
+      )}
 
       <TouchableOpacity style={[styles.saveBtn, { backgroundColor: colors.primary }]} onPress={save}>
         <Text style={styles.saveBtnText}>Save Expense</Text>
@@ -738,10 +1085,15 @@ function ExpenseTab({ onSave }: { onSave: () => void }) {
 
       <CategoryPickerModal
         visible={showCatPicker}
-        categories={EXPENSE_CATEGORIES}
-        selected={category}
-        onSelect={setCategory}
         onClose={() => setShowCatPicker(false)}
+        onSelect={(cat, sub) => setCategory(sub ? `${cat} - ${sub}` : cat)}
+        type="expense"
+      />
+      <CategoryPickerModal
+        visible={showSplitCatPicker}
+        onClose={() => setShowSplitCatPicker(false)}
+        onSelect={(cat) => { addSplitCategory(cat); setShowSplitCatPicker(false); }}
+        type="expense"
       />
       <AccountPickerModal
         visible={showAccPicker}
@@ -769,13 +1121,25 @@ function ExpenseTab({ onSave }: { onSave: () => void }) {
         onChange={setDate}
         onClose={() => setShowTimePicker(false)}
       />
+      <MerchantPickerModal
+        visible={showMerchantPicker}
+        onClose={() => setShowMerchantPicker(false)}
+        onSelect={(m) => setMerchant(m)}
+        selected={merchant}
+      />
+      <CalculatorModal
+        visible={showCalculator}
+        initialValue={amount}
+        onClose={() => setShowCalculator(false)}
+        onApply={(v) => setAmount(v)}
+      />
     </ScrollView>
   );
 }
 
 // ─── INCOME tab ───────────────────────────────────────────────────────────────
 
-function IncomeTab({ onSave }: { onSave: () => void }) {
+function IncomeTab({ onSave, onRegisterSave }: { onSave: () => void; onRegisterSave: (fn: () => void) => void }) {
   const colors = useColors();
   const { accounts, addTransaction } = useApp();
 
@@ -792,15 +1156,23 @@ function IncomeTab({ onSave }: { onSave: () => void }) {
   const [showDatePicker, setShowDatePicker] = useState(false);
   const [showTimePicker, setShowTimePicker] = useState(false);
   const [showProjectPicker, setShowProjectPicker] = useState(false);
+  const [showMerchantPicker, setShowMerchantPicker] = useState(false);
+  const [showCalculator, setShowCalculator] = useState(false);
+  const [merchant, setMerchant] = useState("");
   const [projectId, setProjectId] = useState<string | undefined>(undefined);
   const [projectName, setProjectName] = useState<string | undefined>(undefined);
+  const [receipts, setReceipts] = useState<string[]>([]);
+
+  const saveRef = useRef<() => void>(() => {});
+  useEffect(() => { onRegisterSave(() => saveRef.current()); }, []); // eslint-disable-line react-hooks/exhaustive-deps
 
   const save = () => {
     const parsed = parseFloat(amount);
     if (isNaN(parsed) || parsed <= 0 || !accountId) return;
     Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
     addTransaction({
-      title: category || "Income",
+      title: merchant || category || "Income",
+      merchant: merchant || undefined,
       amount: parsed,
       type: "income",
       category: category || "Other",
@@ -811,13 +1183,21 @@ function IncomeTab({ onSave }: { onSave: () => void }) {
       projectName: projectName || undefined,
       isRefund: category.trim().toLowerCase() === "refund" ? true : undefined,
       source: "manual",
+      receipts: receipts.length > 0 ? receipts : undefined,
     });
+    setReceipts([]);
     onSave();
   };
+  saveRef.current = save;
 
   return (
     <ScrollView contentContainerStyle={styles.tabContent} keyboardShouldPersistTaps="handled" showsVerticalScrollIndicator={false}>
-      <AmountHeader value={amount} onChange={setAmount} color={colors.income} />
+      <AmountHeader
+        value={amount}
+        onChange={setAmount}
+        color={colors.income}
+        onOpenCalculator={() => setShowCalculator(true)}
+      />
 
       <View style={[styles.card, { backgroundColor: colors.card }]}>
         <RowItem
@@ -827,10 +1207,12 @@ function IncomeTab({ onSave }: { onSave: () => void }) {
           onPress={() => setShowCatPicker(true)}
         />
         <RowItem
-          icon="bar-chart-2"
-          placeholder="Select Budget"
+          icon="shopping-bag"
+          placeholder="Select Merchant"
+          value={merchant || undefined}
+          onPress={() => setShowMerchantPicker(true)}
+          onClear={merchant ? () => setMerchant("") : undefined}
           borderBottom={false}
-          onPress={() => {}}
         />
       </View>
 
@@ -881,10 +1263,7 @@ function IncomeTab({ onSave }: { onSave: () => void }) {
         />
       </View>
 
-      <TouchableOpacity style={[styles.addImagesRow, { backgroundColor: colors.card, borderColor: colors.border }]}>
-        <Feather name="camera" size={20} color={colors.mutedForeground} />
-        <Text style={[styles.addImagesText, { color: colors.mutedForeground }]}>Add Images</Text>
-      </TouchableOpacity>
+      <ImageAttachmentsRow images={receipts} onChange={setReceipts} />
 
       <TouchableOpacity style={[styles.saveBtn, { backgroundColor: colors.income }]} onPress={save}>
         <Text style={styles.saveBtnText}>Save Income</Text>
@@ -892,10 +1271,9 @@ function IncomeTab({ onSave }: { onSave: () => void }) {
 
       <CategoryPickerModal
         visible={showCatPicker}
-        categories={INCOME_CATEGORIES}
-        selected={category}
-        onSelect={setCategory}
         onClose={() => setShowCatPicker(false)}
+        onSelect={(cat, sub) => setCategory(sub ? `${cat} - ${sub}` : cat)}
+        type="income"
       />
       <AccountPickerModal
         visible={showAccPicker}
@@ -931,13 +1309,25 @@ function IncomeTab({ onSave }: { onSave: () => void }) {
         onChange={(d) => setDate((prev) => { const n = new Date(prev); n.setHours(d.getHours(), d.getMinutes()); return n; })}
         onClose={() => setShowTimePicker(false)}
       />
+      <MerchantPickerModal
+        visible={showMerchantPicker}
+        onClose={() => setShowMerchantPicker(false)}
+        onSelect={(m) => setMerchant(m)}
+        selected={merchant}
+      />
+      <CalculatorModal
+        visible={showCalculator}
+        initialValue={amount}
+        onClose={() => setShowCalculator(false)}
+        onApply={(v) => setAmount(v)}
+      />
     </ScrollView>
   );
 }
 
 // ─── TRANSFER tab ─────────────────────────────────────────────────────────────
 
-function TransferTab({ onSave }: { onSave: () => void }) {
+function TransferTab({ onSave, onRegisterSave }: { onSave: () => void; onRegisterSave: (fn: () => void) => void }) {
   const colors = useColors();
   const { accounts, addTransaction } = useApp();
 
@@ -958,12 +1348,16 @@ function TransferTab({ onSave }: { onSave: () => void }) {
   const fromAcc = accounts.find((a) => a.id === fromId);
   const toAcc = accounts.find((a) => a.id === toId);
 
+  const saveRef = useRef<() => void>(() => {});
+  useEffect(() => { onRegisterSave(() => saveRef.current()); }, []); // eslint-disable-line react-hooks/exhaustive-deps
+
   const save = () => {
     const parsed = parseFloat(amount);
     if (isNaN(parsed) || parsed <= 0 || !fromId || !toId || fromId === toId) return;
     Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
     addTransaction({
       title: `Transfer to ${toAcc?.name ?? "Account"}`,
+
       amount: parsed,
       type: "expense",
       category: "Transfer",
@@ -984,6 +1378,7 @@ function TransferTab({ onSave }: { onSave: () => void }) {
     });
     onSave();
   };
+  saveRef.current = save;
 
   return (
     <ScrollView contentContainerStyle={styles.tabContent} keyboardShouldPersistTaps="handled" showsVerticalScrollIndicator={false}>
@@ -1123,7 +1518,7 @@ function TransferTab({ onSave }: { onSave: () => void }) {
 
 // ─── BILLS tab ────────────────────────────────────────────────────────────────
 
-function BillsTab({ onSave }: { onSave: () => void }) {
+function BillsTab({ onSave, onRegisterSave }: { onSave: () => void; onRegisterSave: (fn: () => void) => void }) {
   const colors = useColors();
   const { accounts, addBill } = useApp();
 
@@ -1144,19 +1539,32 @@ function BillsTab({ onSave }: { onSave: () => void }) {
   const [showRepeatPicker, setShowRepeatPicker] = useState(false);
   const [showRemindPicker, setShowRemindPicker] = useState(false);
   const [showDatePicker, setShowDatePicker] = useState(false);
+  const [receipts, setReceipts] = useState<string[]>([]);
 
   const selectedAcc = accounts.find((a) => a.id === accountId);
 
-  const save = () => {
+  const saveRef = useRef<() => void>(() => {});
+  useEffect(() => { onRegisterSave(() => saveRef.current()); }, []); // eslint-disable-line react-hooks/exhaustive-deps
+
+  const save = useCallback(() => {
     const parsed = parseFloat(amount);
-    if (isNaN(parsed) || parsed <= 0 || !title.trim()) return;
+    if (!title.trim()) {
+      Alert.alert("Missing Title", "Please enter a bill title.");
+      return;
+    }
+    if (isNaN(parsed) || parsed <= 0) {
+      Alert.alert("Invalid Amount", "Please enter a valid amount greater than 0.");
+      return;
+    }
     Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
-    const freqMap: Record<string, "weekly" | "monthly" | "yearly"> = {
-      Weekly: "weekly",
-      "Every 2 Weeks": "weekly",
-      Monthly: "monthly",
-      "Every 3 Months": "monthly",
-      Yearly: "yearly",
+    const freqMap: Record<string, Bill["frequency"]> = {
+      Daily:            "daily",
+      Weekly:           "weekly",
+      "Every 2 Weeks":  "biweekly",
+      Monthly:          "monthly",
+      "Every 3 Months": "quarterly",
+      "Every 6 Months": "semiannual",
+      Yearly:           "yearly",
     };
     const isRecurring = repeat !== "Never";
     addBill({
@@ -1168,9 +1576,17 @@ function BillsTab({ onSave }: { onSave: () => void }) {
       isRecurring,
       frequency: isRecurring ? (freqMap[repeat] ?? "monthly") : undefined,
       accountId: accountId || undefined,
+      receipts: receipts.length > 0 ? receipts : undefined,
+      notes: notes || undefined,
+      remindDays,
+      autoPaid,
+      billNumber: billNumber || undefined,
+      addExpenseEntry,
     });
+    setReceipts([]);
     onSave();
-  };
+  }, [amount, title, category, dueDate, repeat, accountId, receipts, addBill, onSave]);
+  saveRef.current = save;
 
   return (
     <ScrollView contentContainerStyle={styles.tabContent} keyboardShouldPersistTaps="handled" showsVerticalScrollIndicator={false}>
@@ -1197,7 +1613,7 @@ function BillsTab({ onSave }: { onSave: () => void }) {
           </View>
           <TextInput
             style={[styles.notesInput, { color: colors.foreground, flex: 1 }]}
-            placeholder="Title..."
+            placeholder="Bill name (required)"
             placeholderTextColor={colors.mutedForeground}
             value={title}
             onChangeText={setTitle}
@@ -1296,21 +1712,17 @@ function BillsTab({ onSave }: { onSave: () => void }) {
         </View>
       </View>
 
-      <TouchableOpacity style={[styles.addImagesRow, { backgroundColor: colors.card, borderColor: colors.border }]}>
-        <Feather name="camera" size={20} color={colors.mutedForeground} />
-        <Text style={[styles.addImagesText, { color: colors.mutedForeground }]}>Add Images</Text>
-      </TouchableOpacity>
+      <ImageAttachmentsRow images={receipts} onChange={setReceipts} label="Add Images" />
 
-      <TouchableOpacity style={[styles.saveBtn, { backgroundColor: colors.warning }]} onPress={save}>
+      <TouchableOpacity style={[styles.saveBtn, { backgroundColor: colors.warning }]} onPress={() => saveRef.current()}>
         <Text style={styles.saveBtnText}>Save Bill</Text>
       </TouchableOpacity>
 
       <CategoryPickerModal
         visible={showCatPicker}
-        categories={BILL_CATEGORIES}
-        selected={category}
-        onSelect={setCategory}
         onClose={() => setShowCatPicker(false)}
+        onSelect={(cat, sub) => setCategory(sub ? `${cat} - ${sub}` : cat)}
+        type="expense"
       />
       <AccountPickerModal
         visible={showAccPicker}
@@ -1356,9 +1768,9 @@ export default function AddEntrySheet({ visible, initialTab = "EXPENSE", onClose
     BILLS: "Add Bill",
   };
 
-  const handleSave = () => {
-    onClose();
-  };
+  const tabSaveRef = useRef<() => void>(() => {});
+  const registerTabSave = (fn: () => void) => { tabSaveRef.current = fn; };
+  const handleSave = () => { tabSaveRef.current(); };
 
   return (
     <Modal visible={visible} animationType="slide" presentationStyle="fullScreen" onRequestClose={onClose}>
@@ -1391,10 +1803,10 @@ export default function AddEntrySheet({ visible, initialTab = "EXPENSE", onClose
         </View>
 
         {/* Content */}
-        {activeTab === "EXPENSE" && <ExpenseTab onSave={handleSave} />}
-        {activeTab === "INCOME" && <IncomeTab onSave={handleSave} />}
-        {activeTab === "TRANSFER" && <TransferTab onSave={handleSave} />}
-        {activeTab === "BILLS" && <BillsTab onSave={handleSave} />}
+        {activeTab === "EXPENSE" && <ExpenseTab onSave={onClose} onRegisterSave={registerTabSave} />}
+        {activeTab === "INCOME" && <IncomeTab onSave={onClose} onRegisterSave={registerTabSave} />}
+        {activeTab === "TRANSFER" && <TransferTab onSave={onClose} onRegisterSave={registerTabSave} />}
+        {activeTab === "BILLS" && <BillsTab onSave={onClose} onRegisterSave={registerTabSave} />}
       </KeyboardAvoidingView>
     </Modal>
   );
@@ -1482,6 +1894,40 @@ const styles = StyleSheet.create({
     borderStyle: "dashed",
   },
   addImagesText: { fontSize: 15, fontFamily: "Inter_400Regular" },
+
+  attachmentsContainer: {
+    borderRadius: 14,
+    borderWidth: 1,
+    borderStyle: "dashed",
+    paddingVertical: 10,
+  },
+  attachmentsScroll: {
+    paddingHorizontal: 12,
+    gap: 10,
+    alignItems: "center",
+  },
+  thumbWrap: { position: "relative" },
+  thumb: { width: 72, height: 72, borderRadius: 10 },
+  thumbRemove: {
+    position: "absolute",
+    top: -5,
+    right: -5,
+    width: 20,
+    height: 20,
+    borderRadius: 10,
+    backgroundColor: "rgba(0,0,0,0.65)",
+    alignItems: "center",
+    justifyContent: "center",
+  },
+  thumbAdd: {
+    width: 72,
+    height: 72,
+    borderRadius: 10,
+    borderWidth: 1.5,
+    borderStyle: "dashed",
+    alignItems: "center",
+    justifyContent: "center",
+  },
 
   saveBtn: {
     borderRadius: 14,

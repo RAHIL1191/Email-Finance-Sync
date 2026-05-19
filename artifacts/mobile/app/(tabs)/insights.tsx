@@ -1,11 +1,17 @@
 import { Feather } from "@expo/vector-icons";
+import DateTimePicker from "@react-native-community/datetimepicker";
 import * as Haptics from "expo-haptics";
 import React, { useMemo, useState } from "react";
-import { ActivityIndicator, Animated, Platform, ScrollView, StyleSheet, Text, TouchableOpacity, View } from "react-native";
+import { ActivityIndicator, Animated, Dimensions, Modal, Platform, ScrollView, StyleSheet, Text, TouchableOpacity, View } from "react-native";
+import { KeyboardAwareScrollView } from "react-native-keyboard-controller";
 import { SafeAreaView } from "react-native-safe-area-context";
 
 import AddEntrySheet from "@/components/AddEntrySheet";
+import AIChatPanel from "@/components/AIChatPanel";
+import ModelDownloadGate from "@/components/ModelDownloadGate";
 import { useApp } from "@/context/AppContext";
+import { useAIProvider } from "@/context/AIProviderContext";
+import { useDrawer } from "@/context/DrawerContext";
 import { useColors } from "@/hooks/useColors";
 
 interface Insight {
@@ -33,6 +39,235 @@ const CATEGORY_COLORS: Record<string, string> = {
 };
 
 type EntryTab = "EXPENSE" | "INCOME" | "TRANSFER" | "BILLS";
+type GroupByPeriod = "Monthly" | "Weekly" | "Bi-Weekly" | "Yearly" | "Custom";
+export interface PeriodSettings {
+  period: GroupByPeriod;
+  monthStartDay: number;
+  weekStartDay: number;
+  biWeeklyStartDate: Date;
+  customStartDate: Date;
+  customEndDate: Date;
+}
+
+const WEEK_DAYS = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"];
+const PERIODS: GroupByPeriod[] = ["Monthly", "Weekly", "Bi-Weekly", "Yearly", "Custom"];
+
+function fmt(d: Date) {
+  return d.toLocaleDateString("en-GB", { day: "2-digit", month: "short", year: "numeric" });
+}
+
+// ── Period Settings Sheet ──────────────────────────────────────────────────────
+function PeriodSettingsSheet({
+  visible, onClose, onApply, initial,
+}: {
+  visible: boolean;
+  onClose: () => void;
+  onApply: (s: PeriodSettings) => void;
+  initial: PeriodSettings;
+}) {
+  const colors = useColors();
+  const [activeTab, setActiveTab] = useState<"GROUP BY" | "FILTER">("GROUP BY");
+  const [period, setPeriod] = useState<GroupByPeriod>(initial.period);
+  const [monthStartDate, setMonthStartDate] = useState(new Date());
+  const [showMonthPicker, setShowMonthPicker] = useState(false);
+  const [weekStartDay, setWeekStartDay] = useState(initial.weekStartDay);
+  const [biWeeklyDate, setBiWeeklyDate] = useState(initial.biWeeklyStartDate);
+  const [showBiWeeklyPicker, setShowBiWeeklyPicker] = useState(false);
+  const [customStart, setCustomStart] = useState(initial.customStartDate);
+  const [customEnd, setCustomEnd] = useState(initial.customEndDate);
+  const [showCustomStart, setShowCustomStart] = useState(false);
+  const [showCustomEnd, setShowCustomEnd] = useState(false);
+
+  const snapToSunday = (d: Date) => {
+    const s = new Date(d);
+    s.setDate(d.getDate() - d.getDay());
+    return s;
+  };
+
+  const handleApply = () => {
+    Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium);
+    onApply({ period, monthStartDay: monthStartDate.getDate(), weekStartDay, biWeeklyStartDate: biWeeklyDate, customStartDate: customStart, customEndDate: customEnd });
+    onClose();
+  };
+
+  return (
+    <Modal visible={visible} animationType="slide" transparent onRequestClose={onClose}>
+      <View style={sh.backdrop}>
+        <TouchableOpacity style={StyleSheet.absoluteFill} activeOpacity={1} onPress={onClose} />
+        <View style={[sh.sheet, { backgroundColor: colors.card, paddingBottom: Platform.OS === "ios" ? 34 : 16 }]}>
+          {/* Tab row */}
+          <View style={[sh.tabRow, { borderBottomColor: colors.border }]}>
+            {(["GROUP BY", "FILTER"] as const).map(tab => (
+              <TouchableOpacity key={tab} onPress={() => setActiveTab(tab)} style={sh.tabBtn}>
+                <Text style={[sh.tabLabel, { color: activeTab === tab ? colors.primary : colors.mutedForeground }]}>{tab}</Text>
+                {activeTab === tab && <View style={[sh.tabUnderline, { backgroundColor: colors.primary }]} />}
+              </TouchableOpacity>
+            ))}
+            <TouchableOpacity onPress={onClose} hitSlop={8} style={sh.closeBtn}>
+              <Feather name="x" size={20} color={colors.foreground} />
+            </TouchableOpacity>
+          </View>
+
+          {activeTab === "GROUP BY" ? (
+            <ScrollView showsVerticalScrollIndicator={false} contentContainerStyle={{ gap: 20, paddingTop: 4 }}>
+              {/* Period pills */}
+              <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={{ gap: 8, paddingVertical: 4 }}>
+                {PERIODS.map(p => (
+                  <TouchableOpacity
+                    key={p}
+                    onPress={() => { Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light); setPeriod(p); }}
+                    style={[sh.pill, period === p ? { backgroundColor: colors.primary } : { backgroundColor: colors.muted, borderColor: colors.border, borderWidth: 1 }]}
+                  >
+                    <Text style={[sh.pillText, { color: period === p ? "#fff" : colors.foreground }]}>{p}</Text>
+                  </TouchableOpacity>
+                ))}
+              </ScrollView>
+
+              {/* Monthly */}
+              {period === "Monthly" && (
+                <View style={{ gap: 10 }}>
+                  <Text style={[sh.sectionLabel, { color: colors.foreground }]}>Start day of month</Text>
+                  <TouchableOpacity
+                    style={[sh.dateField, { backgroundColor: colors.muted, borderColor: colors.border }]}
+                    onPress={() => setShowMonthPicker(true)}
+                    activeOpacity={0.8}
+                  >
+                    <Feather name="calendar" size={15} color={colors.mutedForeground} />
+                    <Text style={[sh.dateFieldText, { color: colors.foreground }]}>{fmt(monthStartDate)}</Text>
+                  </TouchableOpacity>
+                  {showMonthPicker && (
+                    <DateTimePicker
+                      value={monthStartDate}
+                      mode="date"
+                      display={Platform.OS === "ios" ? "spinner" : "default"}
+                      onChange={(_, d) => { setShowMonthPicker(false); if (d) setMonthStartDate(d); }}
+                    />
+                  )}
+                  <View style={sh.infoRow}>
+                    <Feather name="info" size={13} color={colors.mutedForeground} />
+                    <Text style={[sh.infoText, { color: colors.mutedForeground }]}>Month will start from Day {monthStartDate.getDate()}</Text>
+                  </View>
+                </View>
+              )}
+
+              {/* Weekly */}
+              {period === "Weekly" && (
+                <View style={{ gap: 10 }}>
+                  <Text style={[sh.sectionLabel, { color: colors.foreground }]}>Start day of week</Text>
+                  <View style={sh.dayRow}>
+                    {WEEK_DAYS.map((day, i) => (
+                      <TouchableOpacity
+                        key={day}
+                        onPress={() => { Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light); setWeekStartDay(i); }}
+                        style={[sh.dayBtn, weekStartDay === i ? { backgroundColor: colors.primary } : { backgroundColor: colors.muted, borderColor: colors.border, borderWidth: 1 }]}
+                      >
+                        <Text style={[sh.dayBtnText, { color: weekStartDay === i ? "#fff" : colors.foreground }]}>{day}</Text>
+                      </TouchableOpacity>
+                    ))}
+                  </View>
+                  <View style={sh.infoRow}>
+                    <Feather name="info" size={13} color={colors.mutedForeground} />
+                    <Text style={[sh.infoText, { color: colors.mutedForeground }]}>Week will start every {WEEK_DAYS[weekStartDay]}</Text>
+                  </View>
+                </View>
+              )}
+
+              {/* Bi-Weekly */}
+              {period === "Bi-Weekly" && (
+                <View style={{ gap: 10 }}>
+                  <Text style={[sh.sectionLabel, { color: colors.foreground }]}>Start date (Sundays only)</Text>
+                  <TouchableOpacity
+                    style={[sh.dateField, { backgroundColor: colors.muted, borderColor: colors.border }]}
+                    onPress={() => setShowBiWeeklyPicker(true)}
+                    activeOpacity={0.8}
+                  >
+                    <Feather name="calendar" size={15} color={colors.mutedForeground} />
+                    <Text style={[sh.dateFieldText, { color: colors.foreground }]}>{fmt(biWeeklyDate)}</Text>
+                  </TouchableOpacity>
+                  {showBiWeeklyPicker && (
+                    <DateTimePicker
+                      value={biWeeklyDate}
+                      mode="date"
+                      display={Platform.OS === "ios" ? "spinner" : "default"}
+                      onChange={(_, d) => { setShowBiWeeklyPicker(false); if (d) setBiWeeklyDate(snapToSunday(d)); }}
+                    />
+                  )}
+                  <View style={sh.infoRow}>
+                    <Feather name="info" size={13} color={colors.mutedForeground} />
+                    <Text style={[sh.infoText, { color: colors.mutedForeground }]}>Bi-weekly period starts Sunday, {fmt(biWeeklyDate)}</Text>
+                  </View>
+                </View>
+              )}
+
+              {/* Yearly */}
+              {period === "Yearly" && (
+                <View style={sh.infoRow}>
+                  <Feather name="info" size={13} color={colors.mutedForeground} />
+                  <Text style={[sh.infoText, { color: colors.mutedForeground }]}>Yearly period starts from January 1st</Text>
+                </View>
+              )}
+
+              {/* Custom */}
+              {period === "Custom" && (
+                <View style={{ gap: 14 }}>
+                  <View style={{ gap: 8 }}>
+                    <Text style={[sh.sectionLabel, { color: colors.foreground }]}>Start date</Text>
+                    <TouchableOpacity
+                      style={[sh.dateField, { backgroundColor: colors.muted, borderColor: colors.border }]}
+                      onPress={() => setShowCustomStart(true)}
+                      activeOpacity={0.8}
+                    >
+                      <Feather name="calendar" size={15} color={colors.mutedForeground} />
+                      <Text style={[sh.dateFieldText, { color: colors.foreground }]}>{fmt(customStart)}</Text>
+                    </TouchableOpacity>
+                    {showCustomStart && (
+                      <DateTimePicker
+                        value={customStart}
+                        mode="date"
+                        display={Platform.OS === "ios" ? "spinner" : "default"}
+                        onChange={(_, d) => { setShowCustomStart(false); if (d) setCustomStart(d); }}
+                      />
+                    )}
+                  </View>
+                  <View style={{ gap: 8 }}>
+                    <Text style={[sh.sectionLabel, { color: colors.foreground }]}>End date</Text>
+                    <TouchableOpacity
+                      style={[sh.dateField, { backgroundColor: colors.muted, borderColor: colors.border }]}
+                      onPress={() => setShowCustomEnd(true)}
+                      activeOpacity={0.8}
+                    >
+                      <Feather name="calendar" size={15} color={colors.mutedForeground} />
+                      <Text style={[sh.dateFieldText, { color: colors.foreground }]}>{fmt(customEnd)}</Text>
+                    </TouchableOpacity>
+                    {showCustomEnd && (
+                      <DateTimePicker
+                        value={customEnd}
+                        mode="date"
+                        minimumDate={customStart}
+                        display={Platform.OS === "ios" ? "spinner" : "default"}
+                        onChange={(_, d) => { setShowCustomEnd(false); if (d) setCustomEnd(d); }}
+                      />
+                    )}
+                  </View>
+                </View>
+              )}
+            </ScrollView>
+          ) : (
+            <View style={{ flex: 1, alignItems: "center", justifyContent: "center" }}>
+              <Feather name="sliders" size={36} color={colors.border} />
+              <Text style={[sh.infoText, { color: colors.mutedForeground, marginTop: 10 }]}>Filters coming soon</Text>
+            </View>
+          )}
+
+          {/* Apply */}
+          <TouchableOpacity style={[sh.applyBtn, { backgroundColor: colors.primary }]} onPress={handleApply} activeOpacity={0.85}>
+            <Text style={sh.applyText}>APPLY</Text>
+          </TouchableOpacity>
+        </View>
+      </View>
+    </Modal>
+  );
+}
 
 // ── FAB ───────────────────────────────────────────────────────────────────────
 
@@ -156,13 +391,13 @@ function InsightsFAB({
 
 export default function InsightsScreen() {
   const colors = useColors();
+  const { openDrawer } = useDrawer();
   const { transactions, accounts, bills, monthlyIncome, monthlyExpense } = useApp();
-  const [isGenerating, setIsGenerating] = useState(false);
-  const [aiInsights, setAiInsights] = useState<string[]>([]);
+  const { mode, setMode, modelPath } = useAIProvider();
+  const [showProviderSheet, setShowProviderSheet] = useState(false);
 
   const [sheetVisible, setSheetVisible] = useState(false);
   const [sheetTab, setSheetTab] = useState<EntryTab>("EXPENSE");
-
   const openSheet = (tab: EntryTab) => {
     setSheetTab(tab);
     setSheetVisible(true);
@@ -205,26 +440,27 @@ export default function InsightsScreen() {
     return result;
   }, [transactions, bills, savingsRate, categorySpend]);
 
-  const generateAiInsights = async () => {
-    setIsGenerating(true);
-    await new Promise((r) => setTimeout(r, 2500));
-    setAiInsights([
-      `Your spending in Food & Dining is trending 18% higher than last month. Consider meal prepping to cut costs.`,
-      `You have ${bills.filter((b) => !b.isPaid).length} unpaid bills totaling $${bills.filter((b) => !b.isPaid).reduce((s, b) => s + b.amount, 0).toFixed(2)}. Automating payments could help you avoid late fees.`,
-      `Based on your income of $${monthlyIncome.toFixed(0)}, you could save up to $${(monthlyIncome * 0.2).toFixed(0)}/month by following the 20% savings rule.`,
-      `Your accounts with positive balances total $${accounts.filter((a) => a.balance > 0).reduce((s, a) => s + a.balance, 0).toFixed(2)}. Consider moving excess to a high-yield savings account.`,
-    ]);
-    setIsGenerating(false);
-  };
-
   return (
     <SafeAreaView edges={["top"]} style={[styles.container, { backgroundColor: colors.background }]}>
-      <ScrollView
+      <KeyboardAwareScrollView
         showsVerticalScrollIndicator={false}
         contentContainerStyle={[styles.scroll, { paddingBottom: Platform.OS === "web" ? 34 + 84 : 120 }]}
+        bottomOffset={80}
       >
         <View style={[styles.header, { paddingTop: Platform.OS === "web" ? 64 : 12 }]}>
+          <TouchableOpacity hitSlop={8} onPress={() => { Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light); openDrawer(); }}>
+            <Feather name="menu" size={22} color={colors.foreground} />
+          </TouchableOpacity>
           <Text style={[styles.title, { color: colors.foreground }]}>AI Insights</Text>
+          <TouchableOpacity
+            onPress={() => setShowProviderSheet(true)}
+            style={[styles.providerPill, { backgroundColor: mode === "local" ? "#f59e0b20" : colors.muted }]}
+          >
+            <Feather name={mode === "local" ? "cpu" : "globe"} size={13} color={mode === "local" ? "#f59e0b" : colors.mutedForeground} />
+            <Text style={{ color: mode === "local" ? "#f59e0b" : colors.mutedForeground, fontSize: 11, fontWeight: "600" }}>
+              {mode === "local" ? "On-Device" : "API"}
+            </Text>
+          </TouchableOpacity>
         </View>
 
           <>
@@ -276,18 +512,6 @@ export default function InsightsScreen() {
                 </View>
               </View>
             </View>
-            {aiInsights.length > 0 && (
-              <View style={styles.sectionHeader}>
-                <Feather name="zap" size={14} color={colors.primary} />
-                <Text style={[styles.sectionTitle, { color: colors.foreground }]}>AI Analysis</Text>
-              </View>
-            )}
-            {aiInsights.map((insight, i) => (
-              <View key={i} style={[styles.aiCard, { backgroundColor: colors.accent, borderColor: colors.primary + "30" }]}>
-                <Feather name="cpu" size={14} color={colors.primary} />
-                <Text style={[styles.aiText, { color: colors.foreground }]}>{insight}</Text>
-              </View>
-            ))}
             <Text style={[styles.sectionTitle, { color: colors.foreground, marginTop: 4 }]}>Smart Insights</Text>
             {insights.map((insight) => (
               <View key={insight.id} style={[styles.insightCard, { backgroundColor: colors.card }]}>
@@ -305,8 +529,11 @@ export default function InsightsScreen() {
                 </View>
               </View>
             ))}
+            <ModelDownloadGate>
+              <AIChatPanel />
+            </ModelDownloadGate>
           </>
-      </ScrollView>
+      </KeyboardAwareScrollView>
 
       {/* FAB */}
       <InsightsFAB
@@ -320,6 +547,46 @@ export default function InsightsScreen() {
         initialTab={sheetTab}
         onClose={() => setSheetVisible(false)}
       />
+
+      {/* Provider settings modal */}
+      <Modal visible={showProviderSheet} transparent animationType="slide">
+        <TouchableOpacity style={styles.modalOverlay} activeOpacity={1} onPress={() => setShowProviderSheet(false)}>
+          <View style={[styles.modalSheet, { backgroundColor: colors.card }]}>
+            <Text style={[styles.modalTitle, { color: colors.foreground }]}>AI Provider</Text>
+
+            <TouchableOpacity
+              style={[styles.providerOption, mode === "local" && { borderColor: "#f59e0b", backgroundColor: "#f59e0b10" }]}
+              onPress={() => { setMode("local"); setShowProviderSheet(false); }}
+            >
+              <Feather name="cpu" size={18} color={mode === "local" ? "#f59e0b" : colors.mutedForeground} />
+              <View style={{ flex: 1 }}>
+                <Text style={[styles.providerOptionTitle, { color: colors.foreground }]}>On-Device (Private)</Text>
+                <Text style={{ color: colors.mutedForeground, fontSize: 12 }}>
+                  Runs AI locally. Your data never leaves your phone.
+                </Text>
+              </View>
+            </TouchableOpacity>
+
+            <TouchableOpacity
+              style={[styles.providerOption, mode === "api" && { borderColor: colors.primary, backgroundColor: colors.primary + "10" }]}
+              onPress={() => { setMode("api"); setShowProviderSheet(false); }}
+            >
+              <Feather name="globe" size={18} color={mode === "api" ? colors.primary : colors.mutedForeground} />
+              <View style={{ flex: 1 }}>
+                <Text style={[styles.providerOptionTitle, { color: colors.foreground }]}>API (via Server)</Text>
+                <Text style={{ color: colors.mutedForeground, fontSize: 12 }}>
+                  Uses your api-server. Configure model in .env
+                </Text>
+              </View>
+            </TouchableOpacity>
+
+            <TouchableOpacity style={[styles.modalClose, { backgroundColor: colors.muted }]} onPress={() => setShowProviderSheet(false)}>
+              <Text style={{ color: colors.foreground, fontWeight: "600" }}>Done</Text>
+            </TouchableOpacity>
+          </View>
+        </TouchableOpacity>
+      </Modal>
+
     </SafeAreaView>
   );
 }
@@ -329,6 +596,13 @@ const styles = StyleSheet.create({
   scroll: { paddingHorizontal: 16, gap: 14 },
   header: { flexDirection: "row", justifyContent: "space-between", alignItems: "center" },
   title: { fontSize: 24, fontFamily: "Inter_700Bold" },
+  providerPill: { flexDirection: "row", alignItems: "center", gap: 4, paddingHorizontal: 10, paddingVertical: 5, borderRadius: 20 },
+  modalOverlay: { flex: 1, justifyContent: "flex-end", backgroundColor: "rgba(0,0,0,0.4)" },
+  modalSheet: { borderTopLeftRadius: 20, borderTopRightRadius: 20, padding: 24, gap: 14 },
+  modalTitle: { fontSize: 18, fontWeight: "700", textAlign: "center", marginBottom: 4 },
+  providerOption: { flexDirection: "row", alignItems: "center", gap: 12, padding: 14, borderRadius: 12, borderWidth: 1, borderColor: "transparent" },
+  providerOptionTitle: { fontSize: 15, fontWeight: "600", marginBottom: 2 },
+  modalClose: { alignItems: "center", paddingVertical: 12, borderRadius: 12, marginTop: 4 },
   genBtn: { flexDirection: "row", alignItems: "center", gap: 6, paddingHorizontal: 14, paddingVertical: 9, borderRadius: 12 },
   genBtnText: { fontSize: 14, fontFamily: "Inter_600SemiBold" },
   card: { borderRadius: 16, padding: 18, gap: 14 },
@@ -406,4 +680,27 @@ const styles = StyleSheet.create({
     shadowRadius: 8,
     elevation: 6,
   },
+});
+
+const WIN_H = Dimensions.get("window").height;
+const sh = StyleSheet.create({
+  backdrop:      { flex: 1, justifyContent: "flex-end", backgroundColor: "rgba(0,0,0,0.5)" },
+  sheet:         { borderTopLeftRadius: 24, borderTopRightRadius: 24, paddingHorizontal: 20, paddingTop: 8, paddingBottom: 16, minHeight: WIN_H * 0.48, maxHeight: WIN_H * 0.82, gap: 14 },
+  tabRow:        { flexDirection: "row", alignItems: "center", borderBottomWidth: 1, paddingBottom: 0 },
+  tabBtn:        { paddingVertical: 14, paddingHorizontal: 2, marginRight: 28, position: "relative" },
+  tabLabel:      { fontSize: 13, fontFamily: "Inter_700Bold", letterSpacing: 0.5 },
+  tabUnderline:  { position: "absolute", bottom: 0, left: 0, right: 0, height: 2, borderRadius: 1 },
+  closeBtn:      { flex: 1, alignItems: "flex-end", paddingVertical: 8 },
+  pill:          { paddingHorizontal: 16, paddingVertical: 9, borderRadius: 20 },
+  pillText:      { fontSize: 14, fontFamily: "Inter_500Medium" },
+  sectionLabel:  { fontSize: 15, fontFamily: "Inter_600SemiBold" },
+  dateField:     { flexDirection: "row", alignItems: "center", gap: 10, borderRadius: 12, borderWidth: 1, paddingHorizontal: 14, paddingVertical: 13 },
+  dateFieldText: { fontSize: 15, fontFamily: "Inter_500Medium" },
+  infoRow:       { flexDirection: "row", alignItems: "center", gap: 6 },
+  infoText:      { fontSize: 13, fontFamily: "Inter_400Regular", flex: 1 },
+  dayRow:        { flexDirection: "row", flexWrap: "wrap", gap: 8 },
+  dayBtn:        { paddingHorizontal: 13, paddingVertical: 9, borderRadius: 10 },
+  dayBtnText:    { fontSize: 13, fontFamily: "Inter_500Medium" },
+  applyBtn:      { borderRadius: 14, paddingVertical: 16, alignItems: "center", marginTop: 4 },
+  applyText:     { fontSize: 15, fontFamily: "Inter_700Bold", color: "#fff", letterSpacing: 1 },
 });

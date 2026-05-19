@@ -11,6 +11,9 @@ export const accountsTable = pgTable("accounts", {
   type: text("type").notNull(), // checking | savings | credit | investment
   color: text("color").notNull(),
   lastFour: text("last_four"),
+  plaidAccountId: text("plaid_account_id"),
+  plaidItemId: text("plaid_item_id"),
+  accountHolder: text("account_holder"),
   createdAt: timestamp("created_at").defaultNow().notNull(),
   updatedAt: timestamp("updated_at").defaultNow().notNull(),
 });
@@ -25,6 +28,9 @@ export const insertAccountSchema = z.object({
   type: z.enum(["checking", "savings", "credit", "investment"]),
   color: z.string().min(1),
   lastFour: z.string().nullable().optional(),
+  plaidAccountId: z.string().nullable().optional(),
+  plaidItemId: z.string().nullable().optional(),
+  accountHolder: z.string().nullable().optional(),
 });
 
 export const updateAccountSchema = insertAccountSchema

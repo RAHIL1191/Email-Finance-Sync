@@ -84,8 +84,9 @@ Respond ONLY with valid JSON in this exact format:
 }`;
 
   try {
+    const model = process.env.AI_MODEL ?? "meta-llama/llama-3.3-70b-instruct";
     const completion = await openrouter.chat.completions.create({
-      model: "meta-llama/llama-3.3-70b-instruct",
+      model,
       max_tokens: 8192,
       messages: [{ role: "user", content: prompt }],
       temperature: 0.4,

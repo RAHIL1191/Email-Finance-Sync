@@ -33,7 +33,7 @@ import ConfirmModal from "@/components/ConfirmModal";
 import TransactionDetailModal from "@/components/TransactionDetailModal";
 import { CATEGORY_COLORS, CATEGORY_ICONS } from "@/components/TransactionItem";
 import { ACCOUNT_CATEGORIES, SubType } from "@/components/AddAccountModal";
-import { PLAID_BANKS, Transaction, computeBalance, useApp } from "@/context/AppContext";
+import { PLAID_BANKS, Transaction, computeBalance, isIncludedInNetworth, txBelongsToAccount, useApp } from "@/context/AppContext";
 import { useColors } from "@/hooks/useColors";
 
 const { width: SCREEN_W } = Dimensions.get("window");
@@ -512,6 +512,7 @@ function EditAccountModal({
     account?.includeInNetworth !== false
   );
   const [isJoint, setIsJoint] = useState(account?.isJoint ?? false);
+  const [accountHolder, setAccountHolder] = useState(account?.accountHolder ?? "");
   const [accountType, setAccountType] = useState<"checking" | "savings" | "credit" | "investment">(
     account?.type ?? "checking"
   );
@@ -528,6 +529,7 @@ function EditAccountModal({
       setLastFour(account.lastFour ?? "");
       setIncludeInNetworth(account.includeInNetworth !== false);
       setIsJoint(account.isJoint ?? false);
+      setAccountHolder(account.accountHolder ?? "");
       setAccountType(account.type ?? "checking");
     }
   }, [visible]);
@@ -547,6 +549,7 @@ function EditAccountModal({
       lastFour: lastFour.trim() || undefined,
       includeInNetworth,
       isJoint,
+      accountHolder: accountHolder.trim() || undefined,
       type: accountType,
     });
     Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
@@ -724,6 +727,23 @@ function EditAccountModal({
                 onValueChange={setIsJoint}
                 trackColor={{ false: colors.muted, true: colors.primary }}
                 thumbColor="#fff"
+              />
+            </View>
+
+            <View style={[styles.editDivider, { backgroundColor: colors.border }]} />
+
+            {/* Account holder */}
+            <View style={styles.editRow}>
+              <View style={[styles.formIcon, { backgroundColor: "#e8f0fe" }]}>
+                <Feather name="user" size={18} color="#4a6fa5" />
+              </View>
+              <TextInput
+                style={[styles.editInput, { color: colors.foreground }]}
+                placeholder="Account holder name (optional)"
+                placeholderTextColor={colors.mutedForeground}
+                value={accountHolder}
+                onChangeText={setAccountHolder}
+                autoCapitalize="words"
               />
             </View>
 
@@ -935,9 +955,9 @@ export default function AccountDetailScreen() {
   const accountTxns = useMemo(
     () =>
       transactions
-        .filter((t) => t.accountId === id)
+        .filter((t) => account ? txBelongsToAccount(t, account) : t.accountId === id)
         .sort((a, b) => new Date(b.date).getTime() - new Date(a.date).getTime()),
-    [transactions, id]
+    [transactions, id, account]
   );
 
   const liveBalance = account ? computeBalance(account, accountTxns) : 0;
@@ -960,7 +980,7 @@ export default function AccountDetailScreen() {
   if (!account) {
     return (
       <SafeAreaView
-        edges={["top"]}
+        edges={["top", "bottom"]}
         style={[styles.container, { backgroundColor: colors.background }]}
       >
         <View style={styles.notFound}>
@@ -994,7 +1014,7 @@ export default function AccountDetailScreen() {
 
   return (
     <SafeAreaView
-      edges={["top"]}
+      edges={["top", "bottom"]}
       style={[styles.container, { backgroundColor: colors.background }]}
     >
       {/* ── Navigation Header ── */}
@@ -1036,7 +1056,7 @@ export default function AccountDetailScreen() {
 
       <ScrollView
         showsVerticalScrollIndicator={false}
-        contentContainerStyle={{ paddingBottom: Platform.OS === "web" ? 34 + 84 : 100 }}
+        contentContainerStyle={{ paddingBottom: Platform.OS === "web" ? 34 + 84 : insets.bottom + 24 }}
       >
         {/* ── Account Identity ── */}
         <View style={styles.accountIdentity}>
@@ -1073,10 +1093,14 @@ export default function AccountDetailScreen() {
 
         {/* ── Balance ── */}
         <View style={styles.balanceSection}>
+          {account.type === "credit" && (
+            <Text style={[styles.lastUpdated, { color: colors.expense, marginBottom: 2 }]}>
+              Balance owed
+            </Text>
+          )}
           <View style={styles.balanceRow}>
-            <Text style={[styles.balanceAmount, { color: isNeg ? colors.expense : colors.foreground }]}>
-              {isNeg ? "-" : ""}$
-              {Math.abs(liveBalance).toLocaleString("en-US", {
+            <Text style={[styles.balanceAmount, { color: account.type === "credit" ? colors.expense : isNeg ? colors.expense : colors.foreground }]}>
+              ${Math.abs(liveBalance).toLocaleString("en-US", {
                 minimumFractionDigits: 2,
                 maximumFractionDigits: 2,
               })}
@@ -1229,7 +1253,7 @@ export default function AccountDetailScreen() {
             Include in Networth
           </Text>
           <Switch
-            value={account.includeInNetworth !== false}
+            value={isIncludedInNetworth(account)}
             onValueChange={(val) => {
               Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
               updateAccount(account.id, { includeInNetworth: val });

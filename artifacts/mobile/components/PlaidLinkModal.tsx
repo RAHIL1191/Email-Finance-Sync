@@ -1,6 +1,6 @@
 import { Feather } from "@expo/vector-icons";
 import * as Haptics from "expo-haptics";
-import React, { useState } from "react";
+import React, { useRef, useState } from "react";
 import {
   ActivityIndicator,
   Modal,
@@ -13,7 +13,6 @@ import {
   View,
 } from "react-native";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
-
 import {
   Account,
   PLAID_BANKS,
@@ -22,6 +21,15 @@ import {
   useApp,
 } from "@/context/AppContext";
 import { useColors } from "@/hooks/useColors";
+
+// react-native-plaid-link-sdk is native-only — conditional require keeps web bundle clean
+const PlaidSDK: {
+  create: (cfg: { token: string }) => void;
+  open: (cfg: {
+    onSuccess: (s: { publicToken: string | null }) => void;
+    onExit: (e: { error?: { displayMessage?: string; errorMessage?: string } | null }) => void;
+  }) => void;
+} | null = Platform.OS !== "web" ? require("react-native-plaid-link-sdk") : null;
 
 type Step = "search" | "opening" | "accounts" | "importing" | "success" | "error";
 
@@ -97,10 +105,19 @@ function openPlaidIframe(
   });
 }
 
-export default function PlaidLinkModal({ onClose }: { onClose: () => void }) {
+export default function PlaidLinkModal({
+  onClose,
+  relinkItemId,
+  relinkBankName,
+}: {
+  onClose: () => void;
+  relinkItemId?: string;
+  relinkBankName?: string;
+}) {
   const colors = useColors();
   const insets = useSafeAreaInsets();
-  const { connectPlaid, deviceId, householdId } = useApp();
+  const { connectPlaid, syncPlaidTransactions, deviceId, householdId } = useApp();
+  const pendingBankRef = useRef<(typeof PLAID_BANKS)[0] | null>(null);
 
   const [step, setStep] = useState<Step>("search");
   const [query, setQuery] = useState("");
@@ -115,60 +132,69 @@ export default function PlaidLinkModal({ onClose }: { onClose: () => void }) {
     ? PLAID_BANKS.filter((b) => b.name.toLowerCase().includes(query.toLowerCase()))
     : PLAID_BANKS;
 
-  // ── Bank selection → create link token → open Plaid Link popup ───────────
-  const handleBankSelect = async (bank: (typeof PLAID_BANKS)[0]) => {
-    if (Platform.OS !== "web") {
-      setErrorMsg("Bank linking via Plaid is available in the web version of the app.");
-      setSelectedBank(bank);
-      setStep("error");
-      return;
-    }
-
+  // ── Get link token then open Plaid (web=iframe, native=SDK) ────────────
+  const openPlaidLink = async (bank: (typeof PLAID_BANKS)[0], itemId?: string) => {
     Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
     setSelectedBank(bank);
     setErrorMsg("");
     setStep("opening");
     setConnectingMsg("Opening secure bank link…");
+    pendingBankRef.current = bank;
 
     const apiBase = getApiBase();
-
     try {
-      // 1. Get link token from server
       const tokenRes = await fetch(`${apiBase}/api/plaid/create-link-token`, {
         method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-          "X-Household-ID": householdId,
-          "X-Device-ID": deviceId,
-        },
+        headers: { "Content-Type": "application/json", "X-Household-ID": householdId, "X-Device-ID": deviceId },
+        body: JSON.stringify(itemId ? { item_id: itemId } : {}),
       });
       const tokenData = await tokenRes.json();
-
-      if (!tokenRes.ok) {
-        setErrorMsg(tokenData.error ?? "Failed to start bank link.");
-        setStep("error");
-        return;
-      }
+      if (!tokenRes.ok) { setErrorMsg(tokenData.error ?? "Failed to start bank link."); setStep("error"); return; }
 
       const linkToken = tokenData.link_token as string;
 
-      // 2. Open Plaid Link as a full-screen iframe overlay
-      const { publicToken } = await openPlaidIframe(linkToken, apiBase);
-      await handlePublicToken(publicToken, bank);
+      if (Platform.OS === "web") {
+        // Web: existing iframe popup
+        const { publicToken } = await openPlaidIframe(linkToken, apiBase);
+        await handlePublicToken(publicToken, bank, itemId);
+      } else {
+        // Native: use react-native-plaid-link-sdk
+        PlaidSDK!.create({ token: linkToken });
+        PlaidSDK!.open({
+          onSuccess: async (success) => {
+            await handlePublicToken(success.publicToken ?? null, bank, itemId);
+          },
+          onExit: (exit) => {
+            if (exit?.error) {
+              setErrorMsg(
+                exit.error.displayMessage ?? exit.error.errorMessage ?? "Link exited with error"
+              );
+              setStep("error");
+            } else {
+              setStep("search");
+            }
+          },
+        });
+      }
     } catch (err: unknown) {
       const msg = err instanceof Error ? err.message : "Unknown error";
-      if (msg === "exit") {
-        // User closed the popup without completing — go back to search
-        setStep("search");
-        return;
-      }
+      if (msg === "exit") { setStep("search"); return; }
       setErrorMsg(msg);
       setStep("error");
     }
   };
 
+  // ── Bank selection (new connection) ────────────────────────────────
+  const handleBankSelect = async (bank: (typeof PLAID_BANKS)[0]) => {
+    await openPlaidLink(bank);
+  };
+
   // ── Exchange public token → real accounts + transactions ──────────────────
-  const handlePublicToken = async (publicToken: string, bank: (typeof PLAID_BANKS)[0]) => {
+  const handlePublicToken = async (
+    publicToken: string | null,
+    bank: (typeof PLAID_BANKS)[0],
+    itemId?: string
+  ) => {
     setStep("opening");
     let msgIdx = 0;
     const msgs = ["Importing your accounts…", "Loading recent transactions…", "Almost done…"];
@@ -179,6 +205,17 @@ export default function PlaidLinkModal({ onClose }: { onClose: () => void }) {
     }, 1400);
 
     try {
+      // Update mode: no public token — just sync existing item
+      if (!publicToken && itemId) {
+        clearInterval(msgTimer);
+        setConnectingMsg("Syncing transactions…");
+        const result = await syncPlaidTransactions(itemId);
+        setImportResult({ accounts: 0, transactions: result.imported });
+        Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
+        setStep("success");
+        return;
+      }
+
       const res = await fetch(`${getApiBase()}/api/plaid/exchange-token`, {
         method: "POST",
         headers: {
@@ -281,6 +318,17 @@ export default function PlaidLinkModal({ onClose }: { onClose: () => void }) {
   };
 
   const topPad = Platform.OS === "web" ? 20 : insets.top + 16;
+
+  // ── Auto-start relink when relinkItemId + relinkBankName provided ────────
+  React.useEffect(() => {
+    if (!relinkItemId || !relinkBankName) return;
+    const bank =
+      PLAID_BANKS.find((b) => b.name.toLowerCase() === relinkBankName.toLowerCase()) ??
+      PLAID_BANKS.find((b) => relinkBankName.toLowerCase().includes(b.name.split(" ")[0].toLowerCase())) ??
+      { id: "custom", name: relinkBankName, icon: "🏦", color: "#6366f1" };
+    openPlaidLink(bank as (typeof PLAID_BANKS)[0], relinkItemId);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
 
   return (
     <Modal visible animationType="slide" presentationStyle="pageSheet" onRequestClose={onClose}>
@@ -535,6 +583,7 @@ export default function PlaidLinkModal({ onClose }: { onClose: () => void }) {
           </View>
         )}
       </View>
+
     </Modal>
   );
 }

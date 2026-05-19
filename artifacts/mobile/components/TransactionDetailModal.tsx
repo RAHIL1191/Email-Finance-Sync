@@ -19,12 +19,98 @@ import { Transaction, useApp } from "@/context/AppContext";
 import { useColors } from "@/hooks/useColors";
 import { CATEGORY_COLORS, CATEGORY_ICONS } from "./TransactionItem";
 import DateTimePicker from "@react-native-community/datetimepicker";
+import CategoryPickerModal from "./CategoryPickerModal";
+import MerchantPickerModal from "./MerchantPickerModal";
+import { ProjectPickerModal } from "./AddEntrySheet";
 
-const CATEGORIES = [
-  "Income", "Food", "Groceries", "Shopping", "Transport",
-  "Entertainment", "Housing", "Utilities", "Health", "Insurance",
-  "Education", "Transfer", "Bills", "Other",
-];
+function parseNoteAndTag(raw: string | undefined): { cleanNote: string; tag: string } {
+  if (!raw) return { cleanNote: "", tag: "" };
+  const sep = " · Tag: ";
+  const idx = raw.indexOf(sep);
+  if (idx !== -1) return { cleanNote: raw.slice(0, idx), tag: raw.slice(idx + sep.length) };
+  if (raw.startsWith("Tag: ")) return { cleanNote: "", tag: raw.slice(5) };
+  return { cleanNote: raw, tag: "" };
+}
+
+// ─── Calculator Modal ────────────────────────────────────────────────────────
+function CalculatorModal({
+  visible,
+  initialValue,
+  onClose,
+  onApply,
+}: {
+  visible: boolean;
+  initialValue: string;
+  onClose: () => void;
+  onApply: (value: string) => void;
+}) {
+  const colors = useColors();
+  const insets = useSafeAreaInsets();
+  const [expr, setExpr] = React.useState(initialValue || "");
+
+  React.useEffect(() => { if (visible) setExpr(initialValue || ""); }, [visible, initialValue]);
+
+  const append = (ch: string) => setExpr((p) => p + ch);
+  const backspace = () => setExpr((p) => p.slice(0, -1));
+  const clear = () => setExpr("");
+
+  const calculate = () => {
+    try {
+      const sanitized = expr.replace(/[^0-9+\-*/.]/g, "");
+      if (!sanitized) return;
+      // eslint-disable-next-line no-new-func
+      const result = new Function(`return (${sanitized})`)() as number;
+      if (typeof result === "number" && !isNaN(result)) setExpr(String(Math.round(result * 100) / 100));
+    } catch { /* ignore */ }
+  };
+
+  const apply = () => { if (expr) onApply(expr); onClose(); };
+
+  const keys = [["7","8","9","÷"],["4","5","6","×"],["1","2","3","-"],["0",".","=","+"]];
+
+  return (
+    <Modal visible={visible} transparent animationType="slide" onRequestClose={onClose}>
+      <TouchableOpacity style={s.overlay} activeOpacity={1} onPress={onClose} />
+      <View style={[s.bottomSheetCard, { backgroundColor: colors.card, paddingBottom: insets.bottom + 16, position: "absolute", bottom: 0, left: 0, right: 0 }]}>
+        <View style={{ flexDirection: "row", justifyContent: "space-between", alignItems: "center", marginBottom: 12 }}>
+          <Text style={{ fontSize: 16, fontFamily: "Inter_600SemiBold", color: colors.foreground }}>Calculator</Text>
+          <TouchableOpacity onPress={onClose}><Feather name="x" size={20} color={colors.foreground} /></TouchableOpacity>
+        </View>
+        <View style={{ backgroundColor: colors.background, borderRadius: 12, padding: 14, marginBottom: 12, alignItems: "flex-end" }}>
+          <Text style={{ fontSize: 28, fontFamily: "Inter_700Bold", color: colors.foreground }}>{expr || "0"}</Text>
+        </View>
+        <View style={{ flexDirection: "row", gap: 8, marginBottom: 8 }}>
+          <TouchableOpacity style={{ flex: 1, backgroundColor: colors.expense + "18", borderRadius: 10, padding: 10, alignItems: "center" }} onPress={clear}>
+            <Text style={{ fontSize: 14, fontFamily: "Inter_600SemiBold", color: colors.expense }}>C</Text>
+          </TouchableOpacity>
+          <TouchableOpacity style={{ flex: 1, backgroundColor: colors.muted, borderRadius: 10, padding: 10, alignItems: "center" }} onPress={backspace}>
+            <Feather name="delete" size={16} color={colors.foreground} />
+          </TouchableOpacity>
+          <TouchableOpacity style={{ flex: 2, backgroundColor: colors.primary, borderRadius: 10, padding: 10, alignItems: "center" }} onPress={apply}>
+            <Text style={{ fontSize: 14, fontFamily: "Inter_600SemiBold", color: "#fff" }}>Apply</Text>
+          </TouchableOpacity>
+        </View>
+        {keys.map((row, ri) => (
+          <View key={ri} style={{ flexDirection: "row", gap: 8, marginBottom: 8 }}>
+            {row.map((k) => {
+              const isOp = ["÷","×","-","+"].includes(k);
+              const ch = k === "÷" ? "/" : k === "×" ? "*" : k;
+              return (
+                <TouchableOpacity
+                  key={k}
+                  style={{ flex: 1, backgroundColor: isOp ? colors.primary + "18" : colors.muted, borderRadius: 10, paddingVertical: 16, alignItems: "center" }}
+                  onPress={() => k === "=" ? calculate() : append(ch)}
+                >
+                  <Text style={{ fontSize: 20, fontFamily: "Inter_600SemiBold", color: isOp ? colors.primary : colors.foreground }}>{k}</Text>
+                </TouchableOpacity>
+              );
+            })}
+          </View>
+        ))}
+      </View>
+    </Modal>
+  );
+}
 
 type EditType = "EXPENSE" | "INCOME" | "TRANSFER" | "BILLS";
 const EDIT_TYPES: EditType[] = ["EXPENSE", "INCOME", "TRANSFER", "BILLS"];
@@ -52,7 +138,7 @@ interface Props {
 export default function TransactionDetailModal({ visible, onClose, transaction }: Props) {
   const colors = useColors();
   const insets = useSafeAreaInsets();
-  const { accounts, updateTransaction, deleteTransaction } = useApp();
+  const { transactions, accounts, addTransaction, updateTransaction, deleteTransaction } = useApp();
 
   const [editing, setEditing] = useState(false);
   const [editType, setEditType] = useState<EditType>("EXPENSE");
@@ -63,6 +149,18 @@ export default function TransactionDetailModal({ visible, onClose, transaction }
   const [note, setNote] = useState("");
   const [editDate, setEditDate] = useState<Date | null>(null);
   const [showDatePicker, setShowDatePicker] = useState(false);
+  const [showCatPicker, setShowCatPicker] = useState(false);
+  const [showMerchantPicker, setShowMerchantPicker] = useState(false);
+  const [showAccountPicker, setShowAccountPicker] = useState(false);
+  const [showCalculator, setShowCalculator] = useState(false);
+  const [showSplitCatPicker, setShowSplitCatPicker] = useState(false);
+  const [showProjectPicker, setShowProjectPicker] = useState(false);
+  const [splitCategories, setSplitCategories] = useState<Array<{ category: string; amount: string }>>([]);
+  const [isSplitMode, setIsSplitMode] = useState(false);
+  const [merchant, setMerchant] = useState("");
+  const [tag, setTag] = useState("");
+  const [projectId, setProjectId] = useState<string | undefined>(undefined);
+  const [projectName, setProjectName] = useState<string | undefined>(undefined);
 
   useEffect(() => {
     if (transaction) {
@@ -70,12 +168,20 @@ export default function TransactionDetailModal({ visible, onClose, transaction }
       setAmount(String(transaction.amount));
       setEditType(typeToEditType(transaction.type, transaction.category));
       setCategory(transaction.category);
-      setAccountId(transaction.accountId);
-      setNote(transaction.note || "");
+      const resolvedId = accounts.find((a) => a.id === transaction.accountId)?.id ?? accounts[0]?.id ?? "";
+      setAccountId(resolvedId);
+      const { cleanNote, tag: extractedTag } = parseNoteAndTag(transaction.note);
+      setNote(cleanNote);
+      setTag(extractedTag);
+      setProjectId(transaction.projectId);
+      setProjectName(transaction.projectName);
       setEditDate(new Date(transaction.date));
+      setMerchant(transaction.merchant || transaction.title || "");
+      setSplitCategories([]);
+      setIsSplitMode(false);
       setEditing(false);
     }
-  }, [transaction]);
+  }, [transaction, accounts]);
 
   if (!transaction) return null;
 
@@ -84,27 +190,85 @@ export default function TransactionDetailModal({ visible, onClose, transaction }
   const catColor = CATEGORY_COLORS[transaction.category] || colors.primary;
 
   const dateObj = new Date(transaction.date);
-  const isToday = new Date().toDateString() === dateObj.toDateString();
+  const _now = new Date();
+  const isToday = _now.toDateString() === dateObj.toDateString();
+  const isCurrentYear = _now.getFullYear() === dateObj.getFullYear();
   const timeStr = dateObj.toLocaleTimeString("en-US", { hour: "numeric", minute: "2-digit", hour12: true });
-  const dateLine = isToday ? `Today, ${timeStr}` : `${dateObj.toLocaleDateString("en-US", { weekday: "short", month: "short", day: "numeric" })}, ${timeStr}`;
+  const dateLine = isToday ? `Today, ${timeStr}` : `${dateObj.toLocaleDateString("en-US", { weekday: "short", month: "short", day: "numeric", ...(isCurrentYear ? {} : { year: "numeric" }) })}, ${timeStr}`;
 
   const typeLabel = transaction.type === "income" ? "Income" : "Expense";
+
+  const isSplit = isSplitMode;
+
+  const addSplitCategory = (cat: string) => setSplitCategories((prev) => [...prev, { category: cat, amount: "" }]);
+  const removeSplitCategory = (i: number) => setSplitCategories((prev) => prev.filter((_, idx) => idx !== i));
+  const updateSplitAmount = (i: number, val: string) =>
+    setSplitCategories((prev) => prev.map((s, idx) => idx === i ? { ...s, amount: val } : s));
+
+  const splitTotal = splitCategories.reduce((sum, s) => sum + (parseFloat(s.amount) || 0), 0);
 
   const handleSave = () => {
     const parsed = parseFloat(amount);
     if (!title.trim() || isNaN(parsed) || parsed <= 0) return;
-    Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
     const fields = editTypeToFields(editType);
-    updateTransaction(transaction.id, {
-      title: title.trim(),
-      amount: parsed,
-      type: fields.type,
-      category: editType === "TRANSFER" ? "Transfer" : editType === "BILLS" ? "Bills" : category,
-      accountId,
-      note: note.trim() || undefined,
-      date: editDate?.toISOString() ?? transaction.date,
-    });
-    setEditing(false);
+    const resolvedCategory = editType === "TRANSFER" ? "Transfer" : editType === "BILLS" ? "Bills" : category;
+    const dateStr = editDate?.toISOString() ?? transaction.date;
+
+    if (isSplit) {
+      if (splitCategories.length === 0) {
+        Alert.alert("No Split Categories", "Add at least one category to split into.");
+        return;
+      }
+      const splitTotal = splitCategories.reduce((sum, s) => sum + (parseFloat(s.amount) || 0), 0);
+      if (Math.abs(splitTotal - parsed) > 0.01) {
+        Alert.alert(
+          "Amount Mismatch",
+          `Split total ($${splitTotal.toFixed(2)}) must equal the transaction amount ($${parsed.toFixed(2)}).`
+        );
+        return;
+      }
+      Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
+      const groupId = `split_${Date.now()}_${Math.random().toString(36).slice(2)}`;
+      const builtNote = [note.trim(), tag.trim() ? `Tag: ${tag.trim()}` : ""].filter(Boolean).join(" · ");
+      deleteTransaction(transaction.id);
+      splitCategories.forEach((split) => {
+        const splitAmt = parseFloat(split.amount);
+        if (isNaN(splitAmt) || splitAmt <= 0) return;
+        addTransaction({
+          title: merchant.trim() || title.trim(),
+          merchant: merchant.trim() || undefined,
+          amount: splitAmt,
+          type: fields.type,
+          category: split.category || resolvedCategory,
+          accountId,
+          note: builtNote || undefined,
+          date: dateStr,
+          source: transaction.source,
+          splitGroupId: groupId,
+          projectId: projectId || undefined,
+          projectName: projectName || undefined,
+          isRefund: tag.trim().toLowerCase() === "refund" ? true : undefined,
+        });
+      });
+      onClose();
+    } else {
+      const builtNote = [note.trim(), tag.trim() ? `Tag: ${tag.trim()}` : ""].filter(Boolean).join(" · ");
+      Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
+      updateTransaction(transaction.id, {
+        title: merchant.trim() || title.trim(),
+        merchant: merchant.trim() || undefined,
+        amount: parsed,
+        type: fields.type,
+        category: resolvedCategory,
+        accountId,
+        note: builtNote || undefined,
+        date: dateStr,
+        projectId: projectId || undefined,
+        projectName: projectName || undefined,
+        isRefund: tag.trim().toLowerCase() === "refund" ? true : undefined,
+      });
+      setEditing(false);
+    }
   };
 
   const handleDelete = () => {
@@ -205,42 +369,133 @@ export default function TransactionDetailModal({ visible, onClose, transaction }
               </View>
 
               {/* Amount */}
-              <View style={s.amountRow}>
+              <View style={[s.amountRow, { flexDirection: "row", alignItems: "center" }]}>
                 <TextInput
-                  style={[s.amountInput, { color: colors.foreground }]}
+                  style={[s.amountInput, { color: colors.foreground, flex: 1 }]}
                   keyboardType="decimal-pad"
                   value={amount}
                   onChangeText={setAmount}
                   placeholder="0"
                   placeholderTextColor={colors.mutedForeground}
                 />
+                <TouchableOpacity
+                  onPress={() => setShowCalculator(true)}
+                  style={[s.calcBtn, { borderColor: colors.border, backgroundColor: colors.card }]}
+                >
+                  <Feather name="grid" size={16} color={colors.mutedForeground} />
+                </TouchableOpacity>
+                {editType === "EXPENSE" && (
+                  <TouchableOpacity
+                    onPress={() => setIsSplitMode(true)}
+                    style={[s.calcBtn, { borderColor: isSplit ? colors.primary : colors.border, backgroundColor: isSplit ? colors.primary + "18" : colors.card, marginLeft: 6 }]}
+                  >
+                    <Feather name="scissors" size={16} color={isSplit ? colors.primary : colors.mutedForeground} />
+                  </TouchableOpacity>
+                )}
               </View>
 
-              {/* Category row */}
+              {/* Category row / Split */}
               {editType !== "TRANSFER" && editType !== "BILLS" && (
-                <View style={[s.editRow, { borderBottomColor: colors.border }]}>
-                  <View style={[s.editRowIcon, { backgroundColor: editCatColor + "20" }]}>
-                    <Feather name={editCatIcon} size={18} color={editCatColor} />
-                  </View>
-                  <View style={s.editRowInfo}>
-                    <Text style={[s.editRowTitle, { color: colors.foreground }]}>{category}</Text>
-                    <ScrollView horizontal showsHorizontalScrollIndicator={false} style={{ marginTop: 6 }}>
-                      <View style={{ flexDirection: "row", gap: 6 }}>
-                        {CATEGORIES.filter(c => c !== "Transfer" && c !== "Bills").map((c) => (
-                          <TouchableOpacity
-                            key={c}
-                            style={[s.catChip, { backgroundColor: category === c ? colors.primary : colors.muted }]}
-                            onPress={() => setCategory(c)}
-                          >
-                            <Text style={[s.catChipText, { color: category === c ? "#fff" : colors.mutedForeground }]}>{c}</Text>
-                          </TouchableOpacity>
-                        ))}
+                !isSplit ? (
+                  <TouchableOpacity
+                    style={[s.editRow, { borderBottomColor: colors.border }]}
+                    onPress={() => setShowCatPicker(true)}
+                    activeOpacity={0.7}
+                  >
+                    <View style={[s.editRowIcon, { backgroundColor: editCatColor + "20" }]}>
+                      <Feather name={editCatIcon} size={18} color={editCatColor} />
+                    </View>
+                    <View style={s.editRowInfo}>
+                      <Text style={[s.editRowSub, { color: colors.mutedForeground }]}>Category</Text>
+                      <Text style={[s.editRowTitle, { color: colors.foreground }]}>
+                        {category || "Select category"}
+                      </Text>
+                    </View>
+                    <Feather name="chevron-right" size={16} color={colors.mutedForeground} />
+                  </TouchableOpacity>
+                ) : (
+                  <View style={{ borderBottomWidth: StyleSheet.hairlineWidth, borderBottomColor: colors.border, paddingVertical: 10 }}>
+                    <View style={{ flexDirection: "row", alignItems: "center", paddingHorizontal: 16, marginBottom: 4 }}>
+                      <View style={[s.editRowIcon, { backgroundColor: colors.primary + "18" }]}>
+                        <Feather name="layers" size={18} color={colors.primary} />
                       </View>
-                    </ScrollView>
+                      <Text style={[s.editRowTitle, { color: colors.foreground, marginLeft: 12, flex: 1 }]}>Multiple Categories</Text>
+                      <TouchableOpacity onPress={() => { setIsSplitMode(false); setSplitCategories([]); }} hitSlop={10}>
+                        <Feather name="x" size={16} color={colors.mutedForeground} />
+                      </TouchableOpacity>
+                    </View>
+                    {splitCategories.map((split, i) => (
+                      <View
+                        key={i}
+                        style={[s.editRow, { borderBottomWidth: i < splitCategories.length - 1 ? StyleSheet.hairlineWidth : 0, borderBottomColor: colors.border }]}
+                      >
+                        <TouchableOpacity
+                          onPress={() => removeSplitCategory(i)}
+                          style={[s.editRowIcon, { backgroundColor: colors.expense + "18" }]}
+                        >
+                          <Feather name="minus" size={16} color={colors.expense} />
+                        </TouchableOpacity>
+                        <Text style={[s.editRowTitle, { color: colors.foreground, flex: 1 }]} numberOfLines={1}>
+                          {split.category}
+                        </Text>
+                        <View style={{ flexDirection: "row", alignItems: "center", gap: 4 }}>
+                          <Text style={{ fontSize: 15, color: colors.mutedForeground, fontFamily: "Inter_400Regular" }}>$</Text>
+                          <TextInput
+                            style={{ fontSize: 15, fontFamily: "Inter_500Medium", color: colors.foreground, minWidth: 60, textAlign: "right", borderBottomWidth: StyleSheet.hairlineWidth, borderBottomColor: colors.border, paddingVertical: 2 }}
+                            placeholder="0.00"
+                            placeholderTextColor={colors.mutedForeground}
+                            keyboardType="decimal-pad"
+                            value={split.amount}
+                            onChangeText={(v) => updateSplitAmount(i, v)}
+                            returnKeyType="done"
+                          />
+                        </View>
+                      </View>
+                    ))}
+                    <TouchableOpacity
+                      style={[s.editRow, { borderBottomWidth: 0 }]}
+                      onPress={() => setShowSplitCatPicker(true)}
+                    >
+                      <View style={[s.editRowIcon, { backgroundColor: colors.accent }]}>
+                        <Feather name="plus" size={16} color={colors.primary} />
+                      </View>
+                      <Text style={[s.editRowTitle, { color: colors.primary }]}>Add a Category to split</Text>
+                    </TouchableOpacity>
+                    {amount ? (
+                      <Text style={{
+                        fontSize: 12,
+                        fontFamily: "Inter_400Regular",
+                        paddingHorizontal: 16,
+                        paddingBottom: 6,
+                        color: Math.abs(splitTotal - parseFloat(amount)) > 0.01 ? "#ef4444" : colors.mutedForeground,
+                      }}>
+                        Split total: ${splitTotal.toFixed(2)} / ${parseFloat(amount).toFixed(2)}
+                        {Math.abs(splitTotal - parseFloat(amount)) > 0.01
+                          ? `  ·  $${Math.abs(parseFloat(amount) - splitTotal).toFixed(2)} ${splitTotal < parseFloat(amount) ? "remaining" : "over"}`
+                          : "  ✓"}
+                      </Text>
+                    ) : null}
                   </View>
-                  <Feather name="chevron-right" size={16} color={colors.mutedForeground} />
-                </View>
+                )
               )}
+
+              {/* Merchant */}
+              <TouchableOpacity
+                style={[s.editRow, { borderBottomColor: colors.border }]}
+                onPress={() => setShowMerchantPicker(true)}
+                activeOpacity={0.7}
+              >
+                <View style={[s.editRowIcon, { backgroundColor: colors.muted }]}>
+                  <Feather name="shopping-bag" size={18} color={colors.mutedForeground} />
+                </View>
+                <View style={s.editRowInfo}>
+                  <Text style={[s.editRowSub, { color: colors.mutedForeground }]}>Merchant</Text>
+                  <Text style={[s.editRowTitle, { color: merchant ? colors.foreground : colors.mutedForeground }]}>
+                    {merchant || "Select merchant"}
+                  </Text>
+                </View>
+                <Feather name="chevron-right" size={16} color={colors.mutedForeground} />
+              </TouchableOpacity>
 
               {/* Title / Description */}
               <View style={[s.editRow, { borderBottomColor: colors.border }]}>
@@ -257,46 +512,28 @@ export default function TransactionDetailModal({ visible, onClose, transaction }
               </View>
 
               {/* Account */}
-              <View style={[s.editRow, { borderBottomColor: colors.border }]}>
+              <TouchableOpacity
+                style={[s.editRow, { borderBottomColor: colors.border }]}
+                onPress={() => setShowAccountPicker(true)}
+                activeOpacity={0.7}
+              >
                 {editAccount ? (
-                  <>
-                    <View style={[s.bankBadge, { backgroundColor: editAccount.color }]}>
-                      <Text style={s.bankBadgeText}>{editAccount.bank.slice(0, 2).toUpperCase()}</Text>
-                    </View>
-                    <View style={s.editRowInfo}>
-                      <Text style={[s.editRowTitle, { color: colors.foreground }]}>{editAccount.name}</Text>
-                      <Text style={[s.editRowSub, { color: colors.mutedForeground }]}>
-                        {`From: ${editAccount.type.charAt(0).toUpperCase() + editAccount.type.slice(1)} · ${editAccount.bank}`}
-                      </Text>
-                      <Text style={[s.editRowSub, { color: colors.mutedForeground }]}>
-                        {`Balance: $${editAccount.balance.toFixed(2)}`}
-                      </Text>
-                    </View>
-                    <TouchableOpacity onPress={() => setAccountId("")} hitSlop={8}>
-                      <Feather name="x" size={18} color={colors.mutedForeground} />
-                    </TouchableOpacity>
-                  </>
+                  <View style={[s.bankBadge, { backgroundColor: editAccount.color }]}>
+                    <Text style={s.bankBadgeText}>{editAccount.bank.slice(0, 2).toUpperCase()}</Text>
+                  </View>
                 ) : (
-                  <>
-                    <View style={[s.editRowIcon, { backgroundColor: colors.muted }]}>
-                      <Feather name="credit-card" size={18} color={colors.mutedForeground} />
-                    </View>
-                    <ScrollView horizontal showsHorizontalScrollIndicator={false} style={{ flex: 1 }}>
-                      <View style={{ flexDirection: "row", gap: 8, paddingVertical: 4 }}>
-                        {accounts.map((a) => (
-                          <TouchableOpacity
-                            key={a.id}
-                            style={[s.catChip, { backgroundColor: accountId === a.id ? a.color : colors.muted }]}
-                            onPress={() => setAccountId(a.id)}
-                          >
-                            <Text style={[s.catChipText, { color: accountId === a.id ? "#fff" : colors.mutedForeground }]}>{a.name}</Text>
-                          </TouchableOpacity>
-                        ))}
-                      </View>
-                    </ScrollView>
-                  </>
+                  <View style={[s.editRowIcon, { backgroundColor: colors.muted }]}>
+                    <Feather name="credit-card" size={18} color={colors.mutedForeground} />
+                  </View>
                 )}
-              </View>
+                <View style={s.editRowInfo}>
+                  <Text style={[s.editRowSub, { color: colors.mutedForeground }]}>Account</Text>
+                  <Text style={[s.editRowTitle, { color: editAccount ? colors.foreground : colors.mutedForeground }]}>
+                    {editAccount ? `${editAccount.bank} · ${editAccount.name}` : "Select account"}
+                  </Text>
+                </View>
+                <Feather name="chevron-right" size={16} color={colors.mutedForeground} />
+              </TouchableOpacity>
 
               {/* Date */}
               <TouchableOpacity style={[s.editRow, { borderBottomColor: colors.border }]} onPress={() => setShowDatePicker(true)}>
@@ -365,6 +602,78 @@ export default function TransactionDetailModal({ visible, onClose, transaction }
                 </View>
               </View>
 
+              {/* Project */}
+              <TouchableOpacity
+                style={[s.editRow, { borderBottomColor: colors.border }]}
+                onPress={() => setShowProjectPicker(true)}
+                activeOpacity={0.7}
+              >
+                <View style={[s.editRowIcon, { backgroundColor: "#f97316" + "18" }]}>
+                  <Feather name="folder" size={18} color="#f97316" />
+                </View>
+                <View style={s.editRowInfo}>
+                  <Text style={[s.editRowSub, { color: colors.mutedForeground }]}>Project</Text>
+                  <Text style={[s.editRowTitle, { color: projectName ? colors.foreground : colors.mutedForeground }]}>
+                    {projectName || "Tag a project (optional)"}
+                  </Text>
+                </View>
+                {projectId ? (
+                  <TouchableOpacity
+                    onPress={() => { setProjectId(undefined); setProjectName(undefined); }}
+                    hitSlop={10}
+                  >
+                    <Feather name="x" size={16} color={colors.mutedForeground} />
+                  </TouchableOpacity>
+                ) : (
+                  <Feather name="chevron-right" size={16} color={colors.mutedForeground} />
+                )}
+              </TouchableOpacity>
+
+              {/* Tag */}
+              <View style={[s.editRow, { borderBottomColor: colors.border }]}>
+                <View style={[s.editRowIcon, { backgroundColor: colors.muted }]}>
+                  <Feather name="tag" size={18} color={colors.mutedForeground} />
+                </View>
+                <TextInput
+                  style={[s.editRowInput, { color: colors.foreground }]}
+                  value={tag}
+                  onChangeText={setTag}
+                  placeholder="Add tag (optional)"
+                  placeholderTextColor={colors.mutedForeground}
+                  returnKeyType="done"
+                />
+                {tag ? (
+                  <TouchableOpacity onPress={() => setTag("")} hitSlop={10}>
+                    <Feather name="x" size={16} color={colors.mutedForeground} />
+                  </TouchableOpacity>
+                ) : null}
+              </View>
+
+              <MerchantPickerModal
+                visible={showMerchantPicker}
+                onClose={() => setShowMerchantPicker(false)}
+                onSelect={(m) => { setMerchant(m); setTitle(m); }}
+                selected={merchant}
+              />
+              <ProjectPickerModal
+                visible={showProjectPicker}
+                selected={projectId}
+                onSelect={(id, name) => { setProjectId(id); setProjectName(name); }}
+                onClose={() => setShowProjectPicker(false)}
+              />
+              <CategoryPickerModal
+                visible={showSplitCatPicker}
+                onClose={() => setShowSplitCatPicker(false)}
+                onSelect={(cat) => { addSplitCategory(cat); setShowSplitCatPicker(false); }}
+                type={editType === "INCOME" ? "income" : "expense"}
+              />
+              <CalculatorModal
+                visible={showCalculator}
+                initialValue={amount}
+                onClose={() => setShowCalculator(false)}
+                onApply={(v) => setAmount(v)}
+              />
+
               {/* Add Receipts */}
               <TouchableOpacity style={[s.receiptsRow, { backgroundColor: colors.card, borderColor: colors.border }]}>
                 <View style={[s.editRowIcon, { backgroundColor: colors.muted }]}>
@@ -407,17 +716,99 @@ export default function TransactionDetailModal({ visible, onClose, transaction }
                 </View>
               )}
 
-              {/* Mark as transfer */}
-              {transaction.category !== "Transfer" && (
-                <View style={[s.actionCard, { backgroundColor: colors.card, borderColor: colors.border }]}>
-                  <TouchableOpacity style={[s.actionPill, { backgroundColor: colors.muted }]} onPress={handleMarkTransfer}>
-                    <Text style={[s.actionPillText, { color: colors.foreground }]}>Mark as transfer?</Text>
-                  </TouchableOpacity>
-                  <Text style={[s.actionDesc, { color: colors.mutedForeground }]}>
-                    Then transaction will NOT be considered into expense / income calculations.
-                  </Text>
+              {/* Mark as transfer / Revert from transfer */}
+              <View style={[s.actionCard, { backgroundColor: colors.card, borderColor: colors.border }]}>
+                {transaction.category === "Transfer" ? (
+                  <>
+                    <TouchableOpacity
+                      style={[s.actionPill, { backgroundColor: colors.primary + "20" }]}
+                      onPress={() => {
+                        Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium);
+                        updateTransaction(transaction.id, {
+                          category: transaction.type === "income" ? "Income" : "Other",
+                        });
+                        onClose();
+                      }}
+                    >
+                      <Feather name="refresh-cw" size={14} color={colors.primary} style={{ marginRight: 6 }} />
+                      <Text style={[s.actionPillText, { color: colors.primary }]}>
+                        Revert to {transaction.type === "income" ? "Income" : "Expense"}
+                      </Text>
+                    </TouchableOpacity>
+                    <Text style={[s.actionDesc, { color: colors.mutedForeground }]}>
+                      This will include it back in {transaction.type === "income" ? "income" : "expense"} calculations.
+                    </Text>
+                  </>
+                ) : (
+                  <>
+                    <TouchableOpacity style={[s.actionPill, { backgroundColor: colors.muted }]} onPress={handleMarkTransfer}>
+                      <Text style={[s.actionPillText, { color: colors.foreground }]}>Mark as transfer?</Text>
+                    </TouchableOpacity>
+                    <Text style={[s.actionDesc, { color: colors.mutedForeground }]}>
+                      Then transaction will NOT be considered into expense / income calculations.
+                    </Text>
+                  </>
+                )}
+              </View>
+
+              {/* Split Transactions */}
+              {transaction.splitGroupId && (() => {
+                const siblings = transactions.filter(
+                  (t) => t.splitGroupId === transaction.splitGroupId && t.id !== transaction.id
+                );
+                if (siblings.length === 0) return null;
+                return (
+                  <View style={[s.accountCard, { backgroundColor: colors.card, borderColor: colors.border, flexDirection: "column", alignItems: "stretch", gap: 0, padding: 0, overflow: "hidden" }]}>
+                    <Text style={[s.accountName, { color: colors.foreground, paddingHorizontal: 16, paddingTop: 14, paddingBottom: 8, fontSize: 14, fontFamily: "Inter_600SemiBold" }]}>Split Transactions</Text>
+                    {siblings.map((t, i) => {
+                      const sibIcon = (CATEGORY_ICONS[t.category] || "circle") as any;
+                      const sibColor = CATEGORY_COLORS[t.category] || colors.primary;
+                      const sibDate = new Date(t.date);
+                      const sibTime = sibDate.toLocaleTimeString("en-US", { hour: "numeric", minute: "2-digit", hour12: true });
+                      const sibDateLabel = `${sibDate.toLocaleDateString("en-US", { month: "short", day: "numeric" })}, ${sibTime}`;
+                      return (
+                        <View
+                          key={t.id}
+                          style={{ flexDirection: "row", alignItems: "center", paddingHorizontal: 16, paddingVertical: 12, gap: 12, borderTopWidth: i === 0 ? StyleSheet.hairlineWidth : 0, borderTopColor: colors.border }}
+                        >
+                          <View style={{ width: 40, height: 40, borderRadius: 12, backgroundColor: sibColor + "20", alignItems: "center", justifyContent: "center" }}>
+                            <Feather name={sibIcon} size={20} color={sibColor} />
+                          </View>
+                          <View style={{ flex: 1, gap: 2 }}>
+                            <Text style={{ fontSize: 14, fontFamily: "Inter_500Medium", color: colors.foreground }}>{t.category}</Text>
+                            <Text style={{ fontSize: 12, fontFamily: "Inter_400Regular", color: colors.mutedForeground }}>{sibDateLabel}</Text>
+                          </View>
+                          <Text style={{ fontSize: 15, fontFamily: "Inter_600SemiBold", color: colors.expense }}>${t.amount.toFixed(2)}</Text>
+                        </View>
+                      );
+                    })}
+                  </View>
+                );
+              })()}
+
+              {/* Project & Tag chips (view mode) */}
+              {(transaction.projectName || transaction.isRefund || parseNoteAndTag(transaction.note).tag) ? (
+                <View style={{ flexDirection: "row", flexWrap: "wrap", gap: 8, paddingHorizontal: 4 }}>
+                  {transaction.projectName ? (
+                    <View style={[s.metaChip, { backgroundColor: "#f97316" + "18" }]}>
+                      <Feather name="folder" size={13} color="#f97316" />
+                      <Text style={[s.metaChipText, { color: "#f97316" }]}>{transaction.projectName}</Text>
+                    </View>
+                  ) : null}
+                  {parseNoteAndTag(transaction.note).tag ? (
+                    <View style={[s.metaChip, { backgroundColor: colors.primary + "18" }]}>
+                      <Feather name="tag" size={13} color={colors.primary} />
+                      <Text style={[s.metaChipText, { color: colors.primary }]}>{parseNoteAndTag(transaction.note).tag}</Text>
+                    </View>
+                  ) : null}
+                  {transaction.isRefund ? (
+                    <View style={[s.metaChip, { backgroundColor: "#10b981" + "18" }]}>
+                      <Feather name="rotate-ccw" size={13} color="#10b981" />
+                      <Text style={[s.metaChipText, { color: "#10b981" }]}>Refund</Text>
+                    </View>
+                  ) : null}
                 </View>
-              )}
+              ) : null}
 
               {/* Notes */}
               <View style={[s.notesCard, { backgroundColor: colors.card, borderColor: colors.border }]}>
@@ -463,6 +854,46 @@ export default function TransactionDetailModal({ visible, onClose, transaction }
           )}
         </KeyboardAvoidingView>
       </View>
+
+      <CategoryPickerModal
+        visible={showCatPicker}
+        onClose={() => setShowCatPicker(false)}
+        onSelect={(cat, sub) => setCategory(sub ? `${cat} - ${sub}` : cat)}
+        type={editType === "INCOME" ? "income" : "expense"}
+      />
+
+      {/* Account picker sheet */}
+      <Modal
+        visible={showAccountPicker}
+        transparent
+        animationType="slide"
+        onRequestClose={() => setShowAccountPicker(false)}
+      >
+        <TouchableOpacity style={s.pickerOverlay} activeOpacity={1} onPress={() => setShowAccountPicker(false)}>
+          <View style={[s.pickerSheet, { backgroundColor: colors.card, paddingBottom: pb }]}>
+            <View style={[s.pickerHandle, { backgroundColor: colors.border }]} />
+            <Text style={[s.pickerTitle, { color: colors.foreground }]}>Select Account</Text>
+            {accounts.map((a) => (
+              <TouchableOpacity
+                key={a.id}
+                style={[s.pickerRow, { borderBottomColor: colors.border }, accountId === a.id && { backgroundColor: colors.primary + "12" }]}
+                onPress={() => { setAccountId(a.id); setShowAccountPicker(false); }}
+              >
+                <View style={[s.bankBadge, { backgroundColor: a.color }]}>
+                  <Text style={s.bankBadgeText}>{a.bank.slice(0, 2).toUpperCase()}</Text>
+                </View>
+                <View style={{ flex: 1 }}>
+                  <Text style={[s.editRowTitle, { color: colors.foreground }]}>{a.bank} · {a.name}</Text>
+                  <Text style={[s.editRowSub, { color: colors.mutedForeground }]}>
+                    {a.type.charAt(0).toUpperCase() + a.type.slice(1)}{a.lastFour ? ` · ****${a.lastFour}` : ""}
+                  </Text>
+                </View>
+                {accountId === a.id && <Feather name="check" size={18} color={colors.primary} />}
+              </TouchableOpacity>
+            ))}
+          </View>
+        </TouchableOpacity>
+      </Modal>
     </Modal>
   );
 }
@@ -563,11 +994,19 @@ const s = StyleSheet.create({
   typeTabText: { fontSize: 12, fontFamily: "Inter_600SemiBold", letterSpacing: 0.5 },
 
   amountRow: {
-    alignItems: "flex-start",
     paddingHorizontal: 20,
     paddingVertical: 20,
   },
   amountInput: { fontSize: 48, fontFamily: "Inter_700Bold" },
+  calcBtn: {
+    width: 36,
+    height: 36,
+    borderRadius: 18,
+    borderWidth: StyleSheet.hairlineWidth,
+    alignItems: "center",
+    justifyContent: "center",
+    marginLeft: 8,
+  },
 
   editRow: {
     flexDirection: "row",
@@ -595,6 +1034,16 @@ const s = StyleSheet.create({
 
   abcBadge: { borderWidth: 1, borderRadius: 6, paddingHorizontal: 6, paddingVertical: 3 },
   abcText: { fontSize: 11, fontFamily: "Inter_500Medium" },
+
+  metaChip: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 5,
+    paddingHorizontal: 10,
+    paddingVertical: 6,
+    borderRadius: 20,
+  },
+  metaChipText: { fontSize: 13, fontFamily: "Inter_500Medium" },
 
   receiptsRow: {
     flexDirection: "row",
@@ -651,5 +1100,24 @@ const s = StyleSheet.create({
   donePillText: {
     fontFamily: "Inter_600SemiBold",
     color: "#fff",
+  },
+  pickerOverlay: {
+    flex: 1,
+    backgroundColor: "rgba(0,0,0,0.4)",
+    justifyContent: "flex-end",
+  },
+  pickerSheet: {
+    borderTopLeftRadius: 20,
+    borderTopRightRadius: 20,
+    paddingHorizontal: 16,
+    paddingTop: 12,
+    gap: 4,
+  },
+  pickerRow: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 12,
+    paddingVertical: 12,
+    borderBottomWidth: StyleSheet.hairlineWidth,
   },
 });

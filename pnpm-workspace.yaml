@@ -1,8 +1,12 @@
 packages:
-  - artifacts/*
+  - artifacts/api-server
+  - artifacts/mockup-sandbox
   - lib/*
   - lib/integrations/*
   - scripts
+
+allowBuilds:
+  esbuild: true
 
 autoInstallPeers: false
 

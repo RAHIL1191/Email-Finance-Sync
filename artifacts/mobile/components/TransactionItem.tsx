@@ -3,7 +3,7 @@ import * as Haptics from "expo-haptics";
 import React from "react";
 import { StyleSheet, Text, TouchableOpacity, View } from "react-native";
 
-import { Transaction, useApp } from "@/context/AppContext";
+import { PLAID_BANKS, Transaction, useApp } from "@/context/AppContext";
 import { useColors } from "@/hooks/useColors";
 
 export const CATEGORY_ICONS: Record<string, string> = {
@@ -53,17 +53,6 @@ export default function TransactionItem({ transaction, onPress }: Props) {
   const catColor = CATEGORY_COLORS[transaction.category] || colors.primary;
   const account = accounts.find((a) => a.id === transaction.accountId);
 
-  const date = new Date(transaction.date);
-  const timeStr = date.toLocaleTimeString("en-US", {
-    hour: "numeric",
-    minute: "2-digit",
-    hour12: true,
-  });
-  const isToday = new Date().toDateString() === date.toDateString();
-  const dateLabel = isToday
-    ? `Today, ${timeStr}`
-    : `${date.toLocaleDateString("en-US", { month: "short", day: "numeric" })}, ${timeStr}`;
-
   return (
     <TouchableOpacity
       style={styles.container}
@@ -80,16 +69,43 @@ export default function TransactionItem({ transaction, onPress }: Props) {
         <Text style={[styles.title, { color: colors.foreground }]} numberOfLines={1}>
           {transaction.title}
         </Text>
-        <View style={styles.metaRow}>
-          <Text style={[styles.metaText, { color: colors.mutedForeground }]}>
-            {dateLabel}
-          </Text>
-          {account && (
-            <Text style={[styles.metaText, { color: colors.mutedForeground }]}>
-              {" · "}{account.name}
-            </Text>
-          )}
-        </View>
+        {account && (
+          <View style={styles.metaRow}>
+            {account.accountHolder && (
+              <Text style={[styles.metaName, { color: colors.mutedForeground }]} numberOfLines={1}>
+                {account.accountHolder}
+              </Text>
+            )}
+            <View style={[styles.typePill, { backgroundColor: account.color + "18" }]}>
+              <Feather
+                name={
+                  account.type === "checking" ? "layers"
+                  : account.type === "savings" ? "shield"
+                  : account.type === "credit" ? "credit-card"
+                  : "trending-up"
+                }
+                size={9}
+                color={account.color}
+              />
+              <Text style={[styles.typePillText, { color: account.color }]}>
+                {account.type === "checking" ? "Chequing"
+                  : account.type === "savings" ? "Savings"
+                  : account.type === "credit" ? "Credit"
+                  : "Investment"}
+              </Text>
+            </View>
+            {(() => {
+              const bankMeta = PLAID_BANKS.find(
+                (b) => b.name.toLowerCase() === (account.bank ?? "").toLowerCase()
+              );
+              return bankMeta ? (
+                <Text style={styles.bankIcon}>{bankMeta.icon}</Text>
+              ) : (
+                <Feather name="briefcase" size={12} color={colors.mutedForeground} />
+              );
+            })()}
+          </View>
+        )}
       </View>
       <Text style={[styles.amount, { color: isIncome ? "#10b981" : colors.foreground }]}>
         ${transaction.amount.toFixed(2)}
@@ -124,10 +140,27 @@ const styles = StyleSheet.create({
   metaRow: {
     flexDirection: "row",
     alignItems: "center",
+    gap: 6,
+    marginTop: 2,
   },
-  metaText: {
+  metaName: {
     fontSize: 12,
     fontFamily: "Inter_400Regular",
+  },
+  typePill: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 3,
+    paddingHorizontal: 6,
+    paddingVertical: 2,
+    borderRadius: 4,
+  },
+  typePillText: {
+    fontSize: 10,
+    fontFamily: "Inter_500Medium",
+  },
+  bankIcon: {
+    fontSize: 13,
   },
   amount: {
     fontSize: 15,

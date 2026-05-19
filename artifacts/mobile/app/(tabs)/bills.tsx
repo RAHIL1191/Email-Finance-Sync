@@ -3,6 +3,8 @@ import * as Haptics from "expo-haptics";
 import React, { useMemo, useState } from "react";
 import {
   Alert,
+  Dimensions,
+  Modal,
   Platform,
   ScrollView,
   StyleSheet,
@@ -13,12 +15,176 @@ import {
 import { SafeAreaView } from "react-native-safe-area-context";
 
 import AddEntrySheet from "@/components/AddEntrySheet";
+import BillDetailSheet from "@/components/BillDetailSheet";
+import EditBillSheet from "@/components/EditBillSheet";
 import BillFilterModal, {
   BillFilterSettings,
   DEFAULT_FILTER,
 } from "@/components/BillFilterModal";
 import { Bill, useApp } from "@/context/AppContext";
+import { useDrawer } from "@/context/DrawerContext";
 import { useColors } from "@/hooks/useColors";
+
+// ─── Overdue Bills Modal ─────────────────────────────────────────────────────
+const WIN_H = Dimensions.get("window").height;
+
+function OverdueBillsModal({ bills, visible, onClose, onMarkPaid, onDelete }: {
+  bills: Bill[]; visible: boolean; onClose: () => void;
+  onMarkPaid: (ids: string[]) => void; onDelete: (ids: string[]) => void;
+}) {
+  const colors = useColors();
+  const [selected, setSelected] = useState<Set<string>>(new Set());
+
+  const allSelected = selected.size === bills.length && bills.length > 0;
+  const toggleAll = () => setSelected(allSelected ? new Set() : new Set(bills.map(b => b.id)));
+  const toggle = (id: string) => {
+    const next = new Set(selected);
+    next.has(id) ? next.delete(id) : next.add(id);
+    setSelected(next);
+  };
+
+  const handleMarkPaid = () => {
+    if (!selected.size) return;
+    onMarkPaid([...selected]);
+    setSelected(new Set());
+  };
+  const handleDelete = () => {
+    if (!selected.size) return;
+    Alert.alert("Delete Bills", `Delete ${selected.size} bill${selected.size > 1 ? "s" : ""}?`, [
+      { text: "Cancel", style: "cancel" },
+      { text: "Delete", style: "destructive", onPress: () => { onDelete([...selected]); setSelected(new Set()); } },
+    ]);
+  };
+
+  // Group by month
+  const grouped = useMemo(() => {
+    const map: Record<string, Bill[]> = {};
+    bills.forEach(b => {
+      const key = new Date(b.dueDate).toLocaleString("default", { month: "long", year: "numeric" });
+      if (!map[key]) map[key] = [];
+      map[key].push(b);
+    });
+    return Object.entries(map);
+  }, [bills]);
+
+  return (
+    <Modal visible={visible} animationType="slide" transparent onRequestClose={onClose}>
+      <View style={ovSt.backdrop}>
+        <TouchableOpacity style={StyleSheet.absoluteFill} activeOpacity={1} onPress={onClose} />
+        <View style={[ovSt.sheet, { backgroundColor: colors.card }]}>
+          {/* Header */}
+          <View style={ovSt.header}>
+            <Text style={[ovSt.headerTitle, { color: colors.foreground }]}>
+              {selected.size > 0 ? `${selected.size} selected` : `${bills.length} Overdue`}
+            </Text>
+            <TouchableOpacity onPress={onClose} hitSlop={8}>
+              <Feather name="x" size={22} color={colors.foreground} />
+            </TouchableOpacity>
+          </View>
+
+          {/* Actions row */}
+          <View style={[ovSt.actionsRow, { borderBottomColor: colors.border }]}>
+            <TouchableOpacity style={ovSt.selectAllRow} onPress={toggleAll} activeOpacity={0.7}>
+              <View style={[ovSt.checkbox, { borderColor: allSelected ? colors.primary : colors.border, backgroundColor: allSelected ? colors.primary : "transparent" }]}>
+                {allSelected && <Feather name="check" size={12} color="#fff" />}
+              </View>
+              <Text style={[ovSt.selectAllText, { color: colors.foreground }]}>Select all</Text>
+            </TouchableOpacity>
+            <View style={ovSt.actionBtns}>
+              <TouchableOpacity
+                onPress={handleMarkPaid}
+                hitSlop={8}
+                style={[ovSt.actionBtn, { opacity: selected.size ? 1 : 0.35 }]}
+              >
+                <Feather name="check" size={22} color={colors.primary} />
+              </TouchableOpacity>
+              <TouchableOpacity
+                onPress={handleDelete}
+                hitSlop={8}
+                style={[ovSt.actionBtn, { opacity: selected.size ? 1 : 0.35 }]}
+              >
+                <Feather name="trash-2" size={20} color={colors.expense} />
+              </TouchableOpacity>
+            </View>
+          </View>
+
+          {/* Bills list */}
+          <ScrollView showsVerticalScrollIndicator={false}>
+            {grouped.map(([month, monthBills]) => {
+              const monthTotal = monthBills.reduce((s, b) => s + b.amount, 0);
+              return (
+                <View key={month}>
+                  <View style={ovSt.monthRow}>
+                    <Text style={[ovSt.monthLabel, { color: colors.foreground }]}>{month.split(" ")[0]}</Text>
+                    <Text style={[ovSt.monthTotal, { color: colors.foreground }]}>${monthTotal.toFixed(2)}</Text>
+                  </View>
+                  {monthBills.map(bill => {
+                    const cfg = catConfig(bill.category);
+                    const daysLate = Math.abs(daysUntil(bill.dueDate));
+                    const isSelected = selected.has(bill.id);
+                    const dueDateFmt = new Date(bill.dueDate).toLocaleDateString("en-US", { month: "short", day: "numeric" });
+                    const daysAgoLabel = daysLate === 1 ? "Yesterday" : dueDateFmt;
+                    return (
+                      <TouchableOpacity
+                        key={bill.id}
+                        onPress={() => toggle(bill.id)}
+                        activeOpacity={0.8}
+                        style={[ovSt.billRow, { backgroundColor: "#7c1f1f22", borderColor: "#ef444430" }]}
+                      >
+                        {/* Icon with checkbox overlay */}
+                        <View>
+                          <View style={[ovSt.iconBg, { backgroundColor: cfg.bg }]}>
+                            <Feather name={cfg.icon as any} size={18} color={cfg.fg} />
+                          </View>
+                          {isSelected && (
+                            <View style={ovSt.checkOverlay}>
+                              <Feather name="check" size={10} color="#fff" />
+                            </View>
+                          )}
+                        </View>
+                        {/* Info */}
+                        <View style={{ flex: 1 }}>
+                          <Text style={[ovSt.billName, { color: colors.foreground }]} numberOfLines={1}>{bill.name}</Text>
+                          <Text style={ovSt.billDue}>
+                            {daysAgoLabel}{" "}
+                            <Text style={{ color: "#ef4444" }}>· {daysLate} day{daysLate !== 1 ? "s" : ""} past</Text>
+                          </Text>
+                        </View>
+                        <Text style={[ovSt.billAmt, { color: colors.foreground }]}>${bill.amount.toFixed(2)}</Text>
+                      </TouchableOpacity>
+                    );
+                  })}
+                </View>
+              );
+            })}
+          </ScrollView>
+        </View>
+      </View>
+    </Modal>
+  );
+}
+
+const ovSt = StyleSheet.create({
+  backdrop:      { flex: 1, justifyContent: "flex-end", backgroundColor: "rgba(0,0,0,0.5)" },
+  sheet:         { borderTopLeftRadius: 24, borderTopRightRadius: 24, paddingHorizontal: 16, paddingTop: 8, paddingBottom: Platform.OS === "ios" ? 34 : 16, maxHeight: WIN_H * 0.85 },
+  header:        { flexDirection: "row", alignItems: "center", justifyContent: "space-between", paddingVertical: 16 },
+  headerTitle:   { fontSize: 17, fontFamily: "Inter_600SemiBold" },
+  actionsRow:    { flexDirection: "row", alignItems: "center", justifyContent: "space-between", paddingVertical: 12, borderBottomWidth: 1, marginBottom: 8 },
+  selectAllRow:  { flexDirection: "row", alignItems: "center", gap: 10 },
+  checkbox:      { width: 22, height: 22, borderRadius: 6, borderWidth: 2, alignItems: "center", justifyContent: "center" },
+  selectAllText: { fontSize: 15, fontFamily: "Inter_500Medium" },
+  actionBtns:    { flexDirection: "row", gap: 20 },
+  actionBtn:     { padding: 4 },
+  monthRow:      { flexDirection: "row", justifyContent: "space-between", alignItems: "center", paddingVertical: 10, paddingHorizontal: 4 },
+  monthLabel:    { fontSize: 15, fontFamily: "Inter_700Bold" },
+  monthTotal:    { fontSize: 15, fontFamily: "Inter_700Bold" },
+  billRow:       { flexDirection: "row", alignItems: "center", gap: 12, padding: 14, borderRadius: 14, borderWidth: 1, marginBottom: 8 },
+  iconBg:        { width: 44, height: 44, borderRadius: 22, alignItems: "center", justifyContent: "center" },
+  checkOverlay:  { position: "absolute", bottom: -2, right: -2, width: 18, height: 18, borderRadius: 9, backgroundColor: "#2563eb", alignItems: "center", justifyContent: "center" },
+  billName:      { fontSize: 15, fontFamily: "Inter_600SemiBold" },
+  billDue:       { fontSize: 12, fontFamily: "Inter_400Regular", color: "#aaa", marginTop: 2 },
+  billAmt:       { fontSize: 15, fontFamily: "Inter_700Bold" },
+});
 
 // ─── Category config ──────────────────────────────────────────────────────────
 const CAT_ICON: Record<string, { icon: string; bg: string; fg: string }> = {
@@ -40,6 +206,48 @@ function catConfig(category: string) {
 // ─── Status helpers ───────────────────────────────────────────────────────────
 function daysUntil(dueDate: string) {
   return Math.ceil((new Date(dueDate).getTime() - Date.now()) / 86400000);
+}
+
+// ─── Recurring occurrence generator ──────────────────────────────────────────
+function addFreq(date: Date, freq: string): Date {
+  const d = new Date(date);
+  switch (freq) {
+    case "daily":     d.setDate(d.getDate() + 1);        break;
+    case "weekly":    d.setDate(d.getDate() + 7);        break;
+    case "biweekly":  d.setDate(d.getDate() + 14);       break;
+    case "monthly":   d.setMonth(d.getMonth() + 1);      break;
+    case "quarterly": d.setMonth(d.getMonth() + 3);      break;
+    case "semiannual":d.setMonth(d.getMonth() + 6);      break;
+    case "yearly":    d.setFullYear(d.getFullYear() + 1); break;
+  }
+  return d;
+}
+
+function occurrenceLimit(freq: string): Date {
+  const limit = new Date();
+  if (freq === "daily" || freq === "weekly" || freq === "biweekly") {
+    limit.setMonth(limit.getMonth() + 3);       // 3 months for high-frequency
+  } else {
+    limit.setFullYear(limit.getFullYear() + 1);  // 1 year for others
+  }
+  return limit;
+}
+
+function generateOccurrences(bill: Bill): Bill[] {
+  if (!bill.isRecurring || !bill.frequency || bill.isPaid) return [];
+  const result: Bill[] = [];
+  const limit = occurrenceLimit(bill.frequency);
+  let next = addFreq(new Date(bill.dueDate), bill.frequency);
+  while (next <= limit) {
+    result.push({
+      ...bill,
+      id: `${bill.id}_occ_${next.getTime()}`,
+      dueDate: next.toISOString(),
+      isPaid: false,
+    });
+    next = addFreq(next, bill.frequency);
+  }
+  return result;
 }
 
 function statusLabel(bill: Bill) {
@@ -117,12 +325,15 @@ function BillRow({
   bill,
   onPay,
   onDelete,
+  onPress,
 }: {
   bill: Bill;
   onPay: () => void;
   onDelete: () => void;
+  onPress: () => void;
 }) {
   const colors = useColors();
+  const isVirtual = bill.id.includes("_occ_");
   const cfg = catConfig(bill.category);
   const d = daysUntil(bill.dueDate);
   const isOverdue = !bill.isPaid && d < 0;
@@ -140,7 +351,8 @@ function BillRow({
   return (
     <TouchableOpacity
       activeOpacity={0.75}
-      onLongPress={() => {
+      onPress={onPress}
+      onLongPress={isVirtual ? undefined : () => {
         Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
         Alert.alert(bill.title, "What would you like to do?", [
           { text: "Cancel", style: "cancel" },
@@ -165,16 +377,18 @@ function BillRow({
       <View style={styles.rowInfo}>
         <Text style={[styles.rowTitle, { color: colors.foreground }]}>{bill.title}</Text>
         <View style={styles.rowMeta}>
-          <Text style={[styles.rowSub, { color: statusColor }]}>{label}</Text>
           {bill.isRecurring && (
             <>
-              <Text style={[styles.dot, { color: colors.mutedForeground }]}>·</Text>
               <Feather name="repeat" size={10} color={colors.mutedForeground} />
               <Text style={[styles.rowSub, { color: colors.mutedForeground }]}>{bill.frequency}</Text>
+              <Text style={[styles.dot, { color: colors.mutedForeground }]}>·</Text>
             </>
           )}
+          <Text style={[styles.rowSub, { color: colors.mutedForeground }]}>
+            {new Date(bill.dueDate).toLocaleDateString("en-US", { month: "short", day: "numeric" })}
+          </Text>
         </View>
-        {!bill.isPaid && (
+        {!bill.isPaid && !isVirtual && (
           <TouchableOpacity
             onPress={() => {
               Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
@@ -185,6 +399,9 @@ function BillRow({
             <Text style={[styles.payNow, { color: colors.expense }]}>Pay now</Text>
           </TouchableOpacity>
         )}
+        {isVirtual && (
+          <Text style={[styles.rowSub, { color: colors.mutedForeground, fontStyle: "italic" }]}>Projected</Text>
+        )}
         {bill.isPaid && (
           <View style={styles.paidBadge}>
             <Feather name="check-circle" size={11} color={colors.success} />
@@ -193,9 +410,24 @@ function BillRow({
         )}
       </View>
 
-      <Text style={[styles.rowAmt, { color: colors.foreground }]}>
-        ${bill.amount.toFixed(2)}
-      </Text>
+      <View style={styles.rowRight}>
+        <Text style={[styles.rowAmt, { color: colors.foreground }]}>
+          ${bill.amount.toFixed(2)}
+        </Text>
+        {!bill.isPaid && (
+          <View style={[styles.daysBadge, { backgroundColor: statusColor + "22", borderColor: statusColor }]}>
+            <Text style={[styles.daysBadgeText, { color: statusColor }]}>
+              {isOverdue
+                ? `${Math.abs(d)}d late`
+                : d === 0
+                ? "Today"
+                : d === 1
+                ? "Tomorrow"
+                : `${d} days`}
+            </Text>
+          </View>
+        )}
+      </View>
     </TouchableOpacity>
   );
 }
@@ -206,11 +438,13 @@ function BillGroup({
   bills,
   onPay,
   onDelete,
+  onPress,
 }: {
   label: string;
   bills: Bill[];
   onPay: (id: string) => void;
   onDelete: (id: string) => void;
+  onPress: (bill: Bill) => void;
 }) {
   const colors = useColors();
   const total = bills.reduce((s, b) => s + b.amount, 0);
@@ -228,6 +462,7 @@ function BillGroup({
           bill={b}
           onPay={() => onPay(b.id)}
           onDelete={() => onDelete(b.id)}
+          onPress={() => onPress(b)}
         />
       ))}
     </View>
@@ -239,10 +474,12 @@ function CalendarView({
   bills,
   onPay,
   onDelete,
+  onPress,
 }: {
   bills: Bill[];
   onPay: (id: string) => void;
   onDelete: (id: string) => void;
+  onPress: (bill: Bill) => void;
 }) {
   const colors = useColors();
   const today = new Date();
@@ -331,7 +568,7 @@ function CalendarView({
             <Text style={[styles.calNoBills, { color: colors.mutedForeground }]}>No bills due this day</Text>
           ) : (
             selectedBills.map((b) => (
-              <BillRow key={b.id} bill={b} onPay={() => onPay(b.id)} onDelete={() => onDelete(b.id)} />
+              <BillRow key={b.id} bill={b} onPay={() => onPay(b.id)} onDelete={() => onDelete(b.id)} onPress={() => onPress(b)} />
             ))
           )}
         </View>
@@ -379,11 +616,53 @@ const TABS: { key: Tab; label: string }[] = [
 
 export default function BillsScreen() {
   const colors = useColors();
-  const { bills, markBillPaid, deleteBill } = useApp();
+  const { openDrawer } = useDrawer();
+  const { bills, addBill, updateBill, markBillPaid, deleteBill } = useApp();
   const [tab, setTab]           = useState<Tab>("upcoming");
   const [showAdd, setShowAdd]   = useState(false);
   const [showFilter, setShowFilter] = useState(false);
   const [filterSettings, setFilterSettings] = useState<BillFilterSettings>(DEFAULT_FILTER);
+  const [detailBill,        setDetailBill]        = useState<Bill | null>(null);
+  const [editBill,           setEditBill]           = useState<Bill | null>(null);
+  const [thisOnlyParent,     setThisOnlyParent]     = useState<Bill | null>(null);
+  const [showOverdueModal,   setShowOverdueModal]   = useState(false);
+
+  // Called when user picks "THIS ONLY" for edit on a recurring bill
+  const onEditThisOnly = (bill: Bill) => {
+    setDetailBill(null);
+    // Open EditBillSheet in create-mode with isRecurring:false for this specific date
+    setEditBill({ ...bill, isRecurring: false, frequency: undefined });
+    setThisOnlyParent(bill);
+  };
+
+  // Called when EditBillSheet saves in create-mode
+  const handleCreateThisOnly = (data: Omit<Bill, "id">) => {
+    addBill({ ...data, isRecurring: false, frequency: undefined });
+    if (thisOnlyParent?.frequency) {
+      const next = addFreq(new Date(thisOnlyParent.dueDate), thisOnlyParent.frequency);
+      updateBill(thisOnlyParent.id, { dueDate: next.toISOString() });
+    }
+    setThisOnlyParent(null);
+    setEditBill(null);
+  };
+
+  // Called when user picks "THIS ONLY" for delete on a recurring bill
+  const onDeleteThisOnly = (bill: Bill) => {
+    if (bill.frequency) {
+      const next = addFreq(new Date(bill.dueDate), bill.frequency);
+      updateBill(bill.id, { dueDate: next.toISOString() });
+    }
+  };
+
+  const onPressBill = (b: Bill) => {
+    Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
+    if (b.id.includes("_occ_")) {
+      const parentId = b.id.split("_occ_")[0];
+      setDetailBill(bills.find((bill) => bill.id === parentId) ?? null);
+      return;
+    }
+    setDetailBill(b);
+  };
   // Has any non-default filter active?
   const isFiltered =
     filterSettings.sortBy !== DEFAULT_FILTER.sortBy ||
@@ -402,10 +681,24 @@ export default function BillsScreen() {
     return groupBills(result, filterSettings.groupBy, filterSettings.startDay);
   }
 
-  const upcomingBills  = useMemo(() => bills.filter((b) => !b.isPaid), [bills]);
+  // Overdue non-recurring unpaid bills (past due, one-time)
+  const overdueBills = useMemo(
+    () => bills.filter((b) => !b.isPaid && !b.isRecurring && daysUntil(b.dueDate) < 0),
+    [bills]
+  );
+  // Upcoming = unpaid AND (recurring OR due today/future) + virtual future occurrences
+  const upcomingBills = useMemo(() => {
+    const base = bills.filter((b) => !b.isPaid && (b.isRecurring || daysUntil(b.dueDate) >= 0));
+    const virtual = bills
+      .filter((b) => b.isRecurring && !b.isPaid)
+      .flatMap(generateOccurrences)
+      .filter((b) => daysUntil(b.dueDate) >= 0);
+    return [...base, ...virtual];
+  }, [bills]);
   const recurringBills = useMemo(() => bills.filter((b) => b.isRecurring), [bills]);
   const paidBills      = useMemo(() => bills.filter((b) => b.isPaid), [bills]);
 
+  const overdueGroups   = useMemo(() => prepare(overdueBills),   [overdueBills,   filterSettings]);
   const upcomingGroups  = useMemo(() => prepare(upcomingBills),  [upcomingBills,  filterSettings]);
   const recurringGroups = useMemo(() => prepare(recurringBills), [recurringBills, filterSettings]);
   const paidGroups      = useMemo(() => prepare(paidBills),      [paidBills,      filterSettings]);
@@ -430,6 +723,7 @@ export default function BillsScreen() {
         bills={list}
         onPay={markBillPaid}
         onDelete={deleteBill}
+        onPress={onPressBill}
       />
     ));
   }
@@ -438,6 +732,9 @@ export default function BillsScreen() {
     <SafeAreaView edges={["top"]} style={[styles.container, { backgroundColor: colors.background }]}>
       {/* Header */}
       <View style={[styles.header, { paddingTop: Platform.OS === "web" ? 64 : 14, backgroundColor: colors.card, borderBottomColor: colors.border }]}>
+        <TouchableOpacity hitSlop={8} onPress={() => { Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light); openDrawer(); }}>
+          <Feather name="menu" size={22} color={colors.foreground} />
+        </TouchableOpacity>
         <Text style={[styles.headerTitle, { color: colors.foreground }]}>Bills</Text>
         <View style={styles.headerIcons}>
           {/* Filter button — dot indicator when active */}
@@ -495,6 +792,7 @@ export default function BillsScreen() {
             bills={bills}
             onPay={markBillPaid}
             onDelete={deleteBill}
+            onPress={onPressBill}
           />
         </ScrollView>
       ) : (
@@ -502,11 +800,46 @@ export default function BillsScreen() {
           showsVerticalScrollIndicator={false}
           contentContainerStyle={[styles.scroll, { paddingBottom: Platform.OS === "web" ? 34 + 84 : 100 }]}
         >
-          {tab === "upcoming"  && renderGroups(upcomingGroups)}
+          {tab === "upcoming" && (
+            <>
+              {overdueBills.length > 0 && (
+                <TouchableOpacity
+                  activeOpacity={0.85}
+                  onPress={() => { Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light); setShowOverdueModal(true); }}
+                  style={styles.overdueBanner}
+                >
+                  <View style={styles.overdueBannerLeft}>
+                    <View style={styles.overdueDot} />
+                    <View>
+                      <Text style={styles.overdueBannerTitle}>Overdue</Text>
+                      <Text style={styles.overdueBannerNames} numberOfLines={1}>
+                        {overdueBills.map(b => b.name).join(", ")}
+                      </Text>
+                    </View>
+                  </View>
+                  <View style={styles.overdueBannerRight}>
+                    <Text style={styles.overdueBannerAmt}>
+                      ${overdueBills.reduce((s, b) => s + b.amount, 0).toFixed(0)}
+                    </Text>
+                    <Feather name="chevron-right" size={18} color="#ef4444" />
+                  </View>
+                </TouchableOpacity>
+              )}
+              {renderGroups(upcomingGroups)}
+            </>
+          )}
           {tab === "recurring" && renderGroups(recurringGroups)}
           {tab === "paid"      && renderGroups(paidGroups)}
         </ScrollView>
       )}
+
+      <OverdueBillsModal
+        bills={overdueBills}
+        visible={showOverdueModal}
+        onClose={() => setShowOverdueModal(false)}
+        onMarkPaid={(ids) => { ids.forEach(id => markBillPaid(id)); setShowOverdueModal(false); }}
+        onDelete={(ids) => { ids.forEach(id => deleteBill(id)); setShowOverdueModal(false); }}
+      />
 
       {/* FAB */}
       <TouchableOpacity
@@ -520,6 +853,22 @@ export default function BillsScreen() {
       </TouchableOpacity>
 
       <AddEntrySheet visible={showAdd} initialTab="BILLS" onClose={() => setShowAdd(false)} />
+
+      <BillDetailSheet
+        bill={detailBill}
+        visible={!!detailBill}
+        onClose={() => setDetailBill(null)}
+        onEdit={(b) => { setDetailBill(null); setEditBill(b); }}
+        onEditThisOnly={onEditThisOnly}
+        onDeleteThisOnly={onDeleteThisOnly}
+      />
+
+      <EditBillSheet
+        bill={editBill}
+        visible={!!editBill}
+        onClose={() => { setEditBill(null); setThisOnlyParent(null); }}
+        onCreateBill={thisOnlyParent ? handleCreateThisOnly : undefined}
+      />
 
       <BillFilterModal
         visible={showFilter}
@@ -584,7 +933,18 @@ const styles = StyleSheet.create({
   payNow: { fontSize: 13, fontFamily: "Inter_600SemiBold" },
   paidBadge: { flexDirection: "row", alignItems: "center", gap: 4 },
   paidText: { fontSize: 12, fontFamily: "Inter_500Medium" },
-  rowAmt: { fontSize: 15, fontFamily: "Inter_700Bold" },
+  rowRight:      { alignItems: "flex-end", gap: 5 },
+  rowAmt:        { fontSize: 15, fontFamily: "Inter_700Bold" },
+  daysBadge:     { paddingHorizontal: 8, paddingVertical: 3, borderRadius: 20, borderWidth: 1 },
+  daysBadgeText: { fontSize: 11, fontFamily: "Inter_600SemiBold" },
+  // Overdue banner
+  overdueBanner:      { flexDirection: "row", alignItems: "center", justifyContent: "space-between", backgroundColor: "#7c1f1f", borderWidth: 1, borderColor: "#ef444450", borderRadius: 14, paddingHorizontal: 16, paddingVertical: 14, marginBottom: 4 },
+  overdueBannerLeft:  { flexDirection: "row", alignItems: "center", gap: 10, flex: 1 },
+  overdueDot:         { width: 12, height: 12, borderRadius: 6, backgroundColor: "#ef4444", borderWidth: 2, borderColor: "#fff" },
+  overdueBannerTitle: { fontSize: 15, fontFamily: "Inter_700Bold", color: "#ef4444" },
+  overdueBannerNames: { fontSize: 12, fontFamily: "Inter_400Regular", color: "#fff", marginTop: 2, maxWidth: 200 },
+  overdueBannerRight: { flexDirection: "row", alignItems: "center", gap: 4 },
+  overdueBannerAmt:   { fontSize: 16, fontFamily: "Inter_700Bold", color: "#ef4444" },
   // Empty
   empty: { padding: 40, borderRadius: 16, borderWidth: 1, alignItems: "center", gap: 12, marginTop: 16 },
   emptyText: { fontSize: 15, fontFamily: "Inter_400Regular" },

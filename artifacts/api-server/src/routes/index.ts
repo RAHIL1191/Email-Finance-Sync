@@ -9,6 +9,9 @@ import billsRouter from "./bills.js";
 import emailRouter from "./email.js";
 import plaidRouter, { plaidLinkPageHandler } from "./plaid.js";
 import aiReviewRouter from "./ai-review.js";
+import aiChatRouter from "./ai-chat.js";
+import categoriesRouter from "./categories.js";
+import categoryRulesRouter from "./categoryRules.js";
 
 const router: IRouter = Router();
 
@@ -24,9 +27,12 @@ router.get("/plaid/link-page", plaidLinkPageHandler);
 router.use(accountsRouter);
 router.use(transactionsRouter);
 router.use(billsRouter);
+router.use(categoriesRouter);
+router.use(categoryRulesRouter);
 
 // AI features (rate-limited)
 router.use(strictRateLimit, aiReviewRouter);
+router.use(strictRateLimit, aiChatRouter);
 
 // Feature-flagged: email sync (apply strict rate limit)
 if (features.emailSync) {

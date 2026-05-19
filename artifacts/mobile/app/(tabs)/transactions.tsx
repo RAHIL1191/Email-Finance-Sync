@@ -1,9 +1,13 @@
 import { Feather } from "@expo/vector-icons";
+import DateTimePicker from "@react-native-community/datetimepicker";
 import * as Haptics from "expo-haptics";
-import React, { useEffect, useMemo, useState } from "react";
+import React, { useCallback, useEffect, useMemo, useState } from "react";
 import {
+  Dimensions,
   FlatList,
+  Modal,
   Platform,
+  Pressable,
   ScrollView,
   StyleSheet,
   Switch,
@@ -14,12 +18,289 @@ import {
 import { SafeAreaView } from "react-native-safe-area-context";
 
 import AddEntrySheet from "@/components/AddEntrySheet";
-import BillFilterModal, { BillFilterSettings, DEFAULT_FILTER } from "@/components/BillFilterModal";
+import TransactionFilterModal, { DEFAULT_TX_FILTER, TxFilterSettings } from "@/components/TransactionFilterModal";
 import MonthDetailModal from "@/components/MonthDetailModal";
 import TransactionDetailModal from "@/components/TransactionDetailModal";
 import TransactionItem from "@/components/TransactionItem";
-import { Account, Bill, Transaction, useApp } from "@/context/AppContext";
+import { Account, Bill, Category, Transaction, useApp } from "@/context/AppContext";
+import { useDrawer } from "@/context/DrawerContext";
 import { useColors } from "@/hooks/useColors";
+
+// ── Period Settings Sheet ──────────────────────────────────────────────────────
+type GroupByPeriod = "Monthly" | "Weekly" | "Bi-Weekly" | "Yearly" | "Custom";
+interface PeriodSettings {
+  period: GroupByPeriod;
+  monthStartDay: number;
+  weekStartDay: number;
+  biWeeklyStartDate: Date;
+  customStartDate: Date;
+  customEndDate: Date;
+  accountIds: string[];
+}
+const DEFAULT_PERIOD_SETTINGS: PeriodSettings = {
+  period: "Monthly", monthStartDay: 1, weekStartDay: 0,
+  biWeeklyStartDate: new Date(), customStartDate: new Date(new Date().getFullYear(), new Date().getMonth(), 1), customEndDate: new Date(),
+  accountIds: [],
+};
+const WEEK_DAYS_PS = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"];
+const PERIODS_PS: GroupByPeriod[] = ["Monthly", "Weekly", "Bi-Weekly", "Yearly", "Custom"];
+function fmtPS(d: Date) { return d.toLocaleDateString("en-GB", { day: "2-digit", month: "short", year: "numeric" }); }
+const WIN_H_PS = Dimensions.get("window").height;
+
+function PeriodSettingsSheet({ visible, onClose, onApply, initial }: {
+  visible: boolean; onClose: () => void; onApply: (s: PeriodSettings) => void; initial: PeriodSettings;
+}) {
+  const colors = useColors();
+  const { accounts = [] } = useApp();
+  const [activeTab, setActiveTab] = useState<"GROUP BY" | "FILTER">("GROUP BY");
+  const [period, setPeriod] = useState<GroupByPeriod>(initial.period);
+  const [monthStartDate, setMonthStartDate] = useState(new Date());
+  const [showMonthPicker, setShowMonthPicker] = useState(false);
+  const [weekStartDay, setWeekStartDay] = useState(initial.weekStartDay);
+  const [biWeeklyDate, setBiWeeklyDate] = useState(initial.biWeeklyStartDate);
+  const [showBiWeeklyPicker, setShowBiWeeklyPicker] = useState(false);
+  const [customStart, setCustomStart] = useState(initial.customStartDate);
+  const [customEnd, setCustomEnd] = useState(initial.customEndDate);
+  const [showCustomStart, setShowCustomStart] = useState(false);
+  const [showCustomEnd, setShowCustomEnd] = useState(false);
+  const [selectedAccountIds, setSelectedAccountIds] = useState<string[]>(initial.accountIds ?? []);
+  const [showAccountPicker, setShowAccountPicker] = useState(false);
+
+  const snapSun = (d: Date) => { const s = new Date(d); s.setDate(d.getDate() - d.getDay()); return s; };
+
+  const toggleAccount = (id: string) =>
+    setSelectedAccountIds(prev => prev.includes(id) ? prev.filter(x => x !== id) : [...prev, id]);
+
+  const apply = () => {
+    Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium);
+    onApply({ period, monthStartDay: monthStartDate.getDate(), weekStartDay, biWeeklyStartDate: biWeeklyDate, customStartDate: customStart, customEndDate: customEnd, accountIds: selectedAccountIds });
+    onClose();
+  };
+
+  const clearFilter = () => {
+    Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
+    setSelectedAccountIds([]);
+  };
+
+  return (
+    <Modal visible={visible} animationType="slide" transparent onRequestClose={onClose}>
+      <View style={psSt.backdrop}>
+        <TouchableOpacity style={StyleSheet.absoluteFill} activeOpacity={1} onPress={onClose} />
+        <View style={[psSt.sheet, { backgroundColor: colors.card, paddingBottom: Platform.OS === "ios" ? 34 : 16 }]}>
+          {/* Tabs */}
+          <View style={[psSt.tabRow, { borderBottomColor: colors.border }]}>
+            {(["GROUP BY", "FILTER"] as const).map(t => (
+              <TouchableOpacity key={t} onPress={() => setActiveTab(t)} style={psSt.tabBtn}>
+                <Text style={[psSt.tabLabel, { color: activeTab === t ? colors.primary : colors.mutedForeground }]}>{t}</Text>
+                {activeTab === t && <View style={[psSt.tabUnderline, { backgroundColor: colors.primary }]} />}
+              </TouchableOpacity>
+            ))}
+            <TouchableOpacity onPress={onClose} hitSlop={8} style={psSt.closeBtn}>
+              <Feather name="x" size={20} color={colors.foreground} />
+            </TouchableOpacity>
+          </View>
+
+          {activeTab === "GROUP BY" ? (
+            <ScrollView showsVerticalScrollIndicator={false} contentContainerStyle={{ gap: 20, paddingTop: 4 }}>
+              <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={{ gap: 8, paddingVertical: 4 }}>
+                {PERIODS_PS.map(p => (
+                  <TouchableOpacity key={p} onPress={() => { Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light); setPeriod(p); }}
+                    style={[psSt.pill, period === p ? { backgroundColor: colors.primary } : { backgroundColor: colors.muted, borderColor: colors.border, borderWidth: 1 }]}>
+                    <Text style={[psSt.pillText, { color: period === p ? "#fff" : colors.foreground }]}>{p}</Text>
+                  </TouchableOpacity>
+                ))}
+              </ScrollView>
+
+              {period === "Monthly" && (
+                <View style={{ gap: 10 }}>
+                  <Text style={[psSt.label, { color: colors.foreground }]}>Start day of month</Text>
+                  <TouchableOpacity style={[psSt.dateField, { backgroundColor: colors.muted, borderColor: colors.border }]} onPress={() => setShowMonthPicker(true)} activeOpacity={0.8}>
+                    <Feather name="calendar" size={15} color={colors.mutedForeground} />
+                    <Text style={[psSt.dateText, { color: colors.foreground }]}>{fmtPS(monthStartDate)}</Text>
+                  </TouchableOpacity>
+                  {showMonthPicker && <DateTimePicker value={monthStartDate} mode="date" display={Platform.OS === "ios" ? "spinner" : "default"} onChange={(_, d) => { setShowMonthPicker(false); if (d) setMonthStartDate(d); }} />}
+                  <View style={psSt.infoRow}><Feather name="info" size={13} color={colors.mutedForeground} /><Text style={[psSt.infoText, { color: colors.mutedForeground }]}>Month will start from Day {monthStartDate.getDate()}</Text></View>
+                </View>
+              )}
+
+              {period === "Weekly" && (
+                <View style={{ gap: 10 }}>
+                  <Text style={[psSt.label, { color: colors.foreground }]}>Start day of week</Text>
+                  <View style={psSt.dayRow}>
+                    {WEEK_DAYS_PS.map((day, i) => (
+                      <TouchableOpacity key={day} onPress={() => { Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light); setWeekStartDay(i); }}
+                        style={[psSt.dayBtn, weekStartDay === i ? { backgroundColor: colors.primary } : { backgroundColor: colors.muted, borderColor: colors.border, borderWidth: 1 }]}>
+                        <Text style={[psSt.dayBtnText, { color: weekStartDay === i ? "#fff" : colors.foreground }]}>{day}</Text>
+                      </TouchableOpacity>
+                    ))}
+                  </View>
+                  <View style={psSt.infoRow}><Feather name="info" size={13} color={colors.mutedForeground} /><Text style={[psSt.infoText, { color: colors.mutedForeground }]}>Week will start every {WEEK_DAYS_PS[weekStartDay]}</Text></View>
+                </View>
+              )}
+
+              {period === "Bi-Weekly" && (
+                <View style={{ gap: 10 }}>
+                  <Text style={[psSt.label, { color: colors.foreground }]}>Start date (Sundays only)</Text>
+                  <TouchableOpacity style={[psSt.dateField, { backgroundColor: colors.muted, borderColor: colors.border }]} onPress={() => setShowBiWeeklyPicker(true)} activeOpacity={0.8}>
+                    <Feather name="calendar" size={15} color={colors.mutedForeground} />
+                    <Text style={[psSt.dateText, { color: colors.foreground }]}>{fmtPS(biWeeklyDate)}</Text>
+                  </TouchableOpacity>
+                  {showBiWeeklyPicker && <DateTimePicker value={biWeeklyDate} mode="date" display={Platform.OS === "ios" ? "spinner" : "default"} onChange={(_, d) => { setShowBiWeeklyPicker(false); if (d) setBiWeeklyDate(snapSun(d)); }} />}
+                  <View style={psSt.infoRow}><Feather name="info" size={13} color={colors.mutedForeground} /><Text style={[psSt.infoText, { color: colors.mutedForeground }]}>Bi-weekly starts Sunday, {fmtPS(biWeeklyDate)}</Text></View>
+                </View>
+              )}
+
+              {period === "Yearly" && (
+                <View style={psSt.infoRow}><Feather name="info" size={13} color={colors.mutedForeground} /><Text style={[psSt.infoText, { color: colors.mutedForeground }]}>Yearly period starts from January 1st</Text></View>
+              )}
+
+              {period === "Custom" && (
+                <View style={{ gap: 14 }}>
+                  <View style={{ gap: 8 }}>
+                    <Text style={[psSt.label, { color: colors.foreground }]}>Start date</Text>
+                    <TouchableOpacity style={[psSt.dateField, { backgroundColor: colors.muted, borderColor: colors.border }]} onPress={() => setShowCustomStart(true)} activeOpacity={0.8}>
+                      <Feather name="calendar" size={15} color={colors.mutedForeground} />
+                      <Text style={[psSt.dateText, { color: colors.foreground }]}>{fmtPS(customStart)}</Text>
+                    </TouchableOpacity>
+                    {showCustomStart && <DateTimePicker value={customStart} mode="date" display={Platform.OS === "ios" ? "spinner" : "default"} onChange={(_, d) => { setShowCustomStart(false); if (d) setCustomStart(d); }} />}
+                  </View>
+                  <View style={{ gap: 8 }}>
+                    <Text style={[psSt.label, { color: colors.foreground }]}>End date</Text>
+                    <TouchableOpacity style={[psSt.dateField, { backgroundColor: colors.muted, borderColor: colors.border }]} onPress={() => setShowCustomEnd(true)} activeOpacity={0.8}>
+                      <Feather name="calendar" size={15} color={colors.mutedForeground} />
+                      <Text style={[psSt.dateText, { color: colors.foreground }]}>{fmtPS(customEnd)}</Text>
+                    </TouchableOpacity>
+                    {showCustomEnd && <DateTimePicker value={customEnd} mode="date" minimumDate={customStart} display={Platform.OS === "ios" ? "spinner" : "default"} onChange={(_, d) => { setShowCustomEnd(false); if (d) setCustomEnd(d); }} />}
+                  </View>
+                </View>
+              )}
+            </ScrollView>
+          ) : (
+            <ScrollView showsVerticalScrollIndicator={false} contentContainerStyle={{ gap: 20, paddingTop: 8 }}>
+              {/* Accounts row */}
+              <View style={{ gap: 12 }}>
+                <View style={psSt.filterSectionRow}>
+                  <Text style={[psSt.label, { color: colors.foreground }]}>Accounts</Text>
+                  <TouchableOpacity
+                    style={[psSt.addBtn, { backgroundColor: colors.primary }]}
+                    onPress={() => setShowAccountPicker(true)}
+                    activeOpacity={0.85}
+                  >
+                    <Feather name="plus" size={16} color="#fff" />
+                  </TouchableOpacity>
+                </View>
+                {(selectedAccountIds ?? []).length > 0 && (
+                  <View style={psSt.chipRow}>
+                    {(selectedAccountIds ?? []).map(id => {
+                      const acc = accounts.find(a => a.id === id);
+                      if (!acc) return null;
+                      return (
+                        <View key={id} style={[psSt.chip, { backgroundColor: (acc.color || colors.primary) + "22", borderColor: acc.color || colors.primary }]}>
+                          <Text style={[psSt.chipText, { color: acc.color || colors.primary }]} numberOfLines={1}>{acc.name}</Text>
+                          <TouchableOpacity onPress={() => toggleAccount(id)} hitSlop={6}>
+                            <Feather name="x" size={12} color={acc.color || colors.primary} />
+                          </TouchableOpacity>
+                        </View>
+                      );
+                    })}
+                  </View>
+                )}
+              </View>
+
+              {/* Account Picker sub-modal */}
+              <Modal visible={showAccountPicker} animationType="fade" transparent onRequestClose={() => setShowAccountPicker(false)}>
+                <View style={psSt.pickerBackdrop}>
+                  <TouchableOpacity style={StyleSheet.absoluteFill} activeOpacity={1} onPress={() => setShowAccountPicker(false)} />
+                  <View style={[psSt.pickerBox, { backgroundColor: colors.card }]}>
+                    <Text style={[psSt.label, { color: colors.foreground, marginBottom: 12 }]}>Select Accounts</Text>
+                    <ScrollView style={{ maxHeight: 300 }} showsVerticalScrollIndicator={false}>
+                      {(accounts ?? []).map(acc => {
+                        const selected = (selectedAccountIds ?? []).includes(acc.id);
+                        return (
+                          <TouchableOpacity
+                            key={acc.id}
+                            style={[psSt.pickerRow, { borderBottomColor: colors.border }]}
+                            onPress={() => { Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light); toggleAccount(acc.id); }}
+                            activeOpacity={0.7}
+                          >
+                            <View style={[psSt.pickerDot, { backgroundColor: acc.color || colors.primary }]} />
+                            <View style={{ flex: 1 }}>
+                              <Text style={[psSt.pickerName, { color: colors.foreground }]} numberOfLines={1}>{acc.name}</Text>
+                              {acc.bank ? <Text style={[psSt.pickerSub, { color: colors.mutedForeground }]} numberOfLines={1}>{acc.bank}</Text> : null}
+                            </View>
+                            <View style={[psSt.checkbox, { borderColor: selected ? colors.primary : colors.border, backgroundColor: selected ? colors.primary : "transparent" }]}>
+                              {selected && <Feather name="check" size={12} color="#fff" />}
+                            </View>
+                          </TouchableOpacity>
+                        );
+                      })}
+                    </ScrollView>
+                    <TouchableOpacity style={[psSt.applyBtn, { backgroundColor: colors.primary, marginTop: 16 }]} onPress={() => setShowAccountPicker(false)} activeOpacity={0.85}>
+                      <Text style={psSt.applyText}>DONE</Text>
+                    </TouchableOpacity>
+                  </View>
+                </View>
+              </Modal>
+            </ScrollView>
+          )}
+
+          {/* Bottom buttons */}
+          {activeTab === "FILTER" ? (
+            <View style={psSt.btnRow}>
+              <TouchableOpacity style={[psSt.clearBtn, { backgroundColor: colors.muted }]} onPress={clearFilter} activeOpacity={0.85}>
+                <Text style={[psSt.clearText, { color: colors.foreground }]}>CLEAR</Text>
+              </TouchableOpacity>
+              <TouchableOpacity style={[psSt.applyBtn, { backgroundColor: colors.primary, flex: 1 }]} onPress={apply} activeOpacity={0.85}>
+                <Text style={psSt.applyText}>APPLY</Text>
+              </TouchableOpacity>
+            </View>
+          ) : (
+            <TouchableOpacity style={[psSt.applyBtn, { backgroundColor: colors.primary }]} onPress={apply} activeOpacity={0.85}>
+              <Text style={psSt.applyText}>APPLY</Text>
+            </TouchableOpacity>
+          )}
+        </View>
+      </View>
+    </Modal>
+  );
+}
+
+const psSt = StyleSheet.create({
+  backdrop:   { flex: 1, justifyContent: "flex-end", backgroundColor: "rgba(0,0,0,0.5)" },
+  sheet:      { borderTopLeftRadius: 24, borderTopRightRadius: 24, paddingHorizontal: 20, paddingTop: 8, minHeight: WIN_H_PS * 0.48, maxHeight: WIN_H_PS * 0.82, gap: 14 },
+  tabRow:     { flexDirection: "row", alignItems: "center", borderBottomWidth: 1, paddingBottom: 0 },
+  tabBtn:     { paddingVertical: 14, paddingHorizontal: 2, marginRight: 28, position: "relative" },
+  tabLabel:   { fontSize: 13, fontFamily: "Inter_700Bold", letterSpacing: 0.5 },
+  tabUnderline: { position: "absolute", bottom: 0, left: 0, right: 0, height: 2, borderRadius: 1 },
+  closeBtn:   { flex: 1, alignItems: "flex-end", paddingVertical: 8 },
+  pill:       { paddingHorizontal: 16, paddingVertical: 9, borderRadius: 20 },
+  pillText:   { fontSize: 14, fontFamily: "Inter_500Medium" },
+  label:      { fontSize: 15, fontFamily: "Inter_600SemiBold" },
+  dateField:  { flexDirection: "row", alignItems: "center", gap: 10, borderRadius: 12, borderWidth: 1, paddingHorizontal: 14, paddingVertical: 13 },
+  dateText:   { fontSize: 15, fontFamily: "Inter_500Medium" },
+  infoRow:    { flexDirection: "row", alignItems: "center", gap: 6 },
+  infoText:   { fontSize: 13, fontFamily: "Inter_400Regular", flex: 1 },
+  dayRow:     { flexDirection: "row", flexWrap: "wrap", gap: 8 },
+  dayBtn:     { paddingHorizontal: 13, paddingVertical: 9, borderRadius: 10 },
+  dayBtnText: { fontSize: 13, fontFamily: "Inter_500Medium" },
+  applyBtn:        { borderRadius: 14, paddingVertical: 16, alignItems: "center", marginTop: 4 },
+  applyText:       { fontSize: 15, fontFamily: "Inter_700Bold", color: "#fff", letterSpacing: 1 },
+  filterSectionRow:{ flexDirection: "row", alignItems: "center", justifyContent: "space-between" },
+  addBtn:          { width: 32, height: 32, borderRadius: 16, alignItems: "center", justifyContent: "center" },
+  chipRow:         { flexDirection: "row", flexWrap: "wrap", gap: 8 },
+  chip:            { flexDirection: "row", alignItems: "center", gap: 6, paddingHorizontal: 12, paddingVertical: 7, borderRadius: 20, borderWidth: 1, maxWidth: 160 },
+  chipText:        { fontSize: 13, fontFamily: "Inter_500Medium", flex: 1 },
+  btnRow:          { flexDirection: "row", gap: 12, marginTop: 4 },
+  clearBtn:        { borderRadius: 14, paddingVertical: 16, alignItems: "center", flex: 1 },
+  clearText:       { fontSize: 15, fontFamily: "Inter_700Bold", letterSpacing: 1 },
+  pickerBackdrop:  { flex: 1, justifyContent: "center", alignItems: "center", backgroundColor: "rgba(0,0,0,0.6)", padding: 24 },
+  pickerBox:       { borderRadius: 20, padding: 20, width: "100%" },
+  pickerRow:       { flexDirection: "row", alignItems: "center", gap: 12, paddingVertical: 14, borderBottomWidth: 1 },
+  pickerDot:       { width: 12, height: 12, borderRadius: 6 },
+  pickerName:      { fontSize: 14, fontFamily: "Inter_500Medium" },
+  pickerSub:       { fontSize: 12, fontFamily: "Inter_400Regular", marginTop: 2 },
+  checkbox:        { width: 22, height: 22, borderRadius: 6, borderWidth: 2, alignItems: "center", justifyContent: "center" },
+});
 
 const SUBTABS = ["CASH FLOW", "SPENDING", "TRENDS", "TRANSACTIONS", "REVIEW"] as const;
 type Subtab = (typeof SUBTABS)[number];
@@ -61,12 +342,14 @@ function ProjectedSection({
   income,
   expense,
   prevExpense,
+  onPress,
 }: {
   colors: any;
   monthLabel: string;
   income: number;
   expense: number;
   prevExpense: number;
+  onPress?: () => void;
 }) {
   const projected = income - expense;
   const expensePct = income > 0 ? Math.min((expense / income) * 100, 100) : expense > 0 ? 100 : 0;
@@ -74,10 +357,10 @@ function ProjectedSection({
   const balanceUp = expense >= prevExpense;
 
   return (
-    <View style={[styles.projectedCard, { backgroundColor: colors.card }]}>
+    <TouchableOpacity activeOpacity={0.8} onPress={onPress} disabled={!onPress} style={[styles.projectedCard, { backgroundColor: colors.card }]}>
       <View style={styles.projectedHeader}>
         <Text style={[styles.projectedTitle, { color: colors.foreground }]}>Projected</Text>
-        <TouchableOpacity style={styles.moreBtn}>
+        <TouchableOpacity style={styles.moreBtn} onPress={onPress}>
           <Text style={[styles.moreText, { color: colors.primary }]}>More</Text>
           <Feather name="chevron-right" size={14} color={colors.primary} />
         </TouchableOpacity>
@@ -121,7 +404,7 @@ function ProjectedSection({
           </Text>
         </View>
       </View>
-    </View>
+    </TouchableOpacity>
   );
 }
 
@@ -228,7 +511,7 @@ function CalendarView({
                 year === todayYear;
               const hasTx = day !== null && txDays.has(day);
               return (
-                <View key={di} style={styles.calCell}>
+                <TouchableOpacity key={di} style={styles.calCell} activeOpacity={0.7} onPress={() => { if (day !== null) onMonthPress(year, currentMonth); }}>
                   {day !== null ? (
                     <View
                       style={[
@@ -249,7 +532,7 @@ function CalendarView({
                       )}
                     </View>
                   ) : null}
-                </View>
+                </TouchableOpacity>
               );
             })}
             {/* fill remaining cells in last row */}
@@ -266,6 +549,7 @@ function CalendarView({
         income={income}
         expense={expense}
         prevExpense={prevData.expense}
+        onPress={() => onMonthPress(year, currentMonth)}
       />
       </ScrollView>
     </View>
@@ -507,7 +791,7 @@ function CashFlowTab({
             const expenseH = maxVal > 0 ? (m.expense / maxVal) * BAR_HEIGHT : 0;
 
             return (
-              <View key={m.label} style={styles.barColumn}>
+              <TouchableOpacity key={m.label} style={styles.barColumn} activeOpacity={0.7} onPress={() => onMonthPress(year, idx)}>
                 <Text style={[styles.barValue, { color: colors.mutedForeground }]}>
                   {m.income > 0 ? Math.round(m.income) : "0"}
                 </Text>
@@ -538,7 +822,7 @@ function CashFlowTab({
                 </View>
 
                 <Text style={[styles.barLabel, { color: colors.mutedForeground }]}>{m.label}</Text>
-              </View>
+              </TouchableOpacity>
             );
           })}
         </View>
@@ -550,6 +834,7 @@ function CashFlowTab({
         income={thisMonthData.income}
         expense={thisMonthData.expense}
         prevExpense={prevMonthData.expense}
+        onPress={() => onMonthPress(year, currentMonth)}
       />
       </ScrollView>
     </View>
@@ -652,13 +937,19 @@ function SpendingTab({
   currentMonth: number;
   setCurrentMonth: (m: number) => void;
 }) {
+  const { categories, accounts } = useApp();
   const year = new Date().getFullYear();
-  const monthStr = new Date(year, currentMonth, 1).toISOString().slice(0, 7);
+  // Build month prefix directly — toISOString() shifts the date in UTC-offset zones
+  const monthStr = `${year}-${String(currentMonth + 1).padStart(2, "0")}`;
   const [spendView, setSpendView] = useState<SpendView>("Category");
   const [includeBills, setIncludeBills] = useState(false);
+  const [selectedCat, setSelectedCat] = useState<string | null>(null);
+  // activeSub filters the transaction list inside the category sheet; null = show all
+  const [activeSub, setActiveSub] = useState<string | null>(null);
+  const [selectedTx, setSelectedTx] = useState<Transaction | null>(null);
 
   const expenseTxs = useMemo(() =>
-    transactions.filter((t) => t.type === "expense" && t.date.startsWith(monthStr)),
+    transactions.filter((t) => t.type === "expense" && t.category !== "Transfer" && t.date.startsWith(monthStr)),
     [transactions, monthStr]
   );
 
@@ -672,16 +963,58 @@ function SpendingTab({
       .reduce((s, b) => s + b.amount, 0);
   }, [bills, includeBills, year, currentMonth]);
 
+  // Helper: find category definition by name
+  const catByName = useCallback((name: string): Category | undefined => {
+    return categories.find((c) => c.name === name);
+  }, [categories]);
+
+  // Helper: resolve transaction category to a main category name.
+  // Case-insensitive so Plaid/email sources (e.g. "food & grocery") match user-defined
+  // categories (e.g. "Food & Grocery") regardless of casing.
+  const resolveMainCategory = useCallback((txCat: string | undefined | null): string => {
+    if (!txCat) return "Other";
+    const lower = txCat.toLowerCase();
+    // "Parent - Sub" format
+    if (txCat.includes(" - ")) {
+      return txCat.split(" - ")[0].trim();
+    }
+    // Exact match on a top-level category (case-insensitive)
+    const topLevel = categories.find((c) => c.name.toLowerCase() === lower && !c.parentId);
+    if (topLevel) return topLevel.name;
+    // Subcategory — return its parent name
+    const sub = categories.find((c) => c.name.toLowerCase() === lower && c.parentId);
+    if (sub) {
+      const parent = categories.find((c) => c.id === sub.parentId);
+      if (parent) return parent.name;
+    }
+    return txCat; // unknown category — use as-is
+  }, [categories]);
+
+  // Helper: resolve transaction category to the subcategory label (or null if top-level).
+  // Returns the canonical name from the categories list when available.
+  const resolveSubCategory = useCallback((txCat: string | undefined | null): string | null => {
+    if (!txCat) return null;
+    if (txCat.includes(" - ")) {
+      return txCat.split(" - ")[1].trim();
+    }
+    const lower = txCat.toLowerCase();
+    const sub = categories.find((c) => c.name.toLowerCase() === lower && c.parentId);
+    if (sub) return sub.name;
+    return null;
+  }, [categories]);
+
+  // Main category breakdown (group by resolved main category)
   const categoryItems = useMemo(() => {
     const totals: Record<string, number> = {};
     expenseTxs.forEach((t) => {
-      totals[t.category] = (totals[t.category] || 0) + t.amount;
+      const main = resolveMainCategory(t.category);
+      totals[main] = (totals[main] || 0) + t.amount;
     });
     if (includeBills && billsTotal > 0) {
       totals["Bills"] = (totals["Bills"] || 0) + billsTotal;
     }
     return Object.entries(totals).sort((a, b) => b[1] - a[1]);
-  }, [expenseTxs, includeBills, billsTotal]);
+  }, [expenseTxs, includeBills, billsTotal, resolveMainCategory]);
 
   const merchantItems = useMemo(() => {
     const totals: Record<string, number> = {};
@@ -697,10 +1030,11 @@ function SpendingTab({
     transactions
       .filter((t) => t.type === "income" && t.date.startsWith(monthStr))
       .forEach((t) => {
-        totals[t.category] = (totals[t.category] || 0) + t.amount;
+        const main = resolveMainCategory(t.category);
+        totals[main] = (totals[main] || 0) + t.amount;
       });
     return Object.entries(totals).sort((a, b) => b[1] - a[1]);
-  }, [transactions, monthStr]);
+  }, [transactions, monthStr, resolveMainCategory]);
 
   const activeItems =
     spendView === "Category" ? categoryItems :
@@ -709,13 +1043,77 @@ function SpendingTab({
 
   const total = activeItems.reduce((s, [, v]) => s + v, 0);
 
+  // All transactions for the selected parent category this month.
+  // This is the authoritative set — all drill-down views derive from it.
+  const categoryTxs = useMemo(() => {
+    if (!selectedCat) return [];
+    const txType = spendView === "Income" ? "income" : "expense";
+    return transactions.filter((t) => {
+      if (t.type !== txType || t.category === "Transfer" || !t.date.startsWith(monthStr)) return false;
+      return resolveMainCategory(t.category) === selectedCat;
+    });
+  }, [selectedCat, transactions, monthStr, spendView, resolveMainCategory]);
+
+  // Subcategory breakdown of categoryTxs (for the donut + filter chips).
+  const subcategoryItems = useMemo(() => {
+    const totals: Record<string, number> = {};
+    categoryTxs.forEach((t) => {
+      const sub = resolveSubCategory(t.category) || resolveMainCategory(t.category);
+      totals[sub] = (totals[sub] || 0) + t.amount;
+    });
+    return Object.entries(totals).sort((a, b) => b[1] - a[1]);
+  }, [categoryTxs, resolveSubCategory, resolveMainCategory]);
+
+  const subcatTotal = categoryTxs.reduce((s, t) => s + t.amount, 0);
+
+  // Transactions shown in the drill-down sheet: all category txs unless a
+  // subcategory chip is active, in which case filter to that sub only.
+  const sheetTransactions = useMemo(() => {
+    if (!activeSub) return categoryTxs;
+    return categoryTxs.filter((t) => {
+      const sub = resolveSubCategory(t.category) || resolveMainCategory(t.category);
+      return sub === activeSub;
+    });
+  }, [categoryTxs, activeSub, resolveSubCategory, resolveMainCategory]);
+
+  const getCatVisual = (name: string) => {
+    const cat = catByName(name);
+    return {
+      color: cat?.color || CATEGORY_COLORS[name] || colors.primary,
+      icon: (cat?.icon || CATEGORY_ICONS[name] || "circle") as any,
+    };
+  };
+
   const donutSegments = activeItems.map(([key, amt]) => ({
-    color: CATEGORY_COLORS[key] || colors.primary,
+    color: getCatVisual(key).color,
     pct: total > 0 ? (amt / total) * 100 : 0,
   }));
 
+  const subcatDonutSegments = subcategoryItems.map(([key, amt]) => {
+    const parentCat = catByName(selectedCat || "");
+    const subCat = categories.find((c) => c.name === key && c.parentId);
+    const segColor = subCat?.color || parentCat?.color || colors.primary;
+    return {
+      color: segColor,
+      pct: subcatTotal > 0 ? (amt / subcatTotal) * 100 : 0,
+    };
+  });
+
   const DONUT_SIZE = 200;
   const DONUT_STROKE = 36;
+  const MODAL_DONUT_SIZE = 160;
+  const MODAL_DONUT_STROKE = 28;
+
+  const handleCatPress = (key: string) => {
+    Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
+    setSelectedCat(key);
+    setActiveSub(null);
+  };
+
+  const handleSubChipPress = (key: string) => {
+    Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
+    setActiveSub((prev) => (prev === key ? null : key));
+  };
 
   return (
     <View style={{ flex: 1 }}>
@@ -787,15 +1185,19 @@ function SpendingTab({
           </View>
         )}
 
-        {/* Category / Merchant / Income rows */}
+        {/* Category / Merchant / Income rows — tappable for drill-in */}
         {activeItems.map(([key, amt]) => {
           const pct = total > 0 ? (amt / total) * 100 : 0;
-          const color = CATEGORY_COLORS[key] || colors.primary;
-          const icon = (CATEGORY_ICONS[key] || "circle") as any;
+          const vis = getCatVisual(key);
           return (
-            <View key={key} style={styles.spendItemRow}>
-              <View style={[styles.spendItemIcon, { backgroundColor: color + "20" }]}>
-                <Feather name={icon} size={18} color={color} />
+            <TouchableOpacity
+              key={key}
+              style={styles.spendItemRow}
+              activeOpacity={0.7}
+              onPress={() => (spendView === "Category" || spendView === "Income") ? handleCatPress(key) : undefined}
+            >
+              <View style={[styles.spendItemIcon, { backgroundColor: vis.color + "20" }]}>
+                <Feather name={vis.icon} size={18} color={vis.color} />
               </View>
               <View style={styles.spendItemInfo}>
                 <Text style={[styles.spendItemName, { color: colors.foreground }]}>{key}</Text>
@@ -805,12 +1207,153 @@ function SpendingTab({
                 <Text style={[styles.spendItemAmt, { color: colors.foreground }]}>
                   ${amt.toFixed(2)}
                 </Text>
-                <View style={[styles.spendItemBar, { backgroundColor: color }]} />
+                <View style={[styles.spendItemBar, { backgroundColor: vis.color }]} />
               </View>
-            </View>
+            </TouchableOpacity>
           );
         })}
       </ScrollView>
+
+      {/* ── Category Detail Sheet (subcategory donut + ALL transactions) ── */}
+      <Modal
+        visible={!!selectedCat}
+        transparent
+        animationType="slide"
+        onRequestClose={() => { setSelectedCat(null); setActiveSub(null); }}
+      >
+        <TouchableOpacity
+          style={styles.sheetOverlay}
+          activeOpacity={1}
+          onPress={() => { setSelectedCat(null); setActiveSub(null); }}
+        />
+        <View style={[styles.sheetContainer, { backgroundColor: colors.background }]}>
+          {/* Header */}
+          <View style={styles.sheetHeader}>
+            <TouchableOpacity
+              hitSlop={12}
+              onPress={() => { setSelectedCat(null); setActiveSub(null); }}
+            >
+              <Feather name="arrow-left" size={20} color={colors.foreground} />
+            </TouchableOpacity>
+            <Text style={[styles.sheetTitle, { color: colors.foreground }]}>{selectedCat}</Text>
+            <TouchableOpacity onPress={() => { setSelectedCat(null); setActiveSub(null); }} hitSlop={12}>
+              <Feather name="x" size={22} color={colors.foreground} />
+            </TouchableOpacity>
+          </View>
+
+          <ScrollView showsVerticalScrollIndicator={false} contentContainerStyle={{ paddingBottom: 40 }}>
+            {/* Donut — only if there are multiple subcategories */}
+            {subcatTotal > 0 && (
+              <View style={[styles.spendDonutCard, { backgroundColor: colors.card, marginHorizontal: 16, marginTop: 12 }]}>
+                <View style={styles.donutCenterWrap}>
+                  <DonutRing segments={subcatDonutSegments} size={MODAL_DONUT_SIZE} stroke={MODAL_DONUT_STROKE} />
+                  <View style={styles.donutCenterAbs}>
+                    <Text style={[styles.donutCenterLabel, { color: colors.mutedForeground }]}>Total</Text>
+                    <Text style={[styles.donutCenterAmount, { color: colors.foreground }]}>
+                      ${subcatTotal >= 1000 ? `${(subcatTotal / 1000).toFixed(1)}k` : subcatTotal.toFixed(2)}
+                    </Text>
+                  </View>
+                </View>
+              </View>
+            )}
+
+            {/* Subcategory filter chips — only show when there are multiple subs */}
+            {subcategoryItems.length > 1 && (
+              <ScrollView
+                horizontal
+                showsHorizontalScrollIndicator={false}
+                contentContainerStyle={{ paddingHorizontal: 16, paddingVertical: 10, gap: 8 }}
+              >
+                {subcategoryItems.map(([key, amt]) => {
+                  const parentCat = catByName(selectedCat || "");
+                  const subCat = categories.find((c) => c.name === key && c.parentId);
+                  const col = subCat?.color || parentCat?.color || colors.primary;
+                  const isActive = activeSub === key;
+                  return (
+                    <TouchableOpacity
+                      key={key}
+                      style={[
+                        styles.subFilterChip,
+                        {
+                          backgroundColor: isActive ? col : col + "18",
+                          borderColor: col,
+                        },
+                      ]}
+                      onPress={() => handleSubChipPress(key)}
+                    >
+                      <Text style={[styles.subFilterChipText, { color: isActive ? "#fff" : col }]}>
+                        {key}
+                      </Text>
+                      <Text style={[styles.subFilterChipAmt, { color: isActive ? "#ffffffcc" : col + "cc" }]}>
+                        ${amt.toFixed(0)}
+                      </Text>
+                    </TouchableOpacity>
+                  );
+                })}
+              </ScrollView>
+            )}
+
+            {/* Transaction list — ALL category transactions, filtered by activeSub if set */}
+            <View style={{ paddingHorizontal: 16, paddingTop: 4 }}>
+              <Text style={[styles.sheetSectionLabel, { color: colors.mutedForeground }]}>
+                {sheetTransactions.length} transaction{sheetTransactions.length !== 1 ? "s" : ""}
+                {activeSub ? ` · ${activeSub}` : ""}
+              </Text>
+            </View>
+            {sheetTransactions.length === 0 ? (
+              <Text style={[styles.emptyText, { color: colors.mutedForeground, textAlign: "center", paddingVertical: 24 }]}>
+                No transactions
+              </Text>
+            ) : (
+              sheetTransactions
+                .slice()
+                .sort((a, b) => b.date.localeCompare(a.date))
+                .map((t) => {
+                  const acc = accounts.find((a) => a.id === t.accountId);
+                  const dt = new Date(t.date);
+                  const dateStr = dt.toLocaleDateString("en-US", { month: "short", day: "numeric", year: "numeric" });
+                  const subLabel = resolveSubCategory(t.category);
+                  const vis = getCatVisual(subLabel || selectedCat || t.category);
+                  return (
+                    <TouchableOpacity
+                      key={t.id}
+                      style={[styles.txnRow, { borderBottomColor: colors.border }]}
+                      activeOpacity={0.7}
+                      onPress={() => {
+                        Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
+                        setSelectedTx(t);
+                      }}
+                    >
+                      <View style={[styles.spendItemIcon, { backgroundColor: vis.color + "20" }]}>
+                        <Feather name={vis.icon} size={18} color={vis.color} />
+                      </View>
+                      <View style={{ flex: 1 }}>
+                        <Text style={[styles.spendItemName, { color: colors.foreground }]}>{t.title}</Text>
+                        <Text style={[styles.spendItemPct, { color: colors.mutedForeground }]}>{dateStr}</Text>
+                        {acc && (
+                          <Text style={[styles.spendItemPct, { color: colors.mutedForeground }]}>
+                            {acc.bank ? `${acc.bank} · ` : ""}{acc.name}
+                            {t.source === "plaid" ? " · Plaid" : t.source === "email" ? " · Email" : ""}
+                          </Text>
+                        )}
+                      </View>
+                      <Text style={[styles.spendItemAmt, { color: colors.foreground }]}>
+                        ${t.amount.toFixed(2)}
+                      </Text>
+                    </TouchableOpacity>
+                  );
+                })
+            )}
+          </ScrollView>
+        </View>
+      </Modal>
+
+      {/* ── Transaction Detail / Edit Modal ─────────────────────────── */}
+      <TransactionDetailModal
+        visible={!!selectedTx}
+        onClose={() => setSelectedTx(null)}
+        transaction={selectedTx}
+      />
     </View>
   );
 }
@@ -893,53 +1436,60 @@ function TrendsTab({ transactions, colors }: { transactions: Transaction[]; colo
 const TX_FILTERS = ["All", "Expenses", "Income", "Transfer"] as const;
 type TxFilter = (typeof TX_FILTERS)[number];
 
-function TransactionsTab({ transactions, colors }: { transactions: Transaction[]; colors: any }) {
+function TransactionsTab({ transactions, colors, showFilter, setShowFilter }: { transactions: Transaction[]; colors: any; showFilter: boolean; setShowFilter: (v: boolean) => void }) {
   const [filter, setFilter] = useState<TxFilter>("All");
   const [showAdd, setShowAdd] = useState(false);
   const [selectedTx, setSelectedTx] = useState<Transaction | null>(null);
-  const [showFilter, setShowFilter] = useState(false);
-  const [filterSettings, setFilterSettings] = useState<BillFilterSettings>(DEFAULT_FILTER);
+  const [filterSettings, setFilterSettings] = useState<TxFilterSettings>(DEFAULT_TX_FILTER);
 
-  const dedupKey = useCallback((t: Transaction) => {
-    const bank = (t.bank ?? "").toLowerCase().trim();
-    const accountId = (t.accountId ?? "").toLowerCase().trim();
-    const source = (t.source ?? "").toLowerCase().trim();
-    return `${source}|${bank}|${accountId}|${t.amount}|${t.title.toLowerCase().trim()}|${t.date.slice(0, 10)}`;
-  }, []);
-
+  // transactions prop is already deduplicated + reviewed-only (from InsightsScreen visibleTxs)
   const filtered = useMemo(() => {
-    if (filter === "Expenses") return transactions.filter((t) => t.type === "expense" && t.category !== "Transfer");
-    if (filter === "Income") return transactions.filter((t) => t.type === "income");
-    if (filter === "Transfer") return transactions.filter((t) => t.category === "Transfer");
-    return transactions;
-  }, [transactions, filter]);
-
-  const uniqueFiltered = useMemo(() => {
-    const seen = new Set<string>();
-    return filtered.filter((t) => {
-      const key = dedupKey(t);
-      if (seen.has(key)) return false;
-      seen.add(key);
-      return true;
-    });
-  }, [filtered, dedupKey]);
+    let result = transactions;
+    // Type filter (chip bar + filterSettings.type both apply)
+    const typeFilter = filterSettings.type !== "All" ? filterSettings.type : filter;
+    if (typeFilter === "Expenses") result = result.filter((t) => t.type === "expense" && t.category !== "Transfer");
+    else if (typeFilter === "Income") result = result.filter((t) => t.type === "income");
+    else if (typeFilter === "Transfer") result = result.filter((t) => t.category === "Transfer");
+    // Categories
+    if (filterSettings.categories.length > 0)
+      result = result.filter((t) => filterSettings.categories.includes(t.category));
+    // Accounts
+    if (filterSettings.accountIds.length > 0)
+      result = result.filter((t) => filterSettings.accountIds.includes(t.accountId));
+    // Date range
+    if (filterSettings.dateFrom)
+      result = result.filter((t) => t.date >= filterSettings.dateFrom);
+    if (filterSettings.dateTo)
+      result = result.filter((t) => t.date <= filterSettings.dateTo + "T23:59:59");
+    // Amount range
+    if (filterSettings.amountMin !== "")
+      result = result.filter((t) => t.amount >= parseFloat(filterSettings.amountMin));
+    if (filterSettings.amountMax !== "")
+      result = result.filter((t) => t.amount <= parseFloat(filterSettings.amountMax));
+    // Notes
+    if (filterSettings.notes.trim())
+      result = result.filter((t) => (t.note ?? "").toLowerCase().includes(filterSettings.notes.toLowerCase()));
+    return result;
+  }, [transactions, filter, filterSettings]);
 
   const grouped = useMemo(() => {
     const groups: { dateKey: string; dateLabel: string; total: number; hasExpense: boolean; items: Transaction[] }[] = [];
     const today = new Date();
     const yesterday = new Date(today);
     yesterday.setDate(today.getDate() - 1);
+    const currentYear = today.getFullYear();
 
-    uniqueFiltered.forEach((t) => {
+    filtered.forEach((t) => {
       const d = new Date(t.date);
       const dateKey = d.toDateString();
       const isToday = dateKey === today.toDateString();
       const isYesterday = dateKey === yesterday.toDateString();
+      const isCurrentYear = d.getFullYear() === currentYear;
       const dateLabel = isToday
         ? "Today"
         : isYesterday
         ? "Yesterday"
-        : d.toLocaleDateString("en-US", { weekday: "short", month: "short", day: "numeric" });
+        : d.toLocaleDateString("en-US", { weekday: "short", month: "short", day: "numeric", ...(isCurrentYear ? {} : { year: "numeric" }) });
 
       let group = groups.find((g) => g.dateKey === dateKey);
       if (!group) {
@@ -953,7 +1503,7 @@ function TransactionsTab({ transactions, colors }: { transactions: Transaction[]
       }
     });
     return groups;
-  }, [uniqueFiltered]);
+  }, [filtered]);
 
   type FlatItem =
     | { type: "header"; dateLabel: string; total: number; hasExpense: boolean }
@@ -986,12 +1536,6 @@ function TransactionsTab({ transactions, colors }: { transactions: Transaction[]
             </TouchableOpacity>
           ))}
         </View>
-        <TouchableOpacity
-          style={[styles.txFilterButton, { backgroundColor: colors.card, borderColor: colors.border }]}
-          onPress={() => setShowFilter(true)}
-        >
-          <Feather name="sliders" size={18} color={colors.foreground} />
-        </TouchableOpacity>
       </View>
 
       {/* View Recurring Transactions */}
@@ -1047,7 +1591,7 @@ function TransactionsTab({ transactions, colors }: { transactions: Transaction[]
         onClose={() => setSelectedTx(null)}
         transaction={selectedTx}
       />
-      <BillFilterModal
+      <TransactionFilterModal
         visible={showFilter}
         current={filterSettings}
         onApply={(s) => {
@@ -1134,8 +1678,14 @@ function ReviewTab({
   );
 }
 
+// Dedup key identical to TransactionsTab so both views work on the same set
+function txDedupKey(t: Transaction): string {
+  return `${(t.source ?? "").toLowerCase()}|${(t.bank ?? "").toLowerCase()}|${(t.accountId ?? "").toLowerCase()}|${t.amount}|${(t.title ?? "").toLowerCase().trim()}|${(t.date ?? "").slice(0, 10)}`;
+}
+
 export default function InsightsScreen() {
   const colors = useColors();
+  const { openDrawer } = useDrawer();
   const { transactions, bills, accounts, addTransaction, reviewedTransactionIds } = useApp();
   const [activeTab, setActiveTab] = useState<Subtab>("CASH FLOW");
 
@@ -1154,8 +1704,30 @@ export default function InsightsScreen() {
     }
   }, [visibleTabs, activeTab]);
 
+  // Reviewed + deduplicated transaction list — same logic as TransactionsTab so all
+  // insight views are consistent with what the user can actually see.
+  const visibleTxs = useMemo(() => {
+    const reviewed = transactions.filter((t) => {
+      const isUnreviewedEmail = (t.fromEmail || t.source === "email") && !reviewedTransactionIds.includes(t.id);
+      return !isUnreviewedEmail;
+    });
+    const seenIds = new Set<string>();
+    const seenContent = new Set<string>();
+    return reviewed.filter((t) => {
+      if (seenIds.has(t.id)) return false;
+      const key = txDedupKey(t);
+      if (seenContent.has(key)) return false;
+      seenIds.add(t.id);
+      seenContent.add(key);
+      return true;
+    });
+  }, [transactions, reviewedTransactionIds]);
+
   const [chartView, setChartView] = useState<ChartView>("Chart");
   const [showAdd, setShowAdd] = useState(false);
+  const [showFilter, setShowFilter] = useState(false);
+  const [showPeriodSettings, setShowPeriodSettings] = useState(false);
+  const [periodSettings, setPeriodSettings] = useState<PeriodSettings>(DEFAULT_PERIOD_SETTINGS);
   const currentMonthIdx = new Date().getMonth();
   const [currentMonth, setCurrentMonth] = useState(currentMonthIdx);
   const [selectedMonth, setSelectedMonth] = useState<{ year: number; month: number } | null>(null);
@@ -1169,15 +1741,19 @@ export default function InsightsScreen() {
     <SafeAreaView edges={["top"]} style={[styles.container, { backgroundColor: colors.background }]}>
       {/* Header */}
       <View style={[styles.header, { paddingTop: Platform.OS === "web" ? 60 : 8, backgroundColor: colors.background }]}>
-        <TouchableOpacity style={styles.headerIcon}>
+        <TouchableOpacity style={styles.headerIcon} onPress={() => { Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light); openDrawer(); }}>
           <Feather name="menu" size={22} color={colors.foreground} />
         </TouchableOpacity>
         <Text style={[styles.headerTitle, { color: colors.foreground }]}>Insights</Text>
         <View style={styles.headerActions}>
-          <TouchableOpacity style={[styles.gearBtn, { backgroundColor: colors.muted }]}>
-            <Feather name="settings" size={18} color={colors.mutedForeground} />
-          </TouchableOpacity>
-          <TouchableOpacity style={styles.headerIcon}>
+          <TouchableOpacity
+            style={styles.headerIcon}
+            onPress={() => {
+              Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
+              if (activeTab === "TRANSACTIONS") setShowFilter(true);
+              else setShowPeriodSettings(true);
+            }}
+          >
             <Feather name="sliders" size={20} color={colors.primary} />
           </TouchableOpacity>
           <TouchableOpacity style={styles.headerIcon}>
@@ -1199,6 +1775,7 @@ export default function InsightsScreen() {
                 styles.subtabText,
                 { color: activeTab === tab ? colors.primary : colors.mutedForeground },
               ]}
+              numberOfLines={1}
             >
               {tab}
               {tab === "REVIEW" && pendingReviewCount > 0 && (
@@ -1223,13 +1800,13 @@ export default function InsightsScreen() {
           />
         )}
         {activeTab === "SPENDING" && (
-          <SpendingTab transactions={transactions} bills={bills} colors={colors} currentMonth={currentMonth} setCurrentMonth={setCurrentMonth} />
+          <SpendingTab transactions={visibleTxs} bills={bills} colors={colors} currentMonth={currentMonth} setCurrentMonth={setCurrentMonth} />
         )}
         {activeTab === "TRENDS" && (
-          <TrendsTab transactions={transactions} colors={colors} />
+          <TrendsTab transactions={visibleTxs} colors={colors} />
         )}
         {activeTab === "TRANSACTIONS" && (
-          <TransactionsTab transactions={transactions} colors={colors} />
+          <TransactionsTab transactions={visibleTxs} colors={colors} showFilter={showFilter} setShowFilter={setShowFilter} />
         )}
         {activeTab === "REVIEW" && (
           <ReviewTab
@@ -1249,6 +1826,12 @@ export default function InsightsScreen() {
       </TouchableOpacity>
 
       <AddEntrySheet visible={showAdd} initialTab="EXPENSE" onClose={() => setShowAdd(false)} />
+      <PeriodSettingsSheet
+        visible={showPeriodSettings}
+        onClose={() => setShowPeriodSettings(false)}
+        onApply={(s) => setPeriodSettings(s)}
+        initial={periodSettings}
+      />
       <MonthDetailModal
         visible={!!selectedMonth}
         onClose={() => setSelectedMonth(null)}
@@ -1306,9 +1889,10 @@ const styles = StyleSheet.create({
     borderBottomColor: "transparent",
   },
   subtabText: {
-    fontSize: 11,
+    fontSize: 10,
     fontFamily: "Inter_600SemiBold",
-    letterSpacing: 0.5,
+    letterSpacing: 0.3,
+    textAlign: "center",
   },
   reviewRow: {
     flexDirection: "row",
@@ -1999,5 +2583,57 @@ const styles = StyleSheet.create({
   monthlyBalanceFinal: {
     fontSize: 14,
     fontFamily: "Inter_600SemiBold",
+  },
+  sheetOverlay: {
+    flex: 1,
+    backgroundColor: "rgba(0,0,0,0.45)",
+  },
+  sheetContainer: {
+    maxHeight: "70%",
+    borderTopLeftRadius: 22,
+    borderTopRightRadius: 22,
+    paddingTop: 8,
+    paddingBottom: 20,
+  },
+  sheetHeader: {
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "space-between",
+    paddingHorizontal: 20,
+    paddingVertical: 14,
+  },
+  sheetTitle: {
+    fontSize: 17,
+    fontFamily: "Inter_600SemiBold",
+  },
+  txnRow: {
+    flexDirection: "row",
+    alignItems: "center",
+    paddingHorizontal: 16,
+    paddingVertical: 14,
+    borderBottomWidth: StyleSheet.hairlineWidth,
+    gap: 12,
+  },
+  subFilterChip: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 6,
+    paddingHorizontal: 12,
+    paddingVertical: 7,
+    borderRadius: 20,
+    borderWidth: 1,
+  },
+  subFilterChipText: {
+    fontSize: 13,
+    fontFamily: "Inter_500Medium",
+  },
+  subFilterChipAmt: {
+    fontSize: 12,
+    fontFamily: "Inter_400Regular",
+  },
+  sheetSectionLabel: {
+    fontSize: 12,
+    fontFamily: "Inter_400Regular",
+    paddingBottom: 6,
   },
 });

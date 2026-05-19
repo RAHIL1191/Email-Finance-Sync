@@ -22,7 +22,8 @@ import { SafeAreaView, useSafeAreaInsets } from "react-native-safe-area-context"
 import AddAccountModal from "@/components/AddAccountModal";
 import ConfirmModal from "@/components/ConfirmModal";
 import PlaidLinkModal from "@/components/PlaidLinkModal";
-import { Account, PlaidItem, PLAID_BANKS, computeBalance, useApp } from "@/context/AppContext";
+import { Account, PlaidItem, PLAID_BANKS, computeBalance, isIncludedInNetworth, useApp } from "@/context/AppContext";
+import { useDrawer } from "@/context/DrawerContext";
 import { useColors } from "@/hooks/useColors";
 
 const { width: SCREEN_W } = Dimensions.get("window");
@@ -93,15 +94,25 @@ function NetWorthChart({ balance, colors }: { balance: number; colors: any }) {
   );
 }
 
-// ── Account Row (new flat design) ─────────────────────────────────────────────
+// ── Premium Matte Account Card ────────────────────────────────────────────────
 
-function AccountRow({
-  account,
-  isLast,
-}: {
-  account: Account;
-  isLast: boolean;
-}) {
+function getAccountGroupKey(account: Account): string {
+  const text = `${account.name} ${account.bank}`.toLowerCase();
+  if (text.includes("mortgage")) return "mortgage";
+  if (text.includes("loan") || text.includes("lending") || text.includes("borrow")) return "loan";
+  return account.type;
+}
+
+const GROUP_META: Record<string, { label: string; icon: string; color: string; isLiability: boolean; order: number }> = {
+  checking:   { label: "Chequing",   icon: "layers",          color: "#3b82f6", isLiability: false, order: 1 },
+  savings:    { label: "Savings",    icon: "shield",          color: "#22c55e", isLiability: false, order: 2 },
+  credit:     { label: "Credit",     icon: "credit-card",     color: "#f59e0b", isLiability: true,  order: 3 },
+  mortgage:   { label: "Mortgage",   icon: "home",            color: "#ef4444", isLiability: true,  order: 4 },
+  loan:       { label: "Loan",       icon: "arrow-down-right",color: "#f97316", isLiability: true,  order: 5 },
+  investment: { label: "Investment", icon: "trending-up",     color: "#8b5cf6", isLiability: false, order: 6 },
+};
+
+function PremiumAccountCard({ account }: { account: Account }) {
   const colors = useColors();
   const [showDeleteConfirm, setShowDeleteConfirm] = React.useState(false);
   const { deleteAccount, transactions } = useApp();
@@ -111,17 +122,17 @@ function AccountRow({
     (b) => b.name.toLowerCase() === (account.bank ?? "").toLowerCase()
   );
   const initials = bankInitials(account.bank, account.name);
-  const typeLabel =
-    account.type === "checking" ? "Chequing"
-    : account.type === "savings" ? "Savings"
-    : account.type === "credit" ? "Credit"
-    : "Investment";
+  const groupKey = getAccountGroupKey(account);
+  const groupMeta = GROUP_META[groupKey] ?? GROUP_META.checking;
+  const typeLabel = groupMeta.label;
+  const typeIcon  = groupMeta.icon;
+
   return (
     <>
       <TouchableOpacity
         style={[
-          styles.acctRow,
-          !isLast && { borderBottomWidth: StyleSheet.hairlineWidth, borderBottomColor: colors.border },
+          styles.premiumCard,
+          { backgroundColor: colors.card, borderColor: colors.border },
         ]}
         onPress={() => {
           Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
@@ -131,32 +142,59 @@ function AccountRow({
           Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium);
           setShowDeleteConfirm(true);
         }}
-        activeOpacity={0.7}
+        activeOpacity={0.75}
       >
-        <View style={[styles.acctBadge, { backgroundColor: account.color }]}>
+        <View style={[styles.premiumBadge, { backgroundColor: account.color + "22" }]}>
           {bankMeta ? (
-            <Text style={styles.acctBadgeEmoji}>{bankMeta.icon}</Text>
+            <Text style={styles.premiumBadgeEmoji}>{bankMeta.icon}</Text>
           ) : (
-            <Text style={styles.acctBadgeText}>{initials}</Text>
+            <Text style={[styles.premiumBadgeText, { color: account.color }]}>{initials}</Text>
           )}
         </View>
-        <View style={styles.acctInfo}>
-          <Text style={[styles.acctName, { color: colors.foreground }]} numberOfLines={1}>
+
+        <View style={styles.premiumInfo}>
+          <Text style={[styles.premiumName, { color: colors.foreground }]} numberOfLines={1}>
             {account.name}
           </Text>
-          <Text style={[styles.acctSub, { color: colors.mutedForeground }]} numberOfLines={1}>
-            {typeLabel}
-            {account.bank ? ` · ${account.bank}` : ""}
-            {account.lastFour ? ` · ••••${account.lastFour}` : ""}
-          </Text>
+          <View style={styles.premiumMeta}>
+            <View style={[styles.premiumTypeBadge, { backgroundColor: account.color + "18" }]}>
+              <Feather name={typeIcon as any} size={9} color={account.color} />
+              <Text style={[styles.premiumTypeText, { color: account.color }]}>{typeLabel}</Text>
+            </View>
+            {account.lastFour ? (
+              <Text style={[styles.premiumLastFour, { color: colors.mutedForeground }]}>••••{account.lastFour}</Text>
+            ) : null}
+          </View>
+          <View style={{ flexDirection: "row", alignItems: "center", gap: 8, flexWrap: "wrap" }}>
+            {account.bank && !account.name.toLowerCase().includes(account.bank.toLowerCase()) ? (
+              <Text style={[styles.premiumBankSub, { color: colors.mutedForeground }]} numberOfLines={1}>
+                {account.bank}
+              </Text>
+            ) : null}
+            {account.accountHolder ? (
+              <View style={[styles.holderBadge, { backgroundColor: colors.muted }]}>
+                <Feather name="user" size={9} color={colors.mutedForeground} />
+                <Text style={[styles.holderText, { color: colors.mutedForeground }]} numberOfLines={1}>
+                  {account.accountHolder}
+                </Text>
+              </View>
+            ) : null}
+          </View>
         </View>
-        <Text style={[styles.acctBal, { color: isNeg ? colors.expense : colors.foreground }]}>
-          {isNeg ? "- " : ""}$
-          {Math.abs(liveBalance).toLocaleString("en-US", {
-            minimumFractionDigits: 2,
-            maximumFractionDigits: 2,
-          })}
-        </Text>
+
+        <View style={styles.premiumRight}>
+          <Text
+            style={[styles.premiumBalance, { color: isNeg ? colors.expense : colors.foreground }]}
+            numberOfLines={1}
+          >
+            {isNeg ? "-" : ""}${Math.abs(liveBalance).toLocaleString("en-US", {
+              minimumFractionDigits: 2, maximumFractionDigits: 2,
+            })}
+          </Text>
+          <Feather name="chevron-right" size={15} color={colors.mutedForeground} />
+        </View>
+
+        <View style={[styles.premiumAccentBar, { backgroundColor: account.color }]} />
       </TouchableOpacity>
 
       <ConfirmModal
@@ -166,10 +204,7 @@ function AccountRow({
         confirmLabel="Delete"
         confirmDestructive
         onCancel={() => setShowDeleteConfirm(false)}
-        onConfirm={() => {
-          setShowDeleteConfirm(false);
-          deleteAccount(account.id);
-        }}
+        onConfirm={() => { setShowDeleteConfirm(false); deleteAccount(account.id); }}
       />
     </>
   );
@@ -178,40 +213,47 @@ function AccountRow({
 // ── Account Group ─────────────────────────────────────────────────────────────
 
 function AccountGroup({
-  title,
-  accounts,
-  total,
+  title, accounts, total, icon, isLiability, collapsed, onToggle,
 }: {
-  title: string;
-  accounts: Account[];
-  total: number;
+  title: string; accounts: Account[]; total: number; icon: string;
+  isLiability?: boolean; collapsed: boolean; onToggle: () => void;
 }) {
   const colors = useColors();
-  const isNeg = total < 0;
+  const accentColor = isLiability ? colors.expense : colors.primary;
 
   return (
-    <View>
-      <View style={styles.groupHeader}>
-        <View style={{ flexDirection: "row", alignItems: "center", gap: 6 }}>
+    <View style={[styles.group, { borderColor: colors.border }]}>
+      <TouchableOpacity
+        style={styles.groupHeader}
+        onPress={() => { Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light); onToggle(); }}
+        activeOpacity={0.7}
+      >
+        <View style={{ flexDirection: "row", alignItems: "center", gap: 8, flex: 1 }}>
+          <View style={[styles.groupIconBg, { backgroundColor: accentColor + "18" }]}>
+            <Feather name={icon as any} size={13} color={accentColor} />
+          </View>
           <Text style={[styles.groupTitle, { color: colors.foreground }]}>{title}</Text>
+          <View style={[styles.groupCountBadge, { backgroundColor: colors.muted }]}>
+            <Text style={[styles.groupCountText, { color: colors.mutedForeground }]}>{accounts.length}</Text>
+          </View>
         </View>
-        <Text style={[styles.groupTotal, { color: isNeg ? colors.expense : colors.foreground }]}>
-          {isNeg ? "- " : ""}$
-          {Math.abs(total).toLocaleString("en-US", {
-            minimumFractionDigits: 2,
-            maximumFractionDigits: 2,
-          })}
-        </Text>
-      </View>
-      <View style={[styles.groupCard, { backgroundColor: colors.card, borderColor: colors.border }]}>
-        {accounts.map((a, i) => (
-          <AccountRow
-            key={a.id}
-            account={a}
-            isLast={i === accounts.length - 1}
+        <View style={{ flexDirection: "row", alignItems: "center", gap: 8 }}>
+          <Text style={[styles.groupTotal, { color: isLiability ? colors.expense : colors.foreground }]}>
+            ${Math.abs(total).toLocaleString("en-US", { minimumFractionDigits: 0, maximumFractionDigits: 0 })}
+          </Text>
+          <Feather
+            name={collapsed ? "chevron-down" : "chevron-up"}
+            size={16}
+            color={colors.mutedForeground}
           />
-        ))}
-      </View>
+        </View>
+      </TouchableOpacity>
+
+      {!collapsed && (
+        <View style={{ gap: 8, paddingTop: 10 }}>
+          {accounts.map((a) => <PremiumAccountCard key={a.id} account={a} />)}
+        </View>
+      )}
     </View>
   );
 }
@@ -346,11 +388,12 @@ function EmailConnectModal({ onClose }: { onClose: () => void }) {
 
 // ── Plaid item panel ──────────────────────────────────────────────────────────
 
-function PlaidItemPanel({ item }: { item: PlaidItem }) {
+function PlaidItemPanel({ item, onRelink }: { item: PlaidItem; onRelink: (item: PlaidItem) => void }) {
   const colors = useColors();
-  const { syncPlaidTransactions, disconnectPlaid, isSyncing } = useApp();
+  const { syncPlaidTransactions, delinkPlaid, disconnectPlaid, isSyncing } = useApp();
   const [syncResult, setSyncResult] = useState<{ imported: number; parsed?: Array<{ title?: string; merchant?: string; amount: number; type?: string; bank?: string; rawSubject?: string }>; error?: string } | null>(null);
-  const [showDisconnectConfirm, setShowDisconnectConfirm] = useState(false);
+  const [showDelinkConfirm, setShowDelinkConfirm] = useState(false);
+  const [showRemoveConfirm, setShowRemoveConfirm] = useState(false);
 
   const handleSync = async () => {
     Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium);
@@ -359,8 +402,6 @@ function PlaidItemPanel({ item }: { item: PlaidItem }) {
     setSyncResult(result);
     if (result.imported > 0) Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
   };
-
-  const handleDisconnect = () => setShowDisconnectConfirm(true);
 
   return (
     <View style={[styles.plaidPanel, { backgroundColor: colors.card, borderColor: item.bankColor + "50" }]}>
@@ -397,32 +438,58 @@ function PlaidItemPanel({ item }: { item: PlaidItem }) {
           </TouchableOpacity>
         </View>
       )}
-      <View style={{ flexDirection: "row", gap: 10 }}>
+      <View style={{ flexDirection: "row", gap: 8, flexWrap: "wrap" }}>
         <TouchableOpacity
-          style={[styles.plaidSyncBtn, { backgroundColor: item.bankColor, opacity: isSyncing ? 0.7 : 1, flex: 1 }]}
+          style={[styles.plaidSyncBtn, { backgroundColor: item.bankColor, opacity: isSyncing ? 0.7 : 1, flex: 1, minWidth: 90 }]}
           onPress={handleSync}
           disabled={isSyncing}
         >
           {isSyncing ? <ActivityIndicator size="small" color="#fff" /> : <Feather name="refresh-cw" size={14} color="#fff" />}
-          <Text style={styles.syncBtnText}>{isSyncing ? "Syncing…" : "Sync Now"}</Text>
+          <Text style={styles.syncBtnText}>{isSyncing ? "Syncing…" : "Sync"}</Text>
+        </TouchableOpacity>
+        <TouchableOpacity
+          style={[styles.plaidSyncBtn, { backgroundColor: colors.primary + "18", flex: 1, minWidth: 90 }]}
+          onPress={() => { Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium); onRelink(item); }}
+        >
+          <Feather name="link" size={14} color={colors.primary} />
+          <Text style={[styles.syncBtnText, { color: colors.primary }]}>Relink</Text>
+        </TouchableOpacity>
+        <TouchableOpacity
+          style={[styles.plaidSyncBtn, { backgroundColor: "#f97316" + "18", flex: 1, minWidth: 90 }]}
+          onPress={() => { Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium); setShowDelinkConfirm(true); }}
+        >
+          <Feather name="scissors" size={14} color="#f97316" />
+          <Text style={[styles.syncBtnText, { color: "#f97316" }]}>Delink</Text>
         </TouchableOpacity>
         <TouchableOpacity
           style={[styles.plaidDisconnectBtn, { borderColor: colors.expense }]}
-          onPress={handleDisconnect}
+          onPress={() => setShowRemoveConfirm(true)}
         >
           <Feather name="x-circle" size={14} color={colors.expense} />
-          <Text style={[styles.disconnectText, { color: colors.expense }]}>Disconnect</Text>
         </TouchableOpacity>
       </View>
       <ConfirmModal
-        visible={showDisconnectConfirm}
-        title="Disconnect Bank"
-        message={`Remove ${item.bankName} and all its imported accounts?`}
-        confirmLabel="Disconnect"
-        confirmDestructive
-        onCancel={() => setShowDisconnectConfirm(false)}
+        visible={showDelinkConfirm}
+        title="Delink Bank"
+        message={`Remove Plaid connection for ${item.bankName}? Your accounts and transactions are kept. You can re-add anytime.`}
+        confirmLabel="Delink"
+        confirmDestructive={false}
+        onCancel={() => setShowDelinkConfirm(false)}
         onConfirm={() => {
-          setShowDisconnectConfirm(false);
+          setShowDelinkConfirm(false);
+          Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
+          delinkPlaid(item.itemId);
+        }}
+      />
+      <ConfirmModal
+        visible={showRemoveConfirm}
+        title="Remove Bank"
+        message={`Remove ${item.bankName} and delete all its linked accounts and transactions?`}
+        confirmLabel="Remove"
+        confirmDestructive
+        onCancel={() => setShowRemoveConfirm(false)}
+        onConfirm={() => {
+          setShowRemoveConfirm(false);
           disconnectPlaid(item.itemId);
         }}
       />
@@ -435,17 +502,19 @@ function PlaidItemPanel({ item }: { item: PlaidItem }) {
 function ConnectedInstitutionsModal({
   visible,
   onClose,
+  onRelink,
   onAddPlaid,
   onAddEmail,
 }: {
   visible: boolean;
   onClose: () => void;
+  onRelink: (item: PlaidItem) => void;
   onAddPlaid: () => void;
   onAddEmail: () => void;
 }) {
   const colors = useColors();
   const insets = useSafeAreaInsets();
-  const { plaidSync, emailSync, disconnectEmail, syncEmailTransactions, isSyncing } = useApp();
+  const { plaidSync, emailSync, disconnectEmail, syncEmailTransactions, wipeAllTransactions, isSyncing } = useApp();
   const [syncResult, setSyncResult] = useState<{ imported: number; error?: string } | null>(null);
 
   const handleEmailSync = async () => {
@@ -475,7 +544,7 @@ function ConnectedInstitutionsModal({
         >
           {/* Plaid items */}
           {plaidSync.items.map((item) => (
-            <PlaidItemPanel key={item.itemId} item={item} />
+            <PlaidItemPanel key={item.itemId} item={item} onRelink={onRelink} />
           ))}
 
           {/* Email sync */}
@@ -504,10 +573,10 @@ function ConnectedInstitutionsModal({
                   </Text>
                 </View>
               )}
-      {(syncResult?.imported ?? 0) > 0 && (syncResult?.parsed?.length || 0) > 0 && (
+      {(syncResult?.imported ?? 0) > 0 && ((syncResult as any)?.parsed?.length || 0) > 0 && (
                 <View style={{ gap: 8 }}>
                   <Text style={[styles.plaidLastSync, { color: colors.mutedForeground }]}>Parsed transaction details:</Text>
-          {(syncResult?.parsed || emailSync.lastParsed || []).slice(0, 5).map((p, idx) => (
+          {((syncResult as any)?.parsed || (emailSync as any).lastParsed || []).slice(0, 5).map((p: any, idx: number) => (
                     <View
                       key={`${p.rawSubject}-${idx}`}
                       style={{
@@ -542,6 +611,13 @@ function ConnectedInstitutionsModal({
                   <Text style={styles.syncBtnText}>{isSyncing ? "Scanning…" : "Sync Emails"}</Text>
                 </TouchableOpacity>
                 <TouchableOpacity
+                  style={[styles.plaidDisconnectBtn, { borderColor: colors.mutedForeground }]}
+                  onPress={() => router.push("/email-debug")}
+                >
+                  <Feather name="tool" size={14} color={colors.mutedForeground} />
+                  <Text style={[styles.disconnectText, { color: colors.mutedForeground }]}>Debug</Text>
+                </TouchableOpacity>
+                <TouchableOpacity
                   style={[styles.plaidDisconnectBtn, { borderColor: colors.expense }]}
                   onPress={handleEmailDisconnect}
                 >
@@ -552,7 +628,29 @@ function ConnectedInstitutionsModal({
             </View>
           )}
 
-          {/* Add Plaid bank */}
+          {/* Add Email sync — shown first as recommended */}
+          {!emailSync.isConnected && (
+            <TouchableOpacity
+              style={[styles.addInstRow, { backgroundColor: colors.card, borderColor: colors.primary + "40" }]}
+              onPress={onAddEmail}
+            >
+              <View style={[styles.instIconBg, { backgroundColor: colors.primary + "18" }]}>
+                <Feather name="mail" size={18} color={colors.primary} />
+              </View>
+              <View style={{ flex: 1 }}>
+                <View style={{ flexDirection: "row", alignItems: "center", gap: 6 }}>
+                  <Text style={[styles.instRowTitle, { color: colors.foreground }]}>Connect Email Sync</Text>
+                  <View style={{ backgroundColor: colors.primary + "18", borderRadius: 6, paddingHorizontal: 6, paddingVertical: 2 }}>
+                    <Text style={{ fontSize: 10, color: colors.primary, fontFamily: "Inter_600SemiBold" }}>Recommended · Free</Text>
+                  </View>
+                </View>
+                <Text style={[styles.instRowSub, { color: colors.mutedForeground }]}>Auto-import from bank alert emails</Text>
+              </View>
+              <Feather name="chevron-right" size={18} color={colors.primary} />
+            </TouchableOpacity>
+          )}
+
+          {/* Add Plaid bank — optional */}
           <TouchableOpacity
             style={[styles.addInstRow, { backgroundColor: colors.card, borderColor: colors.border }]}
             onPress={onAddPlaid}
@@ -561,32 +659,34 @@ function ConnectedInstitutionsModal({
               <Feather name="link" size={18} color="#10b981" />
             </View>
             <View style={{ flex: 1 }}>
-              <Text style={[styles.instRowTitle, { color: colors.foreground }]}>
-                {plaidSync.items.length > 0 ? "Add Another Bank" : "Connect Bank via Plaid"}
-              </Text>
+              <View style={{ flexDirection: "row", alignItems: "center", gap: 6 }}>
+                <Text style={[styles.instRowTitle, { color: colors.foreground }]}>
+                  {plaidSync.items.length > 0 ? "Add Another Bank via Plaid" : "Connect Bank via Plaid"}
+                </Text>
+              </View>
               <Text style={[styles.instRowSub, { color: colors.mutedForeground }]}>
-                Chase, BMO, CIBC, TD, RBC & more
+                Optional · May require re-login periodically
               </Text>
             </View>
             <Feather name="chevron-right" size={18} color="#10b981" />
           </TouchableOpacity>
 
-          {/* Add Email sync */}
-          {!emailSync.isConnected && (
-            <TouchableOpacity
-              style={[styles.addInstRow, { backgroundColor: colors.card, borderColor: colors.border }]}
-              onPress={onAddEmail}
-            >
-              <View style={[styles.instIconBg, { backgroundColor: colors.primary + "18" }]}>
-                <Feather name="mail" size={18} color={colors.primary} />
-              </View>
-              <View style={{ flex: 1 }}>
-                <Text style={[styles.instRowTitle, { color: colors.foreground }]}>Connect Email Sync</Text>
-                <Text style={[styles.instRowSub, { color: colors.mutedForeground }]}>Auto-import from bank alert emails</Text>
-              </View>
-              <Feather name="chevron-right" size={18} color={colors.primary} />
-            </TouchableOpacity>
-          )}
+          <TouchableOpacity
+            style={[styles.addInstRow, { backgroundColor: colors.card, borderColor: colors.expense + "30", marginTop: 20 }]}
+            onPress={() => {
+              Haptics.notificationAsync(Haptics.NotificationFeedbackType.Warning);
+              wipeAllTransactions();
+              onClose();
+            }}
+          >
+            <View style={[styles.instIconBg, { backgroundColor: colors.expense + "18" }]}>
+              <Feather name="trash-2" size={18} color={colors.expense} />
+            </View>
+            <View style={{ flex: 1 }}>
+              <Text style={[styles.instRowTitle, { color: colors.expense }]}>Reset All Transactions</Text>
+              <Text style={[styles.instRowSub, { color: colors.mutedForeground }]}>Clear all local and remote data</Text>
+            </View>
+          </TouchableOpacity>
         </ScrollView>
       </View>
 
@@ -613,12 +713,14 @@ type Period = (typeof TIME_PERIODS)[number];
 
 export default function AccountsScreen() {
   const colors = useColors();
+  const { openDrawer } = useDrawer();
   const {
     accounts,
     transactions,
     totalBalance,
     emailSync,
     plaidSync,
+    wipeAllTransactions,
   } = useApp();
 
   const [activeView, setActiveView] = useState<"Accounts" | "Trends">("Accounts");
@@ -628,14 +730,41 @@ export default function AccountsScreen() {
   const [showEmailConnect, setShowEmailConnect] = useState(false);
   const [showPlaidLink, setShowPlaidLink] = useState(false);
   const [showInstitutions, setShowInstitutions] = useState(false);
+  const [relinkItem, setRelinkItem] = useState<PlaidItem | null>(null);
+  const [collapsedGroups, setCollapsedGroups] = useState<Record<string, boolean>>({});
 
-  const cashAccounts = accounts.filter((a) => a.type === "checking" || a.type === "savings");
-  const creditAccounts = accounts.filter((a) => a.type === "credit");
-  const investAccounts = accounts.filter((a) => a.type === "investment");
+  const toggleGroup = (key: string) =>
+    setCollapsedGroups((prev) => ({ ...prev, [key]: !prev[key] }));
 
-  const cashTotal = cashAccounts.reduce((s, a) => s + computeBalance(a, transactions), 0);
-  const creditTotal = creditAccounts.reduce((s, a) => s + computeBalance(a, transactions), 0);
-  const investTotal = investAccounts.reduce((s, a) => s + computeBalance(a, transactions), 0);
+  const groupedAccounts = useMemo(() => {
+    const map: Record<string, Account[]> = {};
+    accounts.forEach((a) => {
+      const key = getAccountGroupKey(a);
+      if (!map[key]) map[key] = [];
+      map[key].push(a);
+    });
+    return Object.entries(map)
+      .map(([key, accts]) => ({
+        key,
+        meta: GROUP_META[key] ?? GROUP_META.checking,
+        accounts: accts,
+        total: accts.reduce((s, a) => s + computeBalance(a, transactions), 0),
+      }))
+      .sort((a, b) => a.meta.order - b.meta.order);
+  }, [accounts, transactions]);
+
+  const assetsTotal = accounts
+    .filter((a) => {
+      const k = getAccountGroupKey(a);
+      return k !== "credit" && k !== "mortgage" && k !== "loan" && isIncludedInNetworth(a);
+    })
+    .reduce((s, a) => s + computeBalance(a, transactions), 0);
+  const liabilitiesTotal = accounts
+    .filter((a) => {
+      const k = getAccountGroupKey(a);
+      return (k === "credit" || k === "mortgage" || k === "loan") && isIncludedInNetworth(a);
+    })
+    .reduce((s, a) => s + Math.abs(computeBalance(a, transactions)), 0);
 
   const connectedCount = plaidSync.items.length + (emailSync.isConnected ? 1 : 0);
 
@@ -647,7 +776,7 @@ export default function AccountsScreen() {
       >
         {/* ── Header ── */}
         <View style={[styles.header, { paddingTop: Platform.OS === "web" ? 64 : 12 }]}>
-          <TouchableOpacity hitSlop={8}>
+          <TouchableOpacity hitSlop={8} onPress={() => { Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light); openDrawer(); }}>
             <Feather name="menu" size={22} color={colors.foreground} />
           </TouchableOpacity>
           <Text style={[styles.headerTitle, { color: colors.foreground }]}>Accounts</Text>
@@ -676,9 +805,27 @@ export default function AccountsScreen() {
               <Feather name="chevron-down" size={13} color={colors.mutedForeground} />
             </TouchableOpacity>
           </View>
-          <Text style={[styles.netWorthAmount, { color: colors.foreground }]}>
-            ${Math.abs(totalBalance).toLocaleString("en-US", { minimumFractionDigits: 0, maximumFractionDigits: 0 })}
+          <Text style={[styles.netWorthAmount, { color: totalBalance < 0 ? colors.expense : colors.foreground }]}>
+            {totalBalance < 0 ? "-" : ""}${Math.abs(totalBalance).toLocaleString("en-US", { minimumFractionDigits: 0, maximumFractionDigits: 0 })}
           </Text>
+          {(assetsTotal > 0 || liabilitiesTotal > 0) && (
+            <View style={{ flexDirection: "row", gap: 16, marginTop: 6 }}>
+              <Text style={[styles.netWorthSub, { color: colors.mutedForeground }]}>
+                Assets{" "}
+                <Text style={{ color: colors.foreground }}>
+                  ${assetsTotal.toLocaleString("en-US", { minimumFractionDigits: 0, maximumFractionDigits: 0 })}
+                </Text>
+              </Text>
+              {liabilitiesTotal > 0 && (
+                <Text style={[styles.netWorthSub, { color: colors.mutedForeground }]}>
+                  Liabilities{" "}
+                  <Text style={{ color: colors.expense }}>
+                    ${liabilitiesTotal.toLocaleString("en-US", { minimumFractionDigits: 0, maximumFractionDigits: 0 })}
+                  </Text>
+                </Text>
+              )}
+            </View>
+          )}
 
           {/* Period dropdown */}
           {showPeriodPicker && (
@@ -731,32 +878,18 @@ export default function AccountsScreen() {
               <Feather name="chevron-right" size={18} color={colors.mutedForeground} />
             </TouchableOpacity>
 
-            {/* Cash group */}
-            {cashAccounts.length > 0 && (
+            {groupedAccounts.map(({ key, meta, accounts: grpAccts, total }) => (
               <AccountGroup
-                title="Cash"
-                accounts={cashAccounts}
-                total={cashTotal}
+                key={key}
+                title={meta.label}
+                accounts={grpAccts}
+                total={total}
+                icon={meta.icon}
+                isLiability={meta.isLiability}
+                collapsed={!!collapsedGroups[key]}
+                onToggle={() => toggleGroup(key)}
               />
-            )}
-
-            {/* Credit group */}
-            {creditAccounts.length > 0 && (
-              <AccountGroup
-                title="Credit"
-                accounts={creditAccounts}
-                total={creditTotal}
-              />
-            )}
-
-            {/* Investment group */}
-            {investAccounts.length > 0 && (
-              <AccountGroup
-                title="Investment"
-                accounts={investAccounts}
-                total={investTotal}
-              />
-            )}
+            ))}
 
             {/* Empty state */}
             {accounts.length === 0 && (
@@ -779,6 +912,17 @@ export default function AccountsScreen() {
                 <Text style={[styles.addAcctText, { color: colors.primary }]}>Add Account</Text>
               </TouchableOpacity>
             )}
+
+            <TouchableOpacity
+              style={[styles.addAcctBtn, { borderColor: colors.expense, marginTop: 10 }]}
+              onPress={() => {
+                Haptics.notificationAsync(Haptics.NotificationFeedbackType.Warning);
+                wipeAllTransactions();
+              }}
+            >
+              <Feather name="trash-2" size={16} color={colors.expense} />
+              <Text style={[styles.addAcctText, { color: colors.expense }]}>Reset All Transactions</Text>
+            </TouchableOpacity>
           </View>
         ) : (
           <View style={{ paddingHorizontal: 16, paddingTop: 16 }}>
@@ -796,10 +940,20 @@ export default function AccountsScreen() {
         onConnectBank={() => setShowPlaidLink(true)}
       />
       {showEmailConnect && <EmailConnectModal onClose={() => setShowEmailConnect(false)} />}
-      {showPlaidLink && <PlaidLinkModal onClose={() => setShowPlaidLink(false)} />}
+      {(showPlaidLink || relinkItem) && (
+        <PlaidLinkModal
+          onClose={() => { setShowPlaidLink(false); setRelinkItem(null); }}
+          relinkItemId={relinkItem?.itemId}
+          relinkBankName={relinkItem?.bankName}
+        />
+      )}
       <ConnectedInstitutionsModal
         visible={showInstitutions}
         onClose={() => setShowInstitutions(false)}
+        onRelink={(item) => {
+          setShowInstitutions(false);
+          setTimeout(() => setRelinkItem(item), 350);
+        }}
         onAddPlaid={() => {
           setShowInstitutions(false);
           setTimeout(() => setShowPlaidLink(true), 350);
@@ -833,6 +987,7 @@ const styles = StyleSheet.create({
   netWorthTopRow: { flexDirection: "row", justifyContent: "space-between", alignItems: "center" },
   netWorthLabel: { fontSize: 13, fontFamily: "Inter_500Medium" },
   netWorthAmount: { fontSize: 42, fontFamily: "Inter_700Bold", letterSpacing: -1, marginTop: 2 },
+  netWorthSub: { fontSize: 12, fontFamily: "Inter_400Regular" },
   periodPill: {
     flexDirection: "row", alignItems: "center", gap: 4,
     paddingHorizontal: 12, paddingVertical: 6, borderRadius: 20,
@@ -871,23 +1026,41 @@ const styles = StyleSheet.create({
   instCountBadge: { width: 22, height: 22, borderRadius: 11, alignItems: "center", justifyContent: "center" },
   instCountText: { color: "#fff", fontSize: 11, fontFamily: "Inter_700Bold" },
 
-  // Account row
-  acctRow: { flexDirection: "row", alignItems: "center", paddingVertical: 13, paddingHorizontal: 14, gap: 12 },
-  acctBadge: { width: 42, height: 42, borderRadius: 21, alignItems: "center", justifyContent: "center" },
-  acctBadgeText: { color: "#fff", fontSize: 13, fontFamily: "Inter_700Bold" },
-  acctBadgeEmoji: { fontSize: 20 },
-  acctInfo: { flex: 1, gap: 2 },
-  acctName: { fontSize: 15, fontFamily: "Inter_600SemiBold" },
-  acctSub: { fontSize: 12, fontFamily: "Inter_400Regular" },
-  acctBal: { fontSize: 15, fontFamily: "Inter_600SemiBold" },
+  // Premium matte account card
+  premiumCard: {
+    borderRadius: 16, borderWidth: 1,
+    paddingHorizontal: 16, paddingVertical: 14,
+    flexDirection: "row", alignItems: "center", gap: 13,
+    overflow: "hidden",
+    shadowColor: "#000", shadowOffset: { width: 0, height: 2 },
+    shadowOpacity: 0.06, shadowRadius: 8, elevation: 2,
+  },
+  premiumBadge: { width: 46, height: 46, borderRadius: 14, alignItems: "center", justifyContent: "center" },
+  premiumBadgeText: { fontSize: 14, fontFamily: "Inter_700Bold" },
+  premiumBadgeEmoji: { fontSize: 22 },
+  premiumInfo: { flex: 1, gap: 3 },
+  premiumName: { fontSize: 15, fontFamily: "Inter_600SemiBold" },
+  premiumMeta: { flexDirection: "row", alignItems: "center", gap: 7 },
+  premiumTypeBadge: { flexDirection: "row", alignItems: "center", gap: 4, paddingHorizontal: 7, paddingVertical: 3, borderRadius: 6 },
+  premiumTypeText: { fontSize: 10, fontFamily: "Inter_600SemiBold", letterSpacing: 0.2 },
+  premiumLastFour: { fontSize: 11, fontFamily: "Inter_500Medium", letterSpacing: 1 },
+  premiumBankSub: { fontSize: 11, fontFamily: "Inter_400Regular", marginTop: 1 },
+  premiumRight: { alignItems: "flex-end", gap: 4 },
+  premiumBalance: { fontSize: 16, fontFamily: "Inter_700Bold" },
+  premiumAccentBar: { position: "absolute", bottom: 0, left: 0, right: 0, height: 2.5, borderBottomLeftRadius: 16, borderBottomRightRadius: 16 },
   // Account group
+  group: { borderRadius: 14, borderWidth: 1, padding: 12, gap: 0 },
   groupHeader: {
     flexDirection: "row", justifyContent: "space-between",
-    alignItems: "center", marginBottom: 8,
+    alignItems: "center", paddingHorizontal: 2,
   },
-  groupTitle: { fontSize: 17, fontFamily: "Inter_700Bold" },
-  groupTotal: { fontSize: 17, fontFamily: "Inter_700Bold" },
-  groupCard: { borderRadius: 16, borderWidth: 1, overflow: "hidden" },
+  groupIconBg: { width: 26, height: 26, borderRadius: 8, alignItems: "center", justifyContent: "center" },
+  groupTitle: { fontSize: 15, fontFamily: "Inter_600SemiBold" },
+  groupTotal: { fontSize: 14, fontFamily: "Inter_700Bold" },
+  groupCountBadge: { paddingHorizontal: 6, paddingVertical: 2, borderRadius: 6 },
+  groupCountText: { fontSize: 11, fontFamily: "Inter_600SemiBold" },
+  holderBadge: { flexDirection: "row", alignItems: "center", gap: 3, paddingHorizontal: 5, paddingVertical: 2, borderRadius: 5 },
+  holderText: { fontSize: 10, fontFamily: "Inter_500Medium" },
 
   // Empty / add
   emptyWrap: { padding: 40, borderRadius: 16, borderWidth: 1, alignItems: "center", gap: 12 },

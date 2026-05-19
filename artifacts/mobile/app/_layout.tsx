@@ -9,7 +9,7 @@ import {
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { Stack } from "expo-router";
 import * as SplashScreen from "expo-splash-screen";
-import React, { useEffect } from "react";
+import React, { useEffect, useState } from "react";
 import { View } from "react-native";
 import { GestureHandlerRootView } from "react-native-gesture-handler";
 import { KeyboardProvider } from "react-native-keyboard-controller";
@@ -18,6 +18,7 @@ import { SafeAreaProvider } from "react-native-safe-area-context";
 import { ErrorBoundary } from "@/components/ErrorBoundary";
 import Drawer from "@/components/Drawer";
 import { AppProvider } from "@/context/AppContext";
+import { AIProviderProvider } from "@/context/AIProviderContext";
 import { DrawerProvider } from "@/context/DrawerContext";
 import { FeatureFlagsProvider } from "@/context/FeatureFlagsContext";
 
@@ -32,7 +33,9 @@ function RootLayoutNav() {
       <Stack.Screen name="account/[id]" options={{ headerShown: false, animation: "slide_from_right" }} />
       <Stack.Screen name="ai-review" options={{ headerShown: false, animation: "slide_from_right" }} />
       <Stack.Screen name="refunds" options={{ headerShown: false, animation: "slide_from_right" }} />
+      <Stack.Screen name="projects" options={{ headerShown: false, animation: "slide_from_right" }} />
       <Stack.Screen name="project-detail" options={{ headerShown: false, animation: "slide_from_right" }} />
+      <Stack.Screen name="notifications" options={{ headerShown: false, animation: "slide_from_right" }} />
     </Stack>
   );
 }
@@ -45,14 +48,24 @@ export default function RootLayout() {
     Inter_600SemiBold,
     Inter_700Bold,
   });
+  const [timedOut, setTimedOut] = useState(false);
 
   useEffect(() => {
-    if (fontsLoaded || fontError) {
+    const timer = setTimeout(() => setTimedOut(true), 3000);
+    return () => clearTimeout(timer);
+  }, []);
+
+  const ready = fontsLoaded || fontError || timedOut;
+
+  useEffect(() => {
+    if (ready) {
       SplashScreen.hideAsync();
     }
-  }, [fontsLoaded, fontError]);
+  }, [ready]);
 
-  if (!fontsLoaded && !fontError) return null;
+  if (!ready) {
+    return null;
+  }
 
   return (
     <SafeAreaProvider>
@@ -60,18 +73,18 @@ export default function RootLayout() {
         <QueryClientProvider client={queryClient}>
           <FeatureFlagsProvider>
             <AppProvider>
+              <AIProviderProvider>
               <DrawerProvider>
                 <GestureHandlerRootView style={{ flex: 1 }}>
                   <KeyboardProvider>
-                    {/* Root view that holds both the app content and the drawer overlay */}
                     <View style={{ flex: 1 }}>
                       <RootLayoutNav />
-                      {/* Drawer renders as an absolute overlay above all tab content */}
                       <Drawer />
                     </View>
                   </KeyboardProvider>
                 </GestureHandlerRootView>
               </DrawerProvider>
+              </AIProviderProvider>
             </AppProvider>
           </FeatureFlagsProvider>
         </QueryClientProvider>

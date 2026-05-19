@@ -11,6 +11,10 @@ export const transactionsTable = pgTable("transactions", {
   type: text("type").notNull(), // income | expense
   category: text("category").notNull(),
   date: text("date").notNull(),
+  source: text("source"), // "plaid" | "email" | "manual"
+  merchant: text("merchant"),
+  plaidItemId: text("plaid_item_id"),
+  plaidAccountId: text("plaid_account_id"),
   fromEmail: boolean("from_email").default(false),
   bank: text("bank"),
   note: text("note"),
@@ -28,6 +32,10 @@ export const insertTransactionSchema = z.object({
   type: z.enum(["income", "expense"]),
   category: z.string().min(1),
   date: z.string(),
+  source: z.enum(["plaid", "email", "manual"]).nullable().optional(),
+  merchant: z.string().nullable().optional(),
+  plaidItemId: z.string().nullable().optional(),
+  plaidAccountId: z.string().nullable().optional(),
   fromEmail: z.boolean().optional().default(false),
   bank: z.string().nullable().optional(),
   note: z.string().nullable().optional(),

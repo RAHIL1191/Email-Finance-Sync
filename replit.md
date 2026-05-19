@@ -139,4 +139,15 @@ Run `pnpm --filter @workspace/db run push` to apply schema changes to the databa
 - `pnpm --filter @workspace/db run push` — push DB schema changes (dev only)
 - `pnpm --filter @workspace/api-server run dev` — run API server locally
 
-See the `pnpm-workspace` skill for workspace structure, TypeScript setup, and package details.
+## Local Development (Windows)
+
+### Running on Windows
+1. **Preinstall fix**: The root `preinstall` script was removed as it required `sh`.
+2. **Env Files**: Use the root `.env` file. The backend uses `node --env-file=.env` (Node 24+ required).
+3. **Expo IP**: To use your local IP for mobile testing, set:
+   `$env:REACT_NATIVE_PACKAGER_HOSTNAME="192.168.2.19"`
+   Then run: `pnpm --filter @workspace/mobile exec expo start --lan`
+
+### Tab Bar Fix
+If the tab bar is hidden behind system buttons, ensured `ClassicTabLayout` in `app/(tabs)/_layout.tsx` uses `useSafeAreaInsets`.
+

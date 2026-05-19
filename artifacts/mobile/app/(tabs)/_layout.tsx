@@ -7,6 +7,7 @@ import { Feather } from "@expo/vector-icons";
 import React from "react";
 import { Platform, StyleSheet, View, useColorScheme } from "react-native";
 
+import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { useColors } from "@/hooks/useColors";
 
 function NativeTabLayout() {
@@ -28,6 +29,10 @@ function NativeTabLayout() {
         <Icon sf={{ default: "doc.text", selected: "doc.text.fill" }} />
         <Label>Bills</Label>
       </NativeTabs.Trigger>
+      <NativeTabs.Trigger name="budget">
+        <Icon sf={{ default: "chart.bar", selected: "chart.bar.fill" }} />
+        <Label>Budget</Label>
+      </NativeTabs.Trigger>
       <NativeTabs.Trigger name="insights">
         <Icon sf={{ default: "chart.bar", selected: "chart.bar.fill" }} />
         <Label>Insights</Label>
@@ -37,11 +42,15 @@ function NativeTabLayout() {
 }
 
 function ClassicTabLayout() {
+  const insets = useSafeAreaInsets();
   const colors = useColors();
   const colorScheme = useColorScheme();
   const isDark = colorScheme === "dark";
   const isIOS = Platform.OS === "ios";
   const isWeb = Platform.OS === "web";
+
+  const TAB_BAR_HEIGHT = isWeb ? 84 : 60 + (insets.bottom > 0 ? insets.bottom - 10 : 0);
+  const PADDING_BOTTOM = isWeb ? 34 : (insets.bottom > 0 ? insets.bottom : 8);
 
   return (
     <Tabs
@@ -55,8 +64,8 @@ function ClassicTabLayout() {
           borderTopWidth: 1,
           borderTopColor: colors.border,
           elevation: 0,
-          height: isWeb ? 84 : 60,
-          paddingBottom: isWeb ? 34 : 8,
+          height: TAB_BAR_HEIGHT,
+          paddingBottom: PADDING_BOTTOM,
         },
         tabBarBackground: () =>
           isIOS ? (
@@ -128,6 +137,18 @@ function ClassicTabLayout() {
         }}
       />
       <Tabs.Screen
+        name="budget"
+        options={{
+          title: "Budget",
+          tabBarIcon: ({ color }) =>
+            isIOS ? (
+              <SymbolView name="dollarsign.circle" tintColor={color} size={22} />
+            ) : (
+              <Feather name="pie-chart" size={22} color={color} />
+            ),
+        }}
+      />
+      <Tabs.Screen
         name="insights"
         options={{
           title: "AI Insights",
@@ -137,6 +158,14 @@ function ClassicTabLayout() {
             ) : (
               <Feather name="bar-chart-2" size={22} color={color} />
             ),
+        }}
+      />
+      <Tabs.Screen
+        name="tasks"
+        options={{
+          title: "Tasks",
+          tabBarButton: () => null,
+          tabBarItemStyle: { display: "none" },
         }}
       />
     </Tabs>

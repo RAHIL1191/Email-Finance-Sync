@@ -3,6 +3,7 @@ import * as Haptics from "expo-haptics";
 import DateTimePicker from "@react-native-community/datetimepicker";
 import React, { useState } from "react";
 import {
+  Alert,
   KeyboardAvoidingView,
   Modal,
   Platform,
@@ -18,6 +19,7 @@ import { useSafeAreaInsets } from "react-native-safe-area-context";
 
 import { useApp } from "@/context/AppContext";
 import { useColors } from "@/hooks/useColors";
+import CategoryPickerModal from "./CategoryPickerModal";
 
 function BillDatePickerModal({
   visible,
@@ -74,18 +76,6 @@ function BillDatePickerModal({
   );
 }
 
-const CATEGORIES = [
-  "Housing",
-  "Utilities",
-  "Insurance",
-  "Subscriptions",
-  "Health",
-  "Transport",
-  "Food",
-  "Entertainment",
-  "Other",
-];
-
 interface Props {
   visible: boolean;
   onClose: () => void;
@@ -94,22 +84,29 @@ interface Props {
 export default function AddBillModal({ visible, onClose }: Props) {
   const colors = useColors();
   const insets = useSafeAreaInsets();
-  const { addBill, accounts } = useApp();
+  const { addBill } = useApp();
 
   const [title, setTitle] = useState("");
   const [amount, setAmount] = useState("");
   const [category, setCategory] = useState("Other");
   const [dueDate, setDueDate] = useState(new Date());
   const [showDatePicker, setShowDatePicker] = useState(false);
+  const [showCatPicker, setShowCatPicker] = useState(false);
   const [isRecurring, setIsRecurring] = useState(true);
   const [frequency, setFrequency] = useState<"weekly" | "monthly" | "yearly">(
     "monthly"
   );
 
   const handleSave = () => {
-    if (!title.trim() || !amount) return;
+    if (!title.trim()) {
+      Alert.alert("Missing Title", "Please enter a bill title.");
+      return;
+    }
     const parsed = parseFloat(amount);
-    if (isNaN(parsed) || parsed <= 0) return;
+    if (!amount || isNaN(parsed) || parsed <= 0) {
+      Alert.alert("Invalid Amount", "Please enter a valid amount greater than 0.");
+      return;
+    }
     Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
     addBill({
       title: title.trim(),
@@ -230,34 +227,18 @@ export default function AddBillModal({ visible, onClose }: Props) {
             <Text style={[styles.label, { color: colors.mutedForeground }]}>
               Category
             </Text>
-            <ScrollView horizontal showsHorizontalScrollIndicator={false}>
-              <View style={styles.chipRow}>
-                {CATEGORIES.map((c) => (
-                  <TouchableOpacity
-                    key={c}
-                    style={[
-                      styles.chip,
-                      {
-                        backgroundColor:
-                          category === c ? colors.primary : colors.muted,
-                      },
-                    ]}
-                    onPress={() => setCategory(c)}
-                  >
-                    <Text
-                      style={[
-                        styles.chipText,
-                        {
-                          color: category === c ? "#fff" : colors.mutedForeground,
-                        },
-                      ]}
-                    >
-                      {c}
-                    </Text>
-                  </TouchableOpacity>
-                ))}
-              </View>
-            </ScrollView>
+            <TouchableOpacity
+              style={[
+                styles.input,
+                { backgroundColor: colors.card, borderColor: colors.border, flexDirection: "row", justifyContent: "space-between", alignItems: "center" },
+              ]}
+              onPress={() => setShowCatPicker(true)}
+            >
+              <Text style={{ color: category ? colors.foreground : colors.mutedForeground, fontSize: 15 }}>
+                {category || "Select category"}
+              </Text>
+              <Feather name="chevron-right" size={16} color={colors.mutedForeground} />
+            </TouchableOpacity>
           </View>
 
           <View style={styles.section}>
@@ -319,6 +300,13 @@ export default function AddBillModal({ visible, onClose }: Props) {
           </View>
         </ScrollView>
       </KeyboardAvoidingView>
+
+      <CategoryPickerModal
+        visible={showCatPicker}
+        onClose={() => setShowCatPicker(false)}
+        onSelect={(cat, sub) => setCategory(sub ? `${cat} - ${sub}` : cat)}
+        type="expense"
+      />
     </Modal>
   );
 }
@@ -360,20 +348,6 @@ const styles = StyleSheet.create({
     paddingVertical: 12,
     fontSize: 15,
     fontFamily: "Inter_400Regular",
-  },
-  chipRow: {
-    flexDirection: "row",
-    gap: 8,
-    paddingVertical: 2,
-  },
-  chip: {
-    paddingHorizontal: 14,
-    paddingVertical: 8,
-    borderRadius: 20,
-  },
-  chipText: {
-    fontSize: 13,
-    fontFamily: "Inter_500Medium",
   },
   toggleRow: {
     flexDirection: "row",

@@ -1,4 +1,11 @@
 import AsyncStorage from "@react-native-async-storage/async-storage";
+import {
+  cancelBillNotifications,
+  scheduleBillNotifications,
+  setupNotificationsOnInit,
+  scheduleTaskReminder,
+  cancelTaskReminder,
+} from "@/services/notificationService";
 import React, {
   createContext,
   useCallback,
@@ -27,6 +34,13 @@ export interface Transaction {
   fromEmail?: boolean;
   bank?: string;
   note?: string;
+  receipts?: string[];
+  /** Plaid item this transaction came from — enables scoped remapping */
+  plaidItemId?: string;
+  /** Raw Plaid account_id — O(1) remap key, never changes */
+  plaidAccountId?: string;
+  /** Links split transactions together — all splits from the same operation share this id */
+  splitGroupId?: string;
 }
 
 export interface Account {
@@ -42,6 +56,8 @@ export interface Account {
   includeInNetworth?: boolean;
   /** Whether this is a joint account shared with another person */
   isJoint?: boolean;
+  /** Name of the person who owns this account (shown on transaction cards) */
+  accountHolder?: string;
   /** Set when this account was imported via Plaid */
   plaidItemId?: string;
   plaidAccountId?: string;
@@ -55,8 +71,58 @@ export interface Bill {
   category: string;
   isPaid: boolean;
   isRecurring: boolean;
-  frequency?: "weekly" | "monthly" | "yearly";
+  frequency?: "daily" | "weekly" | "biweekly" | "monthly" | "quarterly" | "semiannual" | "yearly";
   accountId?: string;
+  receipts?: string[];
+  notes?: string;
+  remindDays?: string;
+  autoPaid?: boolean;
+  billNumber?: string;
+  addExpenseEntry?: boolean;
+  createdAt?: string;
+  updatedAt?: string;
+}
+
+export interface Budget {
+  id: string;
+  name: string;
+  amount: number;
+  category?: string;
+  type: "expense" | "income";
+  period: "weekly" | "monthly" | "yearly";
+  includeInOverall: boolean;
+  color?: string;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface Goal {
+  id: string;
+  name: string;
+  targetAmount: number;
+  currentAmount: number;
+  targetDate?: string;
+  category?: string;
+  color?: string;
+  notes?: string;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface Task {
+  id: string;
+  title: string;
+  category: string;
+  email?: string;
+  paymentMode?: string;
+  dueDate: string;
+  notes?: string;
+  priority: "low" | "medium" | "high";
+  isCompleted: boolean;
+  reminderEnabled: boolean;
+  reminderDate?: string;
+  createdAt: string;
+  updatedAt: string;
 }
 
 export interface Project {
@@ -65,6 +131,23 @@ export interface Project {
   description?: string;
   color: string;
   createdAt: string;
+}
+
+export interface Category {
+  id: string;
+  householdId: string;
+  name: string;
+  description?: string;
+  type: "expense" | "income" | "both";
+  icon?: string;
+  iconType?: "icon" | "image" | "emoji";
+  color: string;
+  parentId?: string;
+  providerType?: string;
+  merchantType?: string;
+  isDefault?: boolean;
+  createdAt: string;
+  updatedAt: string;
 }
 
 export interface EmailSync {
@@ -93,17 +176,35 @@ export interface PlaidItem {
   lastSynced?: string;
   lastImported?: number;
   accountIds: string[];
+  /** Maps Plaid account_id → local account id. Persisted so sync works after server round-trips. */
+  plaidAccountMap?: Record<string, string>;
 }
 
 export interface PlaidSync {
   items: PlaidItem[];
 }
 
+export interface CategoryRule {
+  id: string;
+  householdId: string;
+  merchantPattern: string;
+  merchantExact?: string;
+  category: string;
+  hitCount: number;
+  source: "manual" | "learned";
+  createdAt: string;
+  updatedAt: string;
+}
+
 interface AppContextType {
   transactions: Transaction[];
   accounts: Account[];
   bills: Bill[];
+  budgets: Budget[];
+  goals: Goal[];
   projects: Project[];
+  categories: Category[];
+  categoryRules: CategoryRule[];
   emailSync: EmailSync;
   plaidSync: PlaidSync;
   userName: string;
@@ -121,15 +222,33 @@ interface AppContextType {
   updateBill: (id: string, b: Partial<Bill>) => void;
   deleteBill: (id: string) => void;
   markBillPaid: (id: string) => void;
+  addBudget: (b: Omit<Budget, "id" | "createdAt" | "updatedAt">) => void;
+  updateBudget: (id: string, b: Partial<Budget>) => void;
+  deleteBudget: (id: string) => void;
+  addGoal: (g: Omit<Goal, "id" | "createdAt" | "updatedAt">) => void;
+  updateGoal: (id: string, g: Partial<Goal>) => void;
+  deleteGoal: (id: string) => void;
+  tasks: Task[];
+  addTask: (t: Omit<Task, "id" | "createdAt" | "updatedAt">) => void;
+  updateTask: (id: string, t: Partial<Task>) => void;
+  deleteTask: (id: string) => void;
   addProject: (p: Omit<Project, "id" | "createdAt">) => string;
   updateProject: (id: string, p: Partial<Project>) => void;
   deleteProject: (id: string) => void;
+  addCategory: (c: Omit<Category, "id" | "householdId" | "createdAt" | "updatedAt">) => void;
+  updateCategory: (id: string, c: Partial<Category>) => void;
+  deleteCategory: (id: string) => void;
+  seedCategories: () => Promise<void>;
+  learnCategoryRule: (merchantTitle: string, category: string) => void;
+  autoCategorize: (title: string) => string | null;
   connectEmail: (email: string, appPassword: string) => Promise<{ success: boolean; error?: string }>;
   disconnectEmail: () => void;
   resetEmailTransactions: () => void;
   syncEmailTransactions: () => Promise<{ imported: number; parsed?: any[]; error?: string }>;
+  wipeAllTransactions: () => Promise<void>;
   connectPlaid: (item: PlaidItem, newAccounts: Omit<Account, "id">[], initialTransactions: Omit<Transaction, "id">[]) => Promise<{ imported: number }>;
   syncPlaidTransactions: (itemId: string) => Promise<{ imported: number; error?: string }>;
+  delinkPlaid: (itemId: string) => void;
   disconnectPlaid: (itemId: string) => void;
   isSyncing: boolean;
   totalBalance: number;
@@ -142,17 +261,26 @@ interface AppContextType {
 
 const AppContext = createContext<AppContextType | null>(null);
 
+// Bump this whenever a breaking change requires wiping stale local transactions.
+const STORAGE_VERSION = "2";
+
 const STORAGE_KEYS = {
+  version: "@fintrack/storageVersion",
   transactions: "@fintrack/transactions",
   accounts: "@fintrack/accounts",
   bills: "@fintrack/bills",
+  budgets: "@fintrack/budgets",
+  goals: "@fintrack/goals",
   projects: "@fintrack/projects",
+  categories: "@fintrack/categories",
   emailSync: "@fintrack/emailSync",
   plaidSync: "@fintrack/plaidSync",
   deviceId: "@fintrack/deviceId",
   householdId: "@fintrack/householdId",
   userName: "@fintrack/userName",
   reviewedTransactionIds: "@fintrack/reviewedTransactionIds",
+  categoryRules: "@fintrack/categoryRules",
+  tasks: "@fintrack/tasks",
 };
 
 // ── Helpers ──────────────────────────────────────────────────────────────────
@@ -165,6 +293,65 @@ function generateDeviceId() {
   return "dev_" + genId() + "_" + Date.now().toString(36);
 }
 
+// ── Default categories (seeded locally on first launch) ───────────────────────
+
+type DefaultCat = { name: string; icon: string; color: string; type: "expense" | "income" | "both"; subs?: string[] };
+
+const DEFAULT_CAT_DEFS: DefaultCat[] = [
+  { name: "Bills & Utilities", icon: "file-text", color: "#6366f1", type: "expense", subs: ["Electricity", "Gas", "Internet", "Mobile", "Phone", "Sewage & Garbage", "Water"] },
+  { name: "Drink & Dine",      icon: "coffee",    color: "#f97316", type: "expense", subs: ["Restaurant", "Cafe", "Fast Food", "Bar", "Delivery"] },
+  { name: "Education",         icon: "book-open", color: "#8b5cf6", type: "expense", subs: ["Tuition", "Books", "Courses", "Supplies"] },
+  { name: "Entertainment",     icon: "film",      color: "#ec4899", type: "expense", subs: ["Movies", "Games", "Streaming", "Events", "Music"] },
+  { name: "Events",            icon: "calendar",  color: "#14b8a6", type: "expense", subs: ["Wedding", "Birthday", "Party", "Festival"] },
+  { name: "Family Care",       icon: "users",     color: "#f59e0b", type: "expense", subs: ["Childcare", "Elder Care", "Family Activities"] },
+  { name: "Fees & Charges",    icon: "alert-circle", color: "#64748b", type: "expense", subs: ["Bank Fees", "Late Fees", "Service Charges"] },
+  { name: "Financial Services",icon: "dollar-sign", color: "#3b82f6", type: "expense", subs: ["Advisory", "Tax Prep", "Accounting"] },
+  { name: "Food & Grocery",    icon: "shopping-cart", color: "#10b981", type: "expense", subs: ["Groceries", "Snacks", "Organic", "Meat & Seafood"] },
+  { name: "Gifts & Donations", icon: "gift",      color: "#e11d48", type: "expense", subs: ["Charity", "Gifts", "Donations"] },
+  { name: "Health & Fitness",  icon: "heart",     color: "#ef4444", type: "expense", subs: ["Gym", "Pharmacy", "Doctor", "Dental", "Vision"] },
+  { name: "House",             icon: "home",      color: "#7c3aed", type: "expense", subs: ["Rent", "Mortgage", "Maintenance", "Furniture"] },
+  { name: "Insurance",         icon: "shield",    color: "#475569", type: "expense", subs: ["Health", "Auto", "Home", "Life"] },
+  { name: "Investments",       icon: "trending-up", color: "#059669", type: "income", subs: ["Stocks", "Bonds", "Crypto", "Mutual Funds"] },
+  { name: "Kids Care",         icon: "smile",     color: "#f472b6", type: "expense", subs: ["School", "Toys", "Clothing", "Activities"] },
+  { name: "Loan & Debts",      icon: "credit-card", color: "#dc2626", type: "expense", subs: ["Student Loan", "Car Loan", "Credit Card"] },
+  { name: "Misc Expenses",     icon: "more-horizontal", color: "#fbbf24", type: "expense", subs: ["Other", "Uncategorized"] },
+  { name: "Office & Business", icon: "briefcase", color: "#0284c7", type: "expense", subs: ["Supplies", "Software", "Equipment"] },
+  { name: "Others",            icon: "grid",      color: "#94a3b8", type: "both" },
+  { name: "Personal Care",     icon: "scissors",  color: "#db2777", type: "expense", subs: ["Salon", "Spa", "Skincare", "Cosmetics"] },
+  { name: "Pet Care",          icon: "anchor",    color: "#84cc16", type: "expense", subs: ["Food", "Vet", "Grooming"] },
+  { name: "Refunds",           icon: "rotate-ccw", color: "#22c55e", type: "income" },
+  { name: "Shopping",          icon: "shopping-bag", color: "#a855f7", type: "expense", subs: ["Clothing", "Electronics", "Online", "Home Decor"] },
+  { name: "Taxes",             icon: "percent",   color: "#78716c", type: "expense", subs: ["Income Tax", "Property Tax"] },
+  { name: "Transfer",          icon: "repeat",    color: "#6b7280", type: "both" },
+  { name: "Transport",         icon: "navigation", color: "#0ea5e9", type: "expense", subs: ["Gas", "Parking", "Public Transit", "Ride Share"] },
+  { name: "Travel & Vacation", icon: "map",       color: "#f59e0b", type: "expense", subs: ["Flights", "Hotels", "Activities", "Food"] },
+  { name: "Salary",            icon: "briefcase", color: "#10b981", type: "income" },
+  { name: "Freelance",         icon: "cpu",       color: "#06b6d4", type: "income" },
+  { name: "Business",          icon: "bar-chart-2", color: "#8b5cf6", type: "income" },
+  { name: "Gift Received",     icon: "gift",      color: "#f43f5e", type: "income" },
+];
+
+function buildDefaultCategories(householdId: string): Category[] {
+  const result: Category[] = [];
+  const now = new Date().toISOString();
+  for (const def of DEFAULT_CAT_DEFS) {
+    const catId = genId();
+    result.push({
+      id: catId, householdId, name: def.name, type: def.type,
+      icon: def.icon, iconType: "icon", color: def.color,
+      isDefault: true, createdAt: now, updatedAt: now,
+    });
+    for (const sub of (def.subs ?? [])) {
+      result.push({
+        id: genId(), householdId, name: sub, type: def.type,
+        icon: def.icon, iconType: "icon", color: def.color,
+        parentId: catId, isDefault: true, createdAt: now, updatedAt: now,
+      });
+    }
+  }
+  return result;
+}
+
 const HOUSEHOLD_CHARS = "ABCDEFGHJKLMNPQRSTUVWXYZ23456789";
 export function generateHouseholdCode(): string {
   return Array.from(
@@ -174,6 +361,7 @@ export function generateHouseholdCode(): string {
 }
 
 export function getApiBase(): string {
+  if (process.env.EXPO_PUBLIC_API_URL) return process.env.EXPO_PUBLIC_API_URL;
   const domain = process.env.EXPO_PUBLIC_DOMAIN;
   if (domain) return `https://${domain}`;
   return "http://localhost:80";
@@ -206,24 +394,57 @@ async function apiCall(
   }
 }
 
-/** Canonical dedup key shared across all sync sources (source-agnostic so email/plaid/manual don't duplicate) */
-function dedupKey(t: { amount: number; title: string; date: string; bank?: string; accountId?: string; source?: string }) {
-  const bank = (t.bank ?? "").toLowerCase().trim();
-  const accountId = (t.accountId ?? "").toLowerCase().trim();
-  return `${bank}|${accountId}|${t.amount}|${t.title.toLowerCase().trim()}|${t.date.slice(0, 10)}`;
+/** Source priority: higher wins when the same transaction arrives from multiple sources. */
+const SOURCE_PRIORITY: Record<string, number> = { plaid: 3, manual: 2, email: 1 };
+
+/**
+ * Dedup key: accountId + amount + date (day-precision).
+ * Intentionally excludes title/bank — Gmail parses "Transaction at X" while Plaid
+ * returns "X"; the three stable fields catch cross-source duplicates cleanly.
+ */
+function dedupKey(t: { amount: number; date: string; accountId?: string }): string {
+  return `${(t.accountId ?? "").toLowerCase()}|${t.amount}|${t.date.slice(0, 10)}`;
 }
 
-function upsertTransactions(prev: Transaction[], incoming: Transaction[]) {
-  const map = new Map<string, Transaction>();
-  prev.forEach((t) => map.set(dedupKey(t), t));
-  incoming.forEach((t) => {
+/**
+ * Merge incoming transactions into prev, deduplicating by both dedupKey (content)
+ * and id. This prevents the same logical transaction from appearing twice when its
+ * accountId changes (e.g., Plaid raw account ID → local UUID after remapping).
+ * Higher-priority sources (plaid > manual > email) win on collision.
+ */
+function upsertTransactions(prev: Transaction[], incoming: Transaction[]): Transaction[] {
+  const byContent = new Map<string, Transaction>(); // dedupKey → tx
+  const byId = new Map<string, Transaction>();      // id → winning tx
+
+  const addTx = (t: Transaction) => {
     const key = dedupKey(t);
-    const existing = map.get(key);
-    // Never overwrite a confirmed/reviewed transaction with a re-synced email copy
-    if (existing && !existing.fromEmail && t.fromEmail) return;
-    map.set(key, t);
-  });
-  return Array.from(map.values()).sort((a, b) => b.date.localeCompare(a.date));
+    const tp = SOURCE_PRIORITY[t.source ?? ""] ?? 0;
+
+    // Same-id conflict: same logical tx but different accountId (remapping artefact)
+    const sameId = t.id ? byId.get(t.id) : undefined;
+    if (sameId) {
+      const sp = SOURCE_PRIORITY[sameId.source ?? ""] ?? 0;
+      if (tp <= sp) return; // keep existing higher-priority version
+      // Incoming wins — evict old entry from content map
+      byContent.delete(dedupKey(sameId));
+    }
+
+    // Same-content conflict: different source for same transaction
+    const sameContent = byContent.get(key);
+    if (sameContent) {
+      const sp = SOURCE_PRIORITY[sameContent.source ?? ""] ?? 0;
+      if (tp <= sp) return;
+      if (sameContent.id) byId.delete(sameContent.id);
+    }
+
+    byContent.set(key, t);
+    if (t.id) byId.set(t.id, t);
+  };
+
+  prev.forEach(addTx);
+  incoming.forEach(addTx);
+
+  return Array.from(byContent.values()).sort((a, b) => b.date.localeCompare(a.date));
 }
 
 /** Find the best matching account for a bank name and optional last-4 digits */
@@ -266,12 +487,120 @@ function remapEmailTransactionsForAccount(
   });
 }
 
-/** Effective balance = stored base balance adjusted by all linked transactions */
+/**
+ * Resolve the local accountId for an imported transaction.
+ * - plaid: plaidAccMap[plaidAccountId] (O(1), stable)
+ * - email: findAccountMatch by bank name + last4
+ * Returns "" if no match — caller must handle fallback.
+ */
+function resolveAccountId(
+  source: "plaid" | "email" | "manual",
+  accounts: Account[],
+  params: { plaidAccountId?: string; bank?: string; lastFour?: string },
+  plaidAccMap?: Record<string, string>
+): string {
+  if (source === "plaid") {
+    return (params.plaidAccountId && plaidAccMap ? plaidAccMap[params.plaidAccountId] : undefined) ?? "";
+  }
+  if (source === "email" && params.bank) {
+    return findAccountMatch(accounts, params.bank, params.lastFour)?.id ?? "";
+  }
+  return "";
+}
+
+/**
+ * Normalize an imported transaction: resolve accountId, apply category rules,
+ * attach plaidItemId + plaidAccountId. Used by both email and Plaid paths.
+ */
+function normalizeImportedTx(
+  raw: Omit<Transaction, "id" | "accountId"> & { id?: string; accountId?: string },
+  source: "plaid" | "email",
+  accounts: Account[],
+  categoryRules: CategoryRule[],
+  opts: {
+    plaidAccMap?: Record<string, string>;
+    plaidItemId?: string;
+    fallbackAccountId?: string;
+  } = {}
+): Transaction {
+  const id = raw.id ?? (Date.now().toString(36) + Math.random().toString(36).slice(2, 9));
+
+  // 1. Resolve accountId
+  const resolvedAccountId =
+    resolveAccountId(
+      source,
+      accounts,
+      { plaidAccountId: raw.plaidAccountId, bank: raw.bank, lastFour: undefined },
+      opts.plaidAccMap
+    ) || opts.fallbackAccountId || raw.accountId || "";
+
+  // 2. Apply category rules (user-defined rules override source category)
+  const needle = (raw.merchant || raw.title || "").toLowerCase().replace(/[^a-z0-9\s]/g, "").replace(/\s+/g, " ").trim();
+  let category = raw.category || "Others";
+  if (needle) {
+    const rules = categoryRules;
+    const exact = rules.find((r) => r.merchantPattern === needle);
+    if (exact) {
+      category = exact.category;
+    } else {
+      const partial = rules
+        .filter((r) => needle.includes(r.merchantPattern) || r.merchantPattern.includes(needle))
+        .sort((a, b) => b.hitCount - a.hitCount)[0];
+      if (partial) category = partial.category;
+    }
+  }
+
+  return {
+    ...raw,
+    id,
+    accountId: resolvedAccountId,
+    category,
+    source,
+    plaidItemId: opts.plaidItemId ?? raw.plaidItemId,
+    plaidAccountId: raw.plaidAccountId,
+  };
+}
+
+/**
+ * Returns true if a transaction belongs to the given account.
+ * Matches by local UUID first; falls back to plaidAccountId for transactions
+ * that were synced before the account-ID remapping ran.
+ */
+export function txBelongsToAccount(tx: Transaction, account: Account): boolean {
+  if (tx.accountId === account.id) return true;
+  if (account.plaidAccountId && tx.plaidAccountId === account.plaidAccountId) return true;
+  return false;
+}
+
+/**
+ * Effective balance = stored base balance adjusted by linked transactions.
+ *
+ * For Plaid-connected accounts the stored `balance` is the authoritative
+ * live balance synced from Plaid (which already reflects all Plaid-imported
+ * transactions). Applying those transactions again would double-count them.
+ * Only manual (non-Plaid) transactions are applied on top so user entries
+ * made between syncs are reflected immediately.
+ *
+ * For manual accounts there is no Plaid snapshot, so all transactions
+ * (including Plaid-sourced ones, if any) are applied to the initial balance.
+ */
 export function computeBalance(account: Account, transactions: Transaction[]): number {
+  const isPlaidAccount = !!(account.plaidAccountId || account.plaidItemId);
   const net = transactions
-    .filter((t) => t.accountId === account.id)
+    .filter((t) => txBelongsToAccount(t, account))
+    .filter((t) => !isPlaidAccount || t.source !== "plaid")
     .reduce((s, t) => s + (t.type === "income" ? t.amount : -t.amount), 0);
   return account.balance + net;
+}
+
+/**
+ * Whether an account contributes to net worth.
+ * All account types are included by default; only excluded when explicitly set.
+ * Net worth = assets (positive balances) - liabilities (negative balances).
+ */
+export function isIncludedInNetworth(account: Account): boolean {
+  if (account.includeInNetworth === false) return false;
+  return true;
 }
 
 // ── Provider ─────────────────────────────────────────────────────────────────
@@ -280,7 +609,12 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
   const [transactions, setTransactions] = useState<Transaction[]>([]);
   const [accounts, setAccounts] = useState<Account[]>([]);
   const [bills, setBills] = useState<Bill[]>([]);
+  const [budgets, setBudgets] = useState<Budget[]>([]);
+  const [goals, setGoals] = useState<Goal[]>([]);
+  const [tasks, setTasks] = useState<Task[]>([]);
   const [projects, setProjects] = useState<Project[]>([]);
+  const [categories, setCategories] = useState<Category[]>([]);
+  const [categoryRules, setCategoryRules] = useState<CategoryRule[]>([]);
   const [emailSync, setEmailSync] = useState<EmailSync>({ email: "", appPassword: "", isConnected: false });
   const [plaidSync, setPlaidSync] = useState<PlaidSync>({ items: [] });
   const [isSyncing, setIsSyncing] = useState(false);
@@ -292,22 +626,34 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
   const deviceIdRef = useRef<string>("");
   const householdIdRef = useRef<string>("");
   const accountsRef = useRef<Account[]>([]);
+  const transactionsRef = useRef<Transaction[]>([]);
+  const billsRef = useRef<Bill[]>([]);
+  const categoryRulesRef = useRef<CategoryRule[]>([]);
+  useEffect(() => { categoryRulesRef.current = categoryRules; }, [categoryRules]);
+  useEffect(() => { transactionsRef.current = transactions; }, [transactions]);
+  useEffect(() => { billsRef.current = bills; }, [bills]);
 
   useEffect(() => {
     (async () => {
       try {
-        const [txRaw, accRaw, billRaw, projectRaw, emailRaw, plaidRaw, storedDeviceId, storedHouseholdId, storedUserName, storedReviewedIds] =
+        const [storedVersion, txRaw, accRaw, billRaw, budgetRaw, goalRaw, projectRaw, catRaw, rulesRaw, emailRaw, plaidRaw, storedDeviceId, storedHouseholdId, storedUserName, storedReviewedIds, taskRaw] =
           await Promise.all([
+            AsyncStorage.getItem(STORAGE_KEYS.version),
             AsyncStorage.getItem(STORAGE_KEYS.transactions),
             AsyncStorage.getItem(STORAGE_KEYS.accounts),
             AsyncStorage.getItem(STORAGE_KEYS.bills),
+            AsyncStorage.getItem(STORAGE_KEYS.budgets),
+            AsyncStorage.getItem(STORAGE_KEYS.goals),
             AsyncStorage.getItem(STORAGE_KEYS.projects),
+            AsyncStorage.getItem(STORAGE_KEYS.categories),
+            AsyncStorage.getItem(STORAGE_KEYS.categoryRules),
             AsyncStorage.getItem(STORAGE_KEYS.emailSync),
             AsyncStorage.getItem(STORAGE_KEYS.plaidSync),
             AsyncStorage.getItem(STORAGE_KEYS.deviceId),
             AsyncStorage.getItem(STORAGE_KEYS.householdId),
             AsyncStorage.getItem(STORAGE_KEYS.userName),
             AsyncStorage.getItem(STORAGE_KEYS.reviewedTransactionIds),
+            AsyncStorage.getItem(STORAGE_KEYS.tasks),
           ]);
 
         const dId = storedDeviceId || generateDeviceId();
@@ -320,14 +666,114 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
         householdIdRef.current = hId;
         setHouseholdId(hId);
 
-        setTransactions(txRaw ? JSON.parse(txRaw) : []);
+        // If storage version changed, wipe stale local transactions so we start clean.
+        const versionOk = storedVersion === STORAGE_VERSION;
+        if (!versionOk) {
+          await AsyncStorage.setItem(STORAGE_KEYS.version, STORAGE_VERSION);
+          await AsyncStorage.removeItem(STORAGE_KEYS.transactions);
+        }
+
+        const localTxs: Transaction[] = versionOk && txRaw ? JSON.parse(txRaw) : [];
+        setTransactions(localTxs);
         setAccounts(accRaw ? JSON.parse(accRaw) : []);
-        setBills(billRaw ? JSON.parse(billRaw) : []);
+        const parsedBills: Bill[] = billRaw ? JSON.parse(billRaw) : [];
+        setBills(parsedBills);
+        setupNotificationsOnInit(parsedBills);
+        setBudgets(budgetRaw ? JSON.parse(budgetRaw) : []);
+        setGoals(goalRaw ? JSON.parse(goalRaw) : []);
+        setTasks(taskRaw ? JSON.parse(taskRaw) : []);
         setProjects(projectRaw ? JSON.parse(projectRaw) : []);
+        setCategoryRules(rulesRaw ? JSON.parse(rulesRaw) : []);
         if (emailRaw) setEmailSync(JSON.parse(emailRaw));
         if (plaidRaw) setPlaidSync(JSON.parse(plaidRaw));
         if (storedUserName) setUserNameState(storedUserName);
         if (storedReviewedIds) setReviewedTransactionIds(JSON.parse(storedReviewedIds));
+
+        // ── Load categories ───────────────────────────────────────────────────
+        const savedCats: Category[] = catRaw ? JSON.parse(catRaw) : [];
+        if (savedCats.length > 0) setCategories(savedCats);
+        try {
+          const catFetch = await fetch(`${getApiBase()}/api/categories`, {
+            headers: { "X-Household-ID": hId, "X-Device-ID": dId },
+            signal: AbortSignal.timeout(6000),
+          });
+          if (catFetch.ok) {
+            const remoteCats: Category[] = await catFetch.json();
+            if (remoteCats.length > 0) {
+              setCategories(remoteCats);
+            } else if (savedCats.length === 0) {
+              const defaults = buildDefaultCategories(hId);
+              setCategories(defaults);
+              fetch(`${getApiBase()}/api/categories/seed`, {
+                method: "POST",
+                headers: { "Content-Type": "application/json", "X-Household-ID": hId, "X-Device-ID": dId },
+              }).catch(() => {});
+            }
+          } else if (savedCats.length === 0) {
+            setCategories(buildDefaultCategories(hId));
+          }
+        } catch {
+          if (savedCats.length === 0) setCategories(buildDefaultCategories(hId));
+        }
+
+        // ── Load category rules ───────────────────────────────────────────────
+        try {
+          const rulesFetch = await fetch(`${getApiBase()}/api/category-rules`, {
+            headers: { "X-Household-ID": hId, "X-Device-ID": dId },
+            signal: AbortSignal.timeout(6000),
+          });
+          if (rulesFetch.ok) {
+            const remoteRules: CategoryRule[] = await rulesFetch.json();
+            if (remoteRules.length > 0) setCategoryRules(remoteRules);
+          }
+        } catch {}
+
+        // ── Background: push local transactions to server ─────────────────────
+        if (localTxs.length > 0) {
+          fetch(`${getApiBase()}/api/transactions/bulk`, {
+            method: "POST",
+            headers: { "Content-Type": "application/json", "X-Household-ID": hId, "X-Device-ID": dId },
+            body: JSON.stringify({ transactions: localTxs }),
+          }).catch(() => {});
+        }
+
+        // ── Background: pull server transactions and merge via upsertTransactions ──
+        // upsertTransactions handles dedup by accountId|amount|date and prefers
+        // plaid > manual > email, so cross-source duplicates are always collapsed.
+        fetch(`${getApiBase()}/api/transactions`, {
+          headers: { "X-Household-ID": hId, "X-Device-ID": dId },
+        }).then(async (r) => {
+          if (!r.ok) return;
+          const serverTxs: Transaction[] = await r.json();
+          if (serverTxs.length > 0) {
+            setTransactions((prev) => upsertTransactions(prev, serverTxs));
+          }
+        }).catch(() => {});
+
+        // ── Background: pull server accounts (always authoritative for account list) ──
+        fetch(`${getApiBase()}/api/accounts`, {
+          headers: { "X-Household-ID": hId, "X-Device-ID": dId },
+        }).then(async (r) => {
+          if (!r.ok) return;
+          const serverAccts: Account[] = await r.json();
+          if (serverAccts.length > 0) {
+            setAccounts((prev) => {
+              const byId = new Map(prev.map((a) => [a.id, a]));
+              const next = serverAccts.map((s) => {
+                const local = byId.get(s.id);
+                return {
+                  ...(local ?? {}),
+                  ...s,
+                  // Preserve local Plaid metadata if server returns null (new columns not yet backfilled)
+                  plaidItemId: s.plaidItemId ?? local?.plaidItemId,
+                  plaidAccountId: s.plaidAccountId ?? local?.plaidAccountId,
+                } as Account;
+              });
+              const localOnly = prev.filter((a) => !next.find((n) => n.id === a.id));
+              return [...next, ...localOnly];
+            });
+          }
+        }).catch(() => {});
       } catch {}
       setInitialized(true);
     })();
@@ -339,11 +785,16 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
     accountsRef.current = accounts;
   }, [accounts, initialized]);
   useEffect(() => { if (initialized) AsyncStorage.setItem(STORAGE_KEYS.bills, JSON.stringify(bills)); }, [bills, initialized]);
+  useEffect(() => { if (initialized) AsyncStorage.setItem(STORAGE_KEYS.budgets, JSON.stringify(budgets)); }, [budgets, initialized]);
+  useEffect(() => { if (initialized) AsyncStorage.setItem(STORAGE_KEYS.goals, JSON.stringify(goals)); }, [goals, initialized]);
   useEffect(() => { if (initialized) AsyncStorage.setItem(STORAGE_KEYS.projects, JSON.stringify(projects)); }, [projects, initialized]);
+  useEffect(() => { if (initialized) AsyncStorage.setItem(STORAGE_KEYS.categories, JSON.stringify(categories)); }, [categories, initialized]);
+  useEffect(() => { if (initialized) AsyncStorage.setItem(STORAGE_KEYS.categoryRules, JSON.stringify(categoryRules)); }, [categoryRules, initialized]);
   useEffect(() => { if (initialized) AsyncStorage.setItem(STORAGE_KEYS.emailSync, JSON.stringify(emailSync)); }, [emailSync, initialized]);
   useEffect(() => { if (initialized) AsyncStorage.setItem(STORAGE_KEYS.plaidSync, JSON.stringify(plaidSync)); }, [plaidSync, initialized]);
   useEffect(() => { if (initialized) AsyncStorage.setItem(STORAGE_KEYS.userName, userName); }, [userName, initialized]);
   useEffect(() => { if (initialized) AsyncStorage.setItem(STORAGE_KEYS.reviewedTransactionIds, JSON.stringify(reviewedTransactionIds)); }, [reviewedTransactionIds, initialized]);
+  useEffect(() => { if (initialized) AsyncStorage.setItem(STORAGE_KEYS.tasks, JSON.stringify(tasks)); }, [tasks, initialized]);
 
   const setUserName = useCallback((name: string) => {
     setUserNameState(name.trim());
@@ -362,12 +813,42 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
     setAccounts([]);
     setBills([]);
     setProjects([]);
+    setPlaidSync({ items: [] });
     await Promise.all([
       AsyncStorage.removeItem(STORAGE_KEYS.transactions),
       AsyncStorage.removeItem(STORAGE_KEYS.accounts),
       AsyncStorage.removeItem(STORAGE_KEYS.bills),
       AsyncStorage.removeItem(STORAGE_KEYS.projects),
+      AsyncStorage.removeItem(STORAGE_KEYS.plaidSync),
     ]);
+
+    // Fetch fresh data from server for the new household
+    const hId = normalized;
+    const dId = deviceIdRef.current;
+    const base = getApiBase();
+    const hdrs = { "X-Household-ID": hId, "X-Device-ID": dId };
+    try {
+      const [txRes, acctRes, plaidRes] = await Promise.all([
+        fetch(`${base}/api/transactions`, { headers: hdrs }),
+        fetch(`${base}/api/accounts`, { headers: hdrs }),
+        fetch(`${base}/api/plaid/items`, { headers: hdrs }),
+      ]);
+      if (txRes.ok) {
+        const txs: Transaction[] = await txRes.json();
+        setTransactions(txs);
+        AsyncStorage.setItem(STORAGE_KEYS.transactions, JSON.stringify(txs));
+      }
+      if (acctRes.ok) {
+        const accts: Account[] = await acctRes.json();
+        setAccounts(accts);
+        AsyncStorage.setItem(STORAGE_KEYS.accounts, JSON.stringify(accts));
+      }
+      if (plaidRes.ok) {
+        const items: PlaidItem[] = await plaidRes.json();
+        setPlaidSync({ items });
+        AsyncStorage.setItem(STORAGE_KEYS.plaidSync, JSON.stringify({ items }));
+      }
+    } catch {}
   }, []);
 
   // ── CRUD: Transactions ────────────────────────────────────────────────────
@@ -378,8 +859,54 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
   }, []);
 
   const updateTransaction = useCallback((id: string, updates: Partial<Transaction>) => {
-    setTransactions((prev) => prev.map((t) => (t.id === id ? { ...t, ...updates } : t)));
-    apiCall(`/api/transactions/${id}`, "PUT", householdIdRef.current, deviceIdRef.current, updates);
+    let mergedTx: Transaction | undefined;
+    setTransactions((prev) => {
+      const existing = prev.find((t) => t.id === id);
+      // Auto-learn: if the user changed the category, record a rule
+      if (existing && updates.category && updates.category !== existing.category) {
+        const title = existing.merchant || existing.title || "";
+        if (title) {
+          const pattern = title
+            .toLowerCase()
+            .replace(/[^a-z0-9\s]/g, "")
+            .replace(/\s+/g, " ")
+            .trim();
+          if (pattern) {
+            const rules = categoryRulesRef.current;
+            const exRule = rules.find((r) => r.merchantPattern === pattern);
+            const now = new Date().toISOString();
+            if (exRule) {
+              setCategoryRules((rs) =>
+                rs.map((r) =>
+                  r.merchantPattern === pattern
+                    ? { ...r, category: updates.category!, hitCount: r.hitCount + 1, source: "manual" as const, updatedAt: now }
+                    : r
+                )
+              );
+              apiCall("/api/category-rules", "POST", householdIdRef.current, deviceIdRef.current, {
+                ...exRule, category: updates.category!, hitCount: exRule.hitCount + 1, source: "manual",
+              }).catch(() => {});
+            } else {
+              const newRule: CategoryRule = {
+                id: genId(), householdId: householdIdRef.current,
+                merchantPattern: pattern, merchantExact: title,
+                category: updates.category!, hitCount: 1, source: "manual", createdAt: now, updatedAt: now,
+              };
+              setCategoryRules((rs) => [...rs, newRule]);
+              apiCall("/api/category-rules", "POST", householdIdRef.current, deviceIdRef.current, newRule).catch(() => {});
+            }
+          }
+        }
+      }
+      const next = prev.map((t) => (t.id === id ? { ...t, ...updates } : t));
+      mergedTx = next.find((t) => t.id === id);
+      return next;
+    });
+    if (mergedTx) {
+      apiCall("/api/transactions/bulk", "POST", householdIdRef.current, deviceIdRef.current, { transactions: [mergedTx] });
+    } else {
+      apiCall(`/api/transactions/${id}`, "PUT", householdIdRef.current, deviceIdRef.current, updates);
+    }
   }, []);
 
   const deleteTransaction = useCallback((id: string) => {
@@ -399,7 +926,12 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
         return existing.id;
       }
     }
-    const newA: Account = { ...a, id: genId() };
+    const isLiability = a.type === "credit";
+    const newA: Account = {
+      ...a,
+      id: genId(),
+      balance: isLiability ? -Math.abs(a.balance) : a.balance,
+    };
     setAccounts((prev) => [...prev, newA]);
     apiCall("/api/accounts", "POST", householdIdRef.current, deviceIdRef.current, newA);
     // Auto-remap any email transactions whose bank matches this new account
@@ -407,19 +939,6 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
       setTransactions((prev) => remapEmailTransactionsForAccount(prev, newA));
     }
     return newA.id;
-  }, []);
-
-  const remapEmailTransactions = useCallback((bankPattern: string, accountId: string) => {
-    if (!bankPattern.trim()) return;
-    const pattern = bankPattern.trim().toLowerCase();
-    setTransactions((prev) =>
-      prev.map((t) => {
-        if (t.source !== "email" || !t.bank) return t;
-        const tb = t.bank.toLowerCase();
-        const matches = tb.includes(pattern) || pattern.includes(tb);
-        return matches ? { ...t, accountId } : t;
-      })
-    );
   }, []);
 
   const updateAccount = useCallback((id: string, updates: Partial<Account>) => {
@@ -432,21 +951,79 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
     apiCall(`/api/accounts/${id}`, "DELETE", householdIdRef.current, deviceIdRef.current);
   }, []);
 
+  // ── CRUD: Budgets ──────────────────────────────────────────────────────────
+  const addBudget = useCallback((b: Omit<Budget, "id" | "createdAt" | "updatedAt">) => {
+    const now = new Date().toISOString();
+    setBudgets((prev) => [...prev, { ...b, id: genId(), createdAt: now, updatedAt: now }]);
+  }, []);
+
+  const updateBudget = useCallback((id: string, updates: Partial<Budget>) => {
+    setBudgets((prev) => prev.map((b) => (b.id === id ? { ...b, ...updates, updatedAt: new Date().toISOString() } : b)));
+  }, []);
+
+  const deleteBudget = useCallback((id: string) => {
+    setBudgets((prev) => prev.filter((b) => b.id !== id));
+  }, []);
+
+  // ── CRUD: Goals ───────────────────────────────────────────────────────────
+  const addGoal = useCallback((g: Omit<Goal, "id" | "createdAt" | "updatedAt">) => {
+    const now = new Date().toISOString();
+    setGoals((prev) => [...prev, { ...g, id: genId(), createdAt: now, updatedAt: now }]);
+  }, []);
+
+  const updateGoal = useCallback((id: string, updates: Partial<Goal>) => {
+    setGoals((prev) => prev.map((g) => (g.id === id ? { ...g, ...updates, updatedAt: new Date().toISOString() } : g)));
+  }, []);
+
+  const deleteGoal = useCallback((id: string) => {
+    setGoals((prev) => prev.filter((g) => g.id !== id));
+  }, []);
+
+  // ── CRUD: Tasks ───────────────────────────────────────────────────────────
+  const addTask = useCallback((t: Omit<Task, "id" | "createdAt" | "updatedAt">) => {
+    const now = new Date().toISOString();
+    const newT: Task = { ...t, id: genId(), createdAt: now, updatedAt: now };
+    setTasks((prev) => [...prev, newT]);
+    if (newT.reminderEnabled && newT.reminderDate)
+      scheduleTaskReminder({ id: newT.id, title: newT.title, reminderDate: newT.reminderDate, notes: newT.notes });
+  }, []);
+
+  const updateTask = useCallback((id: string, updates: Partial<Task>) => {
+    setTasks((prev) => prev.map((t) => {
+      if (t.id !== id) return t;
+      const updated: Task = { ...t, ...updates, updatedAt: new Date().toISOString() };
+      if (updated.reminderEnabled && updated.reminderDate)
+        scheduleTaskReminder({ id: updated.id, title: updated.title, reminderDate: updated.reminderDate, notes: updated.notes });
+      else cancelTaskReminder(id);
+      return updated;
+    }));
+  }, []);
+
+  const deleteTask = useCallback((id: string) => {
+    setTasks((prev) => prev.filter((t) => t.id !== id));
+    cancelTaskReminder(id);
+  }, []);
+
   // ── CRUD: Bills ───────────────────────────────────────────────────────────
   const addBill = useCallback((b: Omit<Bill, "id">) => {
-    const newB: Bill = { ...b, id: genId() };
+    const now = new Date().toISOString();
+    const newB: Bill = { ...b, id: genId(), createdAt: now, updatedAt: now };
     setBills((prev) => [...prev, newB]);
     apiCall("/api/bills", "POST", householdIdRef.current, deviceIdRef.current, newB);
+    scheduleBillNotifications(newB);
   }, []);
 
   const updateBill = useCallback((id: string, updates: Partial<Bill>) => {
-    setBills((prev) => prev.map((b) => (b.id === id ? { ...b, ...updates } : b)));
+    setBills((prev) => prev.map((b) => (b.id === id ? { ...b, ...updates, updatedAt: new Date().toISOString() } : b)));
     apiCall(`/api/bills/${id}`, "PUT", householdIdRef.current, deviceIdRef.current, updates);
+    const existing = billsRef.current.find((b) => b.id === id);
+    if (existing) scheduleBillNotifications({ ...existing, ...updates });
   }, []);
 
   const deleteBill = useCallback((id: string) => {
     setBills((prev) => prev.filter((b) => b.id !== id));
     apiCall(`/api/bills/${id}`, "DELETE", householdIdRef.current, deviceIdRef.current);
+    cancelBillNotifications(id);
   }, []);
 
   const addProject = useCallback((p: Omit<Project, "id" | "createdAt">): string => {
@@ -464,12 +1041,137 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
     setTransactions((prev) => prev.map((t) => (t.projectId === id ? { ...t, projectId: undefined, projectName: undefined } : t)));
   }, []);
 
+  const addCategory = useCallback((c: Omit<Category, "id" | "householdId" | "createdAt" | "updatedAt">) => {
+    const created: Category = {
+      ...c,
+      id: genId(),
+      householdId: householdIdRef.current,
+      createdAt: new Date().toISOString(),
+      updatedAt: new Date().toISOString(),
+    };
+    setCategories((prev) => [...prev, created]);
+    // Sync to backend so other devices (e.g. wife's phone) see it
+    apiCall("/api/categories", "POST", householdIdRef.current, deviceIdRef.current, created).catch(() => {});
+  }, []);
+
+  const updateCategory = useCallback((id: string, updates: Partial<Category>) => {
+    setCategories((prev) => prev.map((cat) => (cat.id === id ? { ...cat, ...updates, updatedAt: new Date().toISOString() } : cat)));
+    apiCall(`/api/categories/${id}`, "PUT", householdIdRef.current, deviceIdRef.current, updates).catch(() => {});
+  }, []);
+
+  const deleteCategory = useCallback((id: string) => {
+    setCategories((prev) => {
+      const toDelete = new Set<string>();
+      const findSubcats = (parentId: string) => {
+        prev.filter((c) => c.parentId === parentId).forEach((sub) => {
+          toDelete.add(sub.id);
+          findSubcats(sub.id);
+        });
+      };
+      toDelete.add(id);
+      findSubcats(id);
+      return prev.filter((c) => !toDelete.has(c.id));
+    });
+    apiCall(`/api/categories/${id}`, "DELETE", householdIdRef.current, deviceIdRef.current).catch(() => {});
+  }, []);
+
+  // ── Merchant pattern normalization ─────────────────────────────────────────
+  function normalizeMerchant(title: string): string {
+    return title
+      .toLowerCase()
+      .replace(/[^a-z0-9\s]/g, "")
+      .replace(/\s+/g, " ")
+      .trim();
+  }
+
+  // ── Auto-categorization ───────────────────────────────────────────────────
+  const autoCategorize = useCallback((title: string): string | null => {
+    const needle = normalizeMerchant(title);
+    if (!needle) return null;
+    const rules = categoryRulesRef.current;
+    // Exact match first
+    const exact = rules.find((r) => r.merchantPattern === needle);
+    if (exact) return exact.category;
+    // Substring match — title contains a known merchant pattern
+    const partial = rules
+      .filter((r) => needle.includes(r.merchantPattern) || r.merchantPattern.includes(needle))
+      .sort((a, b) => b.hitCount - a.hitCount)[0];
+    return partial?.category ?? null;
+  }, []);
+
+  // ── Learn a rule when user manually categorises a transaction ─────────────
+  const learnCategoryRule = useCallback((merchantTitle: string, category: string) => {
+    const pattern = normalizeMerchant(merchantTitle);
+    if (!pattern || !category) return;
+
+    setCategoryRules((prev) => {
+      const existing = prev.find((r) => r.merchantPattern === pattern);
+      if (existing) {
+        // Update category and increment hit count
+        const updated = prev.map((r) =>
+          r.merchantPattern === pattern
+            ? { ...r, category, hitCount: r.hitCount + 1, source: "manual" as const, updatedAt: new Date().toISOString() }
+            : r
+        );
+        const rule = updated.find((r) => r.merchantPattern === pattern)!;
+        apiCall("/api/category-rules", "POST", householdIdRef.current, deviceIdRef.current, {
+          ...rule, category, hitCount: rule.hitCount, source: "manual",
+        }).catch(() => {});
+        return updated;
+      } else {
+        const now = new Date().toISOString();
+        const newRule: CategoryRule = {
+          id: genId(),
+          householdId: householdIdRef.current,
+          merchantPattern: pattern,
+          merchantExact: merchantTitle,
+          category,
+          hitCount: 1,
+          source: "manual",
+          createdAt: now,
+          updatedAt: now,
+        };
+        apiCall("/api/category-rules", "POST", householdIdRef.current, deviceIdRef.current, newRule).catch(() => {});
+        return [...prev, newRule];
+      }
+    });
+  }, []);
+
+  const seedCategories = useCallback(async () => {
+    setIsSyncing(true);
+    try {
+      // Try backend seed first
+      const res = await fetch(`${getApiBase()}/api/categories/seed`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json", "X-Household-ID": householdIdRef.current, "X-Device-ID": deviceIdRef.current },
+      });
+      if (res.ok) {
+        // Fetch the freshly seeded categories from backend
+        const catsRes = await fetch(`${getApiBase()}/api/categories`, {
+          headers: { "X-Household-ID": householdIdRef.current, "X-Device-ID": deviceIdRef.current },
+        });
+        const catsData = await catsRes.json();
+        if (Array.isArray(catsData) && catsData.length > 0) {
+          setCategories(catsData);
+          return;
+        }
+      }
+    } catch {
+      // Offline — fall through to local seed
+    } finally {
+      setIsSyncing(false);
+    }
+    // Fallback: seed locally
+    setCategories(buildDefaultCategories(householdIdRef.current));
+  }, []);
+
   const markBillPaid = useCallback(
     (id: string) => {
       const bill = bills.find((b) => b.id === id);
       if (!bill) return;
       setBills((prev) => prev.map((b) => (b.id === id ? { ...b, isPaid: true } : b)));
       apiCall(`/api/bills/${id}/pay`, "POST", householdIdRef.current, deviceIdRef.current);
+      cancelBillNotifications(id);
       addTransaction({
         title: bill.title,
         amount: bill.amount,
@@ -508,12 +1210,58 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
     []
   );
 
+  const remapEmailTransactions = useCallback((bankPattern: string, accountId: string) => {
+    setTransactions((prev) =>
+      prev.map((t) => {
+        if (t.source !== "email") return t;
+        const tb = (t.bank ?? "").toLowerCase();
+        const tm = (t.merchant ?? t.title ?? "").toLowerCase();
+        const bp = bankPattern.trim().toLowerCase();
+        if (tb.includes(bp) || bp.includes(tb) || tm.includes(bp)) {
+          return { ...t, accountId };
+        }
+        return t;
+      })
+    );
+  }, []);
+
   const disconnectEmail = useCallback(() => {
     setEmailSync({ email: "", appPassword: "", isConnected: false });
   }, []);
 
   const resetEmailTransactions = useCallback(() => {
     setTransactions((prev) => prev.filter((t) => t.source !== "email"));
+  }, []);
+
+  const wipeAllTransactions = useCallback(async () => {
+    setIsSyncing(true);
+    try {
+      // 1. Wipe backend - verify it succeeds before wiping local
+      const res = await apiCall("/api/transactions", "DELETE", householdIdRef.current, deviceIdRef.current);
+
+      // apiCall returns null on network/timeout errors
+      if (!res) {
+        throw new Error("Network error: Could not connect to server to delete transactions");
+      }
+
+      // Check HTTP status code
+      if (!res.ok) {
+        const errorData = await res.json().catch(() => ({ error: "Unknown server error" }));
+        throw new Error(errorData.error || `Server error: ${res.status} ${res.statusText}`);
+      }
+
+      // 2. Only wipe local if backend succeeded
+      setTransactions([]);
+      await AsyncStorage.setItem(STORAGE_KEYS.transactions, JSON.stringify([]));
+
+      // Optional: log success
+      console.log("Transactions wiped successfully from both server and local storage");
+    } catch (err) {
+      console.error("Transaction wipe failed:", err);
+      throw err; // Re-throw so UI can show error to user
+    } finally {
+      setIsSyncing(false);
+    }
   }, []);
 
   const syncEmailTransactions = useCallback(async (): Promise<{ imported: number; parsed?: any[]; error?: string }> => {
@@ -537,24 +1285,79 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
         return { imported: 0, error: data.error || "Sync failed" };
       }
 
+      // ── Auto-create accounts for newly-seen banks (BEFORE resolving accountIds) ──
+      let currentAccts = accountsRef.current;
+      if (Array.isArray(data.parsed) && data.parsed.length > 0) {
+        const toCreate: Account[] = [];
+        const seenKeys = new Set<string>();
+        for (const p of data.parsed as Array<{ bank?: string; lastFour?: string; type?: string }>) {
+          const bank = (p.bank ?? "").trim();
+          if (!bank) continue;
+          const key = `${bank.toLowerCase()}|${p.lastFour ?? ""}`;
+          if (seenKeys.has(key)) continue;
+          seenKeys.add(key);
+          const exists = currentAccts.find(
+            (a) =>
+              a.bank?.toLowerCase() === bank.toLowerCase() &&
+              (!p.lastFour || a.lastFour === p.lastFour)
+          );
+          if (exists) continue;
+          const bankMeta = PLAID_BANKS.find(
+            (b) =>
+              b.name.toLowerCase().includes(bank.toLowerCase()) ||
+              bank.toLowerCase().includes(b.name.split(" ")[0].toLowerCase())
+          );
+          const inferredType: Account["type"] =
+            bank.toLowerCase().includes("credit") || bank.toLowerCase().includes("visa") ||
+            bank.toLowerCase().includes("mastercard") || bank.toLowerCase().includes("amex")
+              ? "credit" : "checking";
+          const newAcct: Account = {
+            id: genId(),
+            name: p.lastFour ? `${bank} \u2022\u2022\u2022\u2022${p.lastFour}` : bank,
+            bank,
+            balance: 0,
+            type: inferredType,
+            color: bankMeta?.color ?? "#6366f1",
+            lastFour: p.lastFour,
+          };
+          toCreate.push(newAcct);
+        }
+        if (toCreate.length > 0) {
+          currentAccts = [...currentAccts, ...toCreate];
+          setAccounts(currentAccts);
+          toCreate.forEach((a) =>
+            apiCall("/api/accounts", "POST", householdIdRef.current, deviceIdRef.current, a)
+          );
+        }
+      }
+
+      // ── Resolve accountIds and categories at import time ───────────────────────
+      const rules = categoryRulesRef.current;
       const importedTransactions: Transaction[] = Array.isArray(data.transactions)
-        ? data.transactions.map((t: any) => ({
-            ...t,
-            id: t.id || genId(),
-            source: "email",
-            fromEmail: true,
-            accountId: t.accountId || "",
-          }))
+        ? data.transactions.map((t: any) =>
+            normalizeImportedTx(
+              { ...t, id: t.id || genId(), fromEmail: true },
+              "email",
+              currentAccts,
+              rules
+            )
+          )
         : [];
 
       // Count truly new entries (didn't already exist in the store in any form)
       let actuallyNew = 0;
       if (importedTransactions.length > 0) {
-        setTransactions((prev) => {
-          const existingKeys = new Set(prev.map(dedupKey));
-          actuallyNew = importedTransactions.filter((t) => !existingKeys.has(dedupKey(t))).length;
-          return upsertTransactions(prev, importedTransactions);
-        });
+        const prevKeys = new Set(transactionsRef.current.map(dedupKey));
+        actuallyNew = importedTransactions.filter((t) => !prevKeys.has(dedupKey(t))).length;
+        setTransactions((prev) => upsertTransactions(prev, importedTransactions));
+        // Push to server outside the state updater to avoid side effects
+        apiCall(
+          "/api/transactions/bulk",
+          "POST",
+          householdIdRef.current,
+          deviceIdRef.current,
+          { transactions: importedTransactions }
+        ).catch(() => {});
       }
 
       setEmailSync((prev) => ({
@@ -633,14 +1436,30 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
         );
       }
 
+      // Remap any existing transactions whose accountId is a raw Plaid account ID
+      // (e.g., from the migration script) to the local account ID
+      if (Object.keys(plaidAccMap).length > 0) {
+        setTransactions((prev) =>
+          prev.map((t) => {
+            const localId = plaidAccMap[t.accountId];
+            return localId ? { ...t, accountId: localId } : t;
+          })
+        );
+      }
+
       let imported = 0;
-      const fallbackId = toCreate[0]?.id ?? toMerge[0]?.id ?? current[0]?.id ?? "";
-      const txsToAdd: Transaction[] = initialTransactions.map((t) => ({
-        ...t,
-        id: genId(),
-        accountId: (t.accountId && plaidAccMap[t.accountId]) || fallbackId || t.accountId,
-        source: "plaid" as const,
-      }));
+      // Fallback: first account in THIS item's plaidAccMap, never a random unrelated account
+      const fallbackId = Object.values(plaidAccMap)[0] ?? "";
+      const rules = categoryRulesRef.current;
+      const txsToAdd: Transaction[] = initialTransactions.map((t) =>
+        normalizeImportedTx(
+          { ...t, id: genId() },
+          "plaid",
+          current,
+          rules,
+          { plaidAccMap, plaidItemId: item.itemId, fallbackAccountId: fallbackId }
+        )
+      );
 
       setTransactions((prev) => {
         const existingKeys = new Set(prev.map(dedupKey));
@@ -649,10 +1468,12 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
         return upsertTransactions(prev, fresh);
       });
 
-      // Register item with accountIds
+      // Register item with accountIds and the Plaid→local account ID map.
+      // Use ALL values from plaidAccMap (includes accounts already existing via plaidAccountId match).
       const registeredItem: PlaidItem = {
         ...item,
-        accountIds: [...toCreate.map((a) => a.id), ...toMerge.map((m) => m.id)],
+        accountIds: Array.from(new Set(Object.values(plaidAccMap))),
+        plaidAccountMap: plaidAccMap,
         lastSynced: new Date().toISOString(),
         lastImported: imported,
       };
@@ -671,11 +1492,39 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
       setIsSyncing(true);
 
       try {
+        // Build the account map first (before API call) so we can detect mismatches.
+        const _plaidAccounts = accounts.filter(
+          (a) => item.accountIds.includes(a.id) || a.plaidItemId === item.itemId
+        );
+        const _preMap: Record<string, string> = { ...(item.plaidAccountMap ?? {}) };
+        _plaidAccounts.forEach((a) => {
+          if (a.plaidAccountId && !_preMap[a.plaidAccountId]) _preMap[a.plaidAccountId] = a.id;
+        });
+        const _validIds = new Set(Object.values(_preMap));
+
+        // SCOPE mismatch check to THIS item's transactions only.
+        // Transactions with plaidItemId are remapped O(1). Legacy transactions without
+        // plaidItemId still need the content-based path.
+        const hasMismatched = transactions.some((t) => {
+          if (t.source !== "plaid") return false;
+          // If this transaction belongs to this Plaid item and has a plaidAccountId,
+          // check if it's mapped to the right local account.
+          if (t.plaidItemId === itemId && t.plaidAccountId) {
+            const expected = _preMap[t.plaidAccountId];
+            return expected && expected !== t.accountId;
+          }
+          // Legacy: transactions without plaidItemId
+          if (t.plaidItemId === itemId && !_validIds.has(t.accountId)) return true;
+          if (!t.plaidItemId && !_validIds.has(t.accountId)) return true;
+          return false;
+        });
+
         const res = await apiCall(
           `/api/plaid/sync/${itemId}`,
           "POST",
           householdIdRef.current,
-          deviceIdRef.current
+          deviceIdRef.current,
+          hasMismatched ? { force: true } : undefined
         );
 
         if (!res) {
@@ -690,30 +1539,149 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
           return { imported: 0, error: data.error ?? "Sync failed" };
         }
 
-        // Build map of plaidAccountId → local account id
-        const plaidAccounts = accounts.filter((a) => item.accountIds.includes(a.id));
-        const plaidAccMap: Record<string, string> = {};
-        plaidAccounts.forEach((a) => {
-          if (a.plaidAccountId) plaidAccMap[a.plaidAccountId] = a.id;
+        // Build map of plaidAccountId → local account id.
+        // Start from item.plaidAccountMap (persisted), then enrich from local accounts.
+        const plaidAccMap: Record<string, string> = { ...(item.plaidAccountMap ?? {}) };
+
+        // Enrich from accounts that already have plaidAccountId or plaidItemId set
+        const knownPlaidAccounts = accounts.filter(
+          (a) => item.accountIds.includes(a.id) || a.plaidItemId === item.itemId
+        );
+        knownPlaidAccounts.forEach((a) => {
+          if (a.plaidAccountId && !plaidAccMap[a.plaidAccountId]) {
+            plaidAccMap[a.plaidAccountId] = a.id;
+          }
         });
 
-        let imported = 0;
-        if (Array.isArray(data.transactions) && data.transactions.length > 0) {
-          const newTxs: Transaction[] = (data.transactions as any[]).map((t) => ({
-            id: genId(),
-            title: t.title,
-            amount: t.amount,
-            type: t.type as "income" | "expense",
-            category: t.category ?? "Other",
-            accountId: plaidAccMap[t.accountId] ?? plaidAccounts[0]?.id ?? t.accountId,
-            date: t.date,
-            source: "plaid" as const,
-            bank: t.bank,
-          }));
+        // ── Self-heal: use plaidAccounts returned from server to rebuild missing mapping ──
+        // This recovers accountIds that were lost (e.g. after changeHouseholdId refetch
+        // returned empty accountIds because plaid_item_id was null in the DB).
+        if (Array.isArray(data.plaidAccounts) && data.plaidAccounts.length > 0) {
+          for (const pa of data.plaidAccounts as Array<{ plaidAccountId: string; lastFour: string; name: string; balance?: number }>) {
+            if (plaidAccMap[pa.plaidAccountId]) continue; // already mapped
+            // Match by plaidAccountId first
+            const byPlaidId = accounts.find((a) => a.plaidAccountId === pa.plaidAccountId);
+            if (byPlaidId) { plaidAccMap[pa.plaidAccountId] = byPlaidId.id; continue; }
+            // Match by lastFour + bank (item.bankName)
+            const byLastFour = findAccountMatch(accounts, item.bankName, pa.lastFour);
+            if (byLastFour) { plaidAccMap[pa.plaidAccountId] = byLastFour.id; }
+          }
+        }
 
-          setTransactions((prev) => {
-            const existingKeys = new Set(prev.map(dedupKey));
-            const fresh = newTxs.filter((t) => !existingKeys.has(dedupKey(t)));
+        // ── Update stored balances from Plaid's authoritative figures ──────────
+        // The sync response returns fresh balances. Apply them so computeBalance
+        // always starts from the correct Plaid snapshot rather than a stale value.
+        if (Array.isArray(data.plaidAccounts) && data.plaidAccounts.length > 0) {
+          const balanceUpdates: { id: string; balance: number }[] = [];
+          for (const pa of data.plaidAccounts as Array<{ plaidAccountId: string; balance?: number }>) {
+            const localId = plaidAccMap[pa.plaidAccountId];
+            if (localId && typeof pa.balance === "number") {
+              balanceUpdates.push({ id: localId, balance: pa.balance });
+            }
+          }
+          if (balanceUpdates.length > 0) {
+            setAccounts((prev) =>
+              prev.map((a) => {
+                const upd = balanceUpdates.find((u) => u.id === a.id);
+                return upd ? { ...a, balance: upd.balance } : a;
+              })
+            );
+            balanceUpdates.forEach(({ id, balance }) =>
+              apiCall(`/api/accounts/${id}`, "PUT", householdIdRef.current, deviceIdRef.current, { balance }).catch(() => {})
+            );
+          }
+        }
+
+        // If accountIds is empty but we just rebuilt plaidAccMap, update the item
+        const rebuiltAccountIds = Array.from(new Set(Object.values(plaidAccMap)));
+        if (item.accountIds.length === 0 && rebuiltAccountIds.length > 0) {
+          setPlaidSync((prev) => ({
+            items: prev.items.map((i) =>
+              i.itemId === itemId
+                ? { ...i, accountIds: rebuiltAccountIds, plaidAccountMap: plaidAccMap }
+                : i
+            ),
+          }));
+        }
+
+        const plaidAccounts = accounts.filter((a) => rebuiltAccountIds.includes(a.id));
+
+        // Legacy: content key → correct localAccountId map from server transactions.
+        // Only used for old transactions that lack plaidItemId/plaidAccountId.
+        const correctIdByContent = new Map<string, string>();
+        if (Array.isArray(data.transactions)) {
+          for (const t of data.transactions as any[]) {
+            const localId = plaidAccMap[t.accountId];
+            if (localId) {
+              const key = `${(t.amount as number).toFixed(2)}|${(t.date as string).slice(0, 10)}|${(t.title as string).toLowerCase().trim()}`;
+              correctIdByContent.set(key, localId);
+            }
+          }
+        }
+
+        const rules = categoryRulesRef.current;
+        let imported = 0;
+
+        setTransactions((prev) => {
+          const validLocalIds = new Set(Object.values(plaidAccMap));
+          const fixed: Transaction[] = [];
+
+          // 1. Remap existing transactions ───────────────────────────────────────
+          const remapped = prev.map((t) => {
+            if (t.source !== "plaid") return t;
+
+            // Modern: O(1) remap by plaidAccountId (always correct)
+            if (t.plaidItemId === itemId && t.plaidAccountId) {
+              const expected = plaidAccMap[t.plaidAccountId];
+              if (expected && expected !== t.accountId) {
+                const r = { ...t, accountId: expected };
+                fixed.push(r);
+                return r;
+              }
+              return t;
+            }
+
+            // Legacy migration: raw Plaid account ID stored as accountId
+            const byPlaidId = plaidAccMap[t.accountId];
+            if (byPlaidId) {
+              const r = { ...t, accountId: byPlaidId, plaidItemId: itemId };
+              fixed.push(r);
+              return r;
+            }
+
+            // Legacy migration: wrong local account ID, content-match
+            if (!validLocalIds.has(t.accountId)) {
+              const key = `${t.amount.toFixed(2)}|${t.date.slice(0, 10)}|${t.title.toLowerCase().trim()}`;
+              const correctId = correctIdByContent.get(key);
+              if (correctId) {
+                const r = { ...t, accountId: correctId, plaidItemId: itemId };
+                fixed.push(r);
+                return r;
+              }
+            }
+            return t;
+          });
+
+          // Push any fixed transactions to the server so DB is also corrected
+          if (fixed.length > 0) {
+            apiCall("/api/transactions/bulk", "POST", householdIdRef.current, deviceIdRef.current, { transactions: fixed }).catch(() => {});
+          }
+
+          // 2. Import new transactions ───────────────────────────────────────────
+          let fresh: Transaction[] = [];
+          if (Array.isArray(data.transactions) && data.transactions.length > 0) {
+            const fallbackId = Object.values(plaidAccMap)[0] ?? "";
+            const candidates = (data.transactions as any[]).map((t) =>
+              normalizeImportedTx(
+                { ...t, id: genId() },
+                "plaid",
+                plaidAccounts,
+                rules,
+                { plaidAccMap, plaidItemId: itemId, fallbackAccountId: fallbackId }
+              )
+            );
+            const existingKeys = new Set(remapped.map(dedupKey));
+            fresh = candidates.filter((t) => !existingKeys.has(dedupKey(t)));
             imported = fresh.length;
             if (fresh.length > 0) {
               apiCall(
@@ -722,11 +1690,12 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
                 householdIdRef.current,
                 deviceIdRef.current,
                 { transactions: fresh }
-              );
+              ).catch(() => {});
             }
-            return upsertTransactions(prev, fresh);
-          });
-        }
+          }
+
+          return upsertTransactions(remapped, fresh);
+        });
 
         setPlaidSync((prev) => ({
           items: prev.items.map((i) =>
@@ -744,6 +1713,17 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
     },
     [plaidSync, accounts]
   );
+
+  const delinkPlaid = useCallback((itemId: string) => {
+    // Remove Plaid token only — keeps accounts and transactions intact
+    setPlaidSync((prev) => ({ items: prev.items.filter((i) => i.itemId !== itemId) }));
+    apiCall(
+      `/api/plaid/disconnect/${itemId}`,
+      "DELETE",
+      householdIdRef.current,
+      deviceIdRef.current
+    );
+  }, []);
 
   const disconnectPlaid = useCallback((itemId: string) => {
     const item = plaidSync.items.find((i) => i.itemId === itemId);
@@ -769,22 +1749,33 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
   const thisMonthTx = transactions.filter((t) => t.date >= monthStart);
   const monthlyIncome = thisMonthTx.filter((t) => t.type === "income").reduce((s, t) => s + t.amount, 0);
   const monthlyExpense = thisMonthTx.filter((t) => t.type === "expense").reduce((s, t) => s + t.amount, 0);
+  const LIABILITY_TYPES = ["credit", "mortgage", "loan"];
   const totalBalance = accounts
-    .filter((a) => a.includeInNetworth !== false)
-    .reduce((s, a) => s + computeBalance(a, transactions), 0);
+    .filter(isIncludedInNetworth)
+    .reduce((s, a) => {
+      const bal = computeBalance(a, transactions);
+      return LIABILITY_TYPES.includes(a.type ?? "")
+        ? s - Math.abs(bal)
+        : s + bal;
+    }, 0);
 
   return (
     <AppContext.Provider
       value={{
-        transactions, accounts, bills, projects, emailSync, plaidSync,
+        transactions, accounts, bills, budgets, goals, projects, categories, categoryRules, emailSync, plaidSync,
         userName, setUserName,
         reviewedTransactionIds, markTransactionReviewed,
         addTransaction, updateTransaction, deleteTransaction,
         addAccount, remapEmailTransactions, updateAccount, deleteAccount,
         addBill, updateBill, deleteBill, markBillPaid,
+        addBudget, updateBudget, deleteBudget,
+        addGoal, updateGoal, deleteGoal,
+        tasks, addTask, updateTask, deleteTask,
         addProject, updateProject, deleteProject,
-        connectEmail, disconnectEmail, resetEmailTransactions, syncEmailTransactions,
-        connectPlaid, syncPlaidTransactions, disconnectPlaid,
+        addCategory, updateCategory, deleteCategory, seedCategories,
+        learnCategoryRule, autoCategorize,
+        connectEmail, disconnectEmail, resetEmailTransactions, syncEmailTransactions, wipeAllTransactions,
+        connectPlaid, syncPlaidTransactions, delinkPlaid, disconnectPlaid,
         isSyncing, totalBalance, monthlyIncome, monthlyExpense,
         deviceId, householdId, changeHouseholdId,
       }}

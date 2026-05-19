@@ -102,6 +102,7 @@ export default function AddAccountModal({ visible, onClose, onConnectBank }: Pro
   const [lastFour, setLastFour] = useState("");
   const [includeInNetworth, setIncludeInNetworth] = useState(true);
   const [isJoint, setIsJoint] = useState(false);
+  const [accountHolder, setAccountHolder] = useState("");
   const [showBankPicker, setShowBankPicker] = useState(false);
   const [bankSearch, setBankSearch] = useState("");
   const [duplicateAccount, setDuplicateAccount] = useState<typeof accounts[0] | null>(null);
@@ -115,6 +116,7 @@ export default function AddAccountModal({ visible, onClose, onConnectBank }: Pro
     setLastFour("");
     setIncludeInNetworth(true);
     setIsJoint(false);
+    setAccountHolder("");
     setShowBankPicker(false);
     setBankSearch("");
     setDuplicateAccount(null);
@@ -159,6 +161,7 @@ export default function AddAccountModal({ visible, onClose, onConnectBank }: Pro
       lastFour: lastFour.trim() || undefined,
       includeInNetworth,
       isJoint,
+      accountHolder: accountHolder.trim() || undefined,
       forceCreate: force,
     });
     if (bank.trim()) remapEmailTransactions(bank.trim(), newId);
@@ -534,6 +537,23 @@ export default function AddAccountModal({ visible, onClose, onConnectBank }: Pro
                     onValueChange={setIsJoint}
                     trackColor={{ false: colors.muted, true: colors.primary }}
                     thumbColor="#fff"
+                  />
+                </View>
+
+                <View style={[styles.fDivider, { backgroundColor: colors.border }]} />
+
+                {/* Row 9 — Account holder */}
+                <View style={styles.fRow}>
+                  <View style={[styles.fIcon, { backgroundColor: "#e8f0fe" }]}>
+                    <Feather name="user" size={18} color="#4a6fa5" />
+                  </View>
+                  <TextInput
+                    style={[styles.fInput, { color: colors.foreground }]}
+                    placeholder="Account holder name (optional)"
+                    placeholderTextColor={colors.mutedForeground}
+                    value={accountHolder}
+                    onChangeText={setAccountHolder}
+                    autoCapitalize="words"
                   />
                 </View>
 
