@@ -178,8 +178,11 @@ export default function CategoryMappingScreen() {
               borderColor: merchantEnabled && merchant ? colors.primary + "55" : colors.border,
             },
           ]}
-          activeOpacity={merchantEnabled ? 0.7 : 1}
-          onPress={() => merchantEnabled && openPicker("merchant")}
+          activeOpacity={0.7}
+          onPress={() => {
+            if (!merchantEnabled) setMerchantEnabled(true);
+            openPicker("merchant");
+          }}
         >
           <View style={[s.rowIconWrap, { backgroundColor: "#ec4899" + "18" }]}>
             <Feather name="shopping-bag" size={16} color="#ec4899" />
@@ -193,11 +196,7 @@ export default function CategoryMappingScreen() {
           >
             {merchantEnabled && merchant ? merchant : "Select Merchant"}
           </Text>
-          {merchantEnabled && (
-            <TouchableOpacity onPress={() => openPicker("merchant")} hitSlop={8}>
-              <Feather name="chevron-down" size={16} color={colors.mutedForeground} />
-            </TouchableOpacity>
-          )}
+          <Feather name="chevron-down" size={16} color={colors.mutedForeground} />
           <Switch
             value={merchantEnabled}
             onValueChange={(v) => {
@@ -231,8 +230,11 @@ export default function CategoryMappingScreen() {
               borderColor: fromCatEnabled && fromCategory ? colors.primary + "55" : colors.border,
             },
           ]}
-          activeOpacity={fromCatEnabled ? 0.7 : 1}
-          onPress={() => fromCatEnabled && openPicker("fromCategory")}
+          activeOpacity={0.7}
+          onPress={() => {
+            if (!fromCatEnabled) setFromCatEnabled(true);
+            openPicker("fromCategory");
+          }}
         >
           <View style={[s.rowIconWrap, { backgroundColor: "#8b5cf6" + "18" }]}>
             <Feather name="grid" size={16} color="#8b5cf6" />
@@ -246,11 +248,7 @@ export default function CategoryMappingScreen() {
           >
             {fromCatEnabled && fromCategory ? fromCategory : "Select from category"}
           </Text>
-          {fromCatEnabled && (
-            <TouchableOpacity onPress={() => openPicker("fromCategory")} hitSlop={8}>
-              <Feather name="chevron-down" size={16} color={colors.mutedForeground} />
-            </TouchableOpacity>
-          )}
+          <Feather name="chevron-down" size={16} color={colors.mutedForeground} />
           <Switch
             value={fromCatEnabled}
             onValueChange={(v) => {
@@ -387,9 +385,9 @@ export default function CategoryMappingScreen() {
 
             <ScrollView style={p.list} keyboardShouldPersistTaps="handled" showsVerticalScrollIndicator={false}>
               {pickerTarget === "merchant"
-                ? filteredMerchants.map((m) => (
+                ? filteredMerchants.map((m, i) => (
                     <TouchableOpacity
-                      key={m}
+                      key={`m-${i}-${m}`}
                       style={[p.item, { borderBottomColor: colors.border }]}
                       activeOpacity={0.7}
                       onPress={() => {
@@ -402,11 +400,11 @@ export default function CategoryMappingScreen() {
                       {merchant === m && <Feather name="check" size={15} color={colors.primary} />}
                     </TouchableOpacity>
                   ))
-                : filteredCategories.map((c) => {
+                : filteredCategories.map((c, i) => {
                     const current = pickerTarget === "fromCategory" ? fromCategory : toCategory;
                     return (
                       <TouchableOpacity
-                        key={c}
+                        key={`c-${i}-${c}`}
                         style={[p.item, { borderBottomColor: colors.border }]}
                         activeOpacity={0.7}
                         onPress={() => {
