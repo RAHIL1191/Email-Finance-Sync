@@ -1,0 +1,71 @@
+services:
+  - type: web
+    name: fintrack-api
+    runtime: node
+    region: oregon
+    plan: free
+    rootDir: .
+    buildCommand: pnpm install --frozen-lockfile && pnpm --filter @workspace/api-server run build
+    startCommand: node --enable-source-maps artifacts/api-server/dist/index.mjs
+    healthCheckPath: /api/health
+    envVars:
+      - key: NODE_ENV
+        value: production
+
+      # Render assigns PORT=10000 automatically for web services
+      - key: PORT
+        value: 10000
+
+      # ── Database ────────────────────────────────────────────────────────────
+      # Paste your Neon (or any PostgreSQL) connection string in the Render dashboard
+      - key: DATABASE_URL
+        sync: false
+
+      # ── CORS ────────────────────────────────────────────────────────────────
+      # Comma-separated list of allowed origins (e.g. your Expo hosted app URL)
+      # Example: https://your-app.expo.app,https://your-custom-domain.com
+      - key: ALLOWED_ORIGINS
+        sync: false
+
+      # ── AI (OpenRouter) ─────────────────────────────────────────────────────
+      - key: AI_INTEGRATIONS_OPENROUTER_BASE_URL
+        value: https://openrouter.ai/api/v1
+      - key: AI_INTEGRATIONS_OPENROUTER_API_KEY
+        sync: false
+      - key: AI_MODEL
+        value: qwen/qwen3-30b-a3b-instruct:free
+
+      # ── Plaid ───────────────────────────────────────────────────────────────
+      - key: PLAID_CLIENT_ID
+        sync: false
+      - key: PLAID_SECRET
+        sync: false
+      - key: PLAID_ENV
+        value: production
+
+      # ── Cron secret (bill checker endpoint) ─────────────────────────────────
+      # Generate with: openssl rand -hex 32
+      - key: CRON_SECRET
+        sync: false
+
+      # ── Feature flags ────────────────────────────────────────────────────────
+      - key: FEATURE_EMAIL_SYNC
+        value: "true"
+      - key: FEATURE_PLAID_SYNC
+        value: "true"
+      - key: FEATURE_MANUAL_TRANSACTIONS
+        value: "true"
+      - key: FEATURE_ACCOUNTS
+        value: "true"
+      - key: FEATURE_BILLS
+        value: "true"
+      - key: FEATURE_AI_INSIGHTS
+        value: "true"
+      - key: FEATURE_INSIGHTS
+        value: "true"
+      - key: FEATURE_BUDGET
+        value: "true"
+      - key: FEATURE_EXPORT
+        value: "true"
+      - key: FEATURE_BACKEND_SYNC
+        value: "true"
