@@ -255,7 +255,7 @@ interface AppContextType {
   syncEmailTransactions: () => Promise<{ imported: number; parsed?: any[]; error?: string }>;
   wipeAllTransactions: () => Promise<void>;
   connectPlaid: (item: PlaidItem, newAccounts: Omit<Account, "id">[], initialTransactions: Omit<Transaction, "id">[]) => Promise<{ imported: number }>;
-  syncPlaidTransactions: (itemId: string) => Promise<{ imported: number; error?: string }>;
+  syncPlaidTransactions: (itemId: string, forceFullSync?: boolean) => Promise<{ imported: number; error?: string }>;
   delinkPlaid: (itemId: string) => void;
   disconnectPlaid: (itemId: string) => void;
   isSyncing: boolean;
@@ -1688,7 +1688,7 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
   );
 
   const syncPlaidTransactions = useCallback(
-    async (itemId: string): Promise<{ imported: number; error?: string }> => {
+    async (itemId: string, forceFullSync = false): Promise<{ imported: number; error?: string }> => {
       const item = plaidSync.items.find((i) => i.itemId === itemId);
       if (!item) return { imported: 0, error: "Bank not found" };
 
@@ -1727,7 +1727,7 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
           "POST",
           householdIdRef.current,
           deviceIdRef.current,
-          hasMismatched ? { force: true } : undefined
+          (hasMismatched || forceFullSync) ? { force: true } : undefined
         );
 
         if (!res) {

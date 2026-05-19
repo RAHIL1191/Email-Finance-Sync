@@ -209,7 +209,7 @@ export default function PlaidLinkModal({
       if (!publicToken && itemId) {
         clearInterval(msgTimer);
         setConnectingMsg("Syncing transactions…");
-        const result = await syncPlaidTransactions(itemId);
+        const result = await syncPlaidTransactions(itemId, true);
         setImportResult({ accounts: 0, transactions: result.imported });
         Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
         setStep("success");

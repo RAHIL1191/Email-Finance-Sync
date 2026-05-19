@@ -166,17 +166,23 @@ router.post("/plaid/exchange-token", async (req, res) => {
         hasMore = syncRes.data.has_more;
       }
     } catch {
-      // Fall back to /transactions/get if sync fails
+      // Fall back to /transactions/get if sync throws
+    }
+
+    // Some institutions (e.g. Wealthsimple Canada) return 0 via transactionsSync
+    // on first link because transactions are processed asynchronously. Fall back
+    // to transactionsGet with a 90-day window to get whatever is available now.
+    if (transactions.length === 0) {
       try {
-        const startDate = new Date(Date.now() - 30 * 86400000).toISOString().slice(0, 10);
+        const startDate = new Date(Date.now() - 90 * 86400000).toISOString().slice(0, 10);
         const endDate = new Date().toISOString().slice(0, 10);
         const txRes = await client.transactionsGet({
           access_token,
           start_date: startDate,
           end_date: endDate,
-          options: { count: 100 },
+          options: { count: 500 },
         });
-        transactions = txRes.data.transactions;
+        transactions = txRes.data.transactions ?? [];
       } catch {}
     }
 
@@ -261,6 +267,22 @@ router.post("/plaid/sync/:itemId", async (req, res) => {
       transactions = [...transactions, ...syncRes.data.added];
       cursor = syncRes.data.next_cursor;
       hasMore = syncRes.data.has_more;
+    }
+
+    // When a force-resync returns 0 (e.g. Wealthsimple Canada async processing),
+    // fall back to transactionsGet to pick up whatever is currently available.
+    if (force && transactions.length === 0) {
+      try {
+        const startDate = new Date(Date.now() - 90 * 86400000).toISOString().slice(0, 10);
+        const endDate   = new Date().toISOString().slice(0, 10);
+        const txRes = await client.transactionsGet({
+          access_token: record.accessToken,
+          start_date: startDate,
+          end_date: endDate,
+          options: { count: 500 },
+        });
+        transactions = txRes.data.transactions ?? [];
+      } catch {}
     }
 
     // Backfill plaid_item_id + plaid_account_id on DB accounts that are missing them.
