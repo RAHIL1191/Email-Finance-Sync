@@ -388,17 +388,39 @@ function BillRow({
             {new Date(bill.dueDate).toLocaleDateString("en-US", { month: "short", day: "numeric" })}
           </Text>
         </View>
-        {!bill.isPaid && (
+        {!bill.isPaid && isVirtual && (
           <TouchableOpacity
             onPress={() => {
-              Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
-              onPay();
+              Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
+              onPress();
             }}
             hitSlop={8}
           >
-            <Text style={[styles.payNow, { color: isVirtual ? colors.mutedForeground : colors.expense }]}>
-              {isVirtual ? "Projected" : "Pay now"}
-            </Text>
+            <Text style={[styles.rowSub, { color: colors.mutedForeground, fontStyle: "italic" }]}>Projected</Text>
+          </TouchableOpacity>
+        )}
+        {!bill.isPaid && !isVirtual && (
+          <TouchableOpacity
+            onPress={() => {
+              Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
+              Alert.alert(
+                "Mark as Paid",
+                `Mark "${bill.title}" as paid?`,
+                [
+                  { text: "Cancel", style: "cancel" },
+                  {
+                    text: "Mark as Paid",
+                    onPress: () => {
+                      Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
+                      onPay();
+                    },
+                  },
+                ]
+              );
+            }}
+            hitSlop={8}
+          >
+            <Text style={[styles.payNow, { color: colors.expense }]}>Pay now</Text>
           </TouchableOpacity>
         )}
         {bill.isPaid && (
