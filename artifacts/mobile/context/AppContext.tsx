@@ -698,8 +698,31 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
         setTransactions(localTxs);
         setAccounts(accRaw ? JSON.parse(accRaw) : []);
         const parsedBills: Bill[] = billRaw ? JSON.parse(billRaw) : [];
-        setBills(parsedBills);
-        setupNotificationsOnInit(parsedBills);
+        // Migrate legacy data: recurring bills that got permanently isPaid:true
+        // should be reset to the next future occurrence
+        const advanceBillDate = (date: Date, freq: string): Date => {
+          const d = new Date(date);
+          switch (freq) {
+            case "daily":      d.setDate(d.getDate() + 1);         break;
+            case "weekly":     d.setDate(d.getDate() + 7);         break;
+            case "biweekly":   d.setDate(d.getDate() + 14);        break;
+            case "monthly":    d.setMonth(d.getMonth() + 1);       break;
+            case "quarterly":  d.setMonth(d.getMonth() + 3);       break;
+            case "semiannual": d.setMonth(d.getMonth() + 6);       break;
+            case "yearly":     d.setFullYear(d.getFullYear() + 1); break;
+          }
+          return d;
+        };
+        const migratedBills = parsedBills.map((b) => {
+          if (b.isPaid && b.isRecurring && b.frequency) {
+            let d = new Date(b.dueDate);
+            do { d = advanceBillDate(d, b.frequency!); } while (d.getTime() < Date.now());
+            return { ...b, dueDate: d.toISOString(), isPaid: false };
+          }
+          return b;
+        });
+        setBills(migratedBills);
+        setupNotificationsOnInit(migratedBills);
         registerPushTokenWithServer(getApiBase(), hId, dId);
         setBudgets(budgetRaw ? JSON.parse(budgetRaw) : []);
         setGoals(goalRaw ? JSON.parse(goalRaw) : []);
@@ -1309,11 +1332,22 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
 
   const markBillPaid = useCallback(
     (id: string) => {
-      const bill = bills.find((b) => b.id === id);
+      // Resolve virtual occurrence IDs (e.g. "bill-123_occ_1716148800000")
+      let actualId = id;
+      let occDueDate: string | null = null;
+      if (id.includes("_occ_")) {
+        const idx = id.lastIndexOf("_occ_");
+        actualId = id.substring(0, idx);
+        const ts = parseInt(id.substring(idx + 5));
+        if (!isNaN(ts)) occDueDate = new Date(ts).toISOString();
+      }
+
+      const bill = bills.find((b) => b.id === actualId);
       if (!bill) return;
 
       if (bill.isRecurring && bill.frequency) {
-        const d = new Date(bill.dueDate);
+        const baseDue = new Date(occDueDate ?? bill.dueDate);
+        const d = new Date(baseDue);
         switch (bill.frequency) {
           case "daily":      d.setDate(d.getDate() + 1);         break;
           case "weekly":     d.setDate(d.getDate() + 7);         break;
@@ -1325,21 +1359,22 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
         }
         const paidRecord: Bill = {
           ...bill,
-          id: `${bill.id}_paid_${Date.now()}`,
+          id: `${actualId}_paid_${Date.now()}`,
+          dueDate: baseDue.toISOString(),
           isPaid: true,
           isRecurring: false,
           frequency: undefined,
         };
         setBills((prev) => [
-          ...prev.map((b) => b.id === id ? { ...b, dueDate: d.toISOString(), isPaid: false } : b),
+          ...prev.map((b) => b.id === actualId ? { ...b, dueDate: d.toISOString(), isPaid: false } : b),
           paidRecord,
         ]);
       } else {
-        setBills((prev) => prev.map((b) => (b.id === id ? { ...b, isPaid: true } : b)));
+        setBills((prev) => prev.map((b) => (b.id === actualId ? { ...b, isPaid: true } : b)));
       }
 
-      apiCall(`/api/bills/${id}/pay`, "POST", householdIdRef.current, deviceIdRef.current);
-      cancelBillNotifications(id);
+      apiCall(`/api/bills/${actualId}/pay`, "POST", householdIdRef.current, deviceIdRef.current);
+      cancelBillNotifications(actualId);
       addTransaction({
         title: bill.title,
         amount: bill.amount,

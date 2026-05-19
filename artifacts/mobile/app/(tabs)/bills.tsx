@@ -144,7 +144,7 @@ function OverdueBillsModal({ bills, visible, onClose, onMarkPaid, onDelete }: {
                         </View>
                         {/* Info */}
                         <View style={{ flex: 1 }}>
-                          <Text style={[ovSt.billName, { color: colors.foreground }]} numberOfLines={1}>{bill.name}</Text>
+                          <Text style={[ovSt.billName, { color: colors.foreground }]} numberOfLines={1}>{bill.title}</Text>
                           <Text style={ovSt.billDue}>
                             {daysAgoLabel}{" "}
                             <Text style={{ color: "#ef4444" }}>· {daysLate} day{daysLate !== 1 ? "s" : ""} past</Text>
@@ -388,7 +388,7 @@ function BillRow({
             {new Date(bill.dueDate).toLocaleDateString("en-US", { month: "short", day: "numeric" })}
           </Text>
         </View>
-        {!bill.isPaid && !isVirtual && (
+        {!bill.isPaid && (
           <TouchableOpacity
             onPress={() => {
               Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
@@ -396,11 +396,10 @@ function BillRow({
             }}
             hitSlop={8}
           >
-            <Text style={[styles.payNow, { color: colors.expense }]}>Pay now</Text>
+            <Text style={[styles.payNow, { color: isVirtual ? colors.mutedForeground : colors.expense }]}>
+              {isVirtual ? "Projected" : "Pay now"}
+            </Text>
           </TouchableOpacity>
-        )}
-        {isVirtual && (
-          <Text style={[styles.rowSub, { color: colors.mutedForeground, fontStyle: "italic" }]}>Projected</Text>
         )}
         {bill.isPaid && (
           <View style={styles.paidBadge}>
@@ -813,7 +812,7 @@ export default function BillsScreen() {
                     <View>
                       <Text style={styles.overdueBannerTitle}>Overdue</Text>
                       <Text style={styles.overdueBannerNames} numberOfLines={1}>
-                        {overdueBills.map(b => b.name).join(", ")}
+                        {overdueBills.map(b => b.title).join(", ")}
                       </Text>
                     </View>
                   </View>
