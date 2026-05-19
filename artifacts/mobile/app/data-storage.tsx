@@ -4,8 +4,9 @@ import { router } from "expo-router";
 import React, { useState } from "react";
 import {
   ActivityIndicator,
-  Alert,
+  Modal,
   Platform,
+  Pressable,
   ScrollView,
   StyleSheet,
   Switch,
@@ -54,6 +55,95 @@ function formatDate(iso?: string) {
   }
 }
 
+// ── Confirm Modal ────────────────────────────────────────────────────────────
+
+type ConfirmButton = { text: string; onPress: () => void; destructive?: boolean };
+type ConfirmConfig = { title: string; message: string; buttons: ConfirmButton[] } | null;
+
+function ConfirmModal({
+  config,
+  onClose,
+  colors,
+}: {
+  config: ConfirmConfig;
+  onClose: () => void;
+  colors: ReturnType<typeof useColors>;
+}) {
+  if (!config) return null;
+  return (
+    <Modal
+      visible
+      transparent
+      animationType="fade"
+      onRequestClose={onClose}
+      statusBarTranslucent
+    >
+      <Pressable style={modalStyles.backdrop} onPress={onClose}>
+        <Pressable
+          style={[modalStyles.sheet, { backgroundColor: colors.card, borderColor: colors.border }]}
+          onPress={() => {}}
+        >
+          <Text style={[modalStyles.title, { color: colors.foreground }]}>{config.title}</Text>
+          <Text style={[modalStyles.message, { color: colors.mutedForeground }]}>{config.message}</Text>
+          <View style={[modalStyles.divider, { backgroundColor: colors.border }]} />
+          {config.buttons.map((btn, i) => (
+            <TouchableOpacity
+              key={i}
+              style={modalStyles.btnRow}
+              activeOpacity={0.7}
+              onPress={() => { onClose(); btn.onPress(); }}
+            >
+              <Text
+                style={[
+                  modalStyles.btnText,
+                  { color: btn.destructive ? "#ef4444" : colors.primary },
+                  i === config.buttons.length - 1 && modalStyles.btnLast,
+                ]}
+              >
+                {btn.text}
+              </Text>
+            </TouchableOpacity>
+          ))}
+        </Pressable>
+      </Pressable>
+    </Modal>
+  );
+}
+
+const modalStyles = StyleSheet.create({
+  backdrop: {
+    flex: 1,
+    backgroundColor: "rgba(0,0,0,0.55)",
+    justifyContent: "center",
+    alignItems: "center",
+    padding: 28,
+  },
+  sheet: {
+    width: "100%",
+    borderRadius: 18,
+    borderWidth: 1,
+    overflow: "hidden",
+  },
+  title: {
+    fontSize: 15,
+    fontFamily: "Inter_700Bold",
+    paddingHorizontal: 20,
+    paddingTop: 20,
+    paddingBottom: 8,
+  },
+  message: {
+    fontSize: 13,
+    fontFamily: "Inter_400Regular",
+    paddingHorizontal: 20,
+    paddingBottom: 16,
+    lineHeight: 19,
+  },
+  divider: { height: 1 },
+  btnRow: { paddingVertical: 15, paddingHorizontal: 20 },
+  btnText: { fontSize: 14, fontFamily: "Inter_600SemiBold", textAlign: "center" },
+  btnLast: {},
+});
+
 // ── Screen ────────────────────────────────────────────────────────────────────
 
 export default function DataStorageScreen() {
@@ -62,6 +152,7 @@ export default function DataStorageScreen() {
   const { budgets, goals, tasks, projects, uploadToDb, pullFromDb } = useApp();
   const { prefs, toggleDbSync, setLastSync } = useDbSyncPrefs();
   const [loading, setLoading] = useState<Record<string, boolean>>({});
+  const [confirm, setConfirm] = useState<ConfirmConfig>(null);
 
   const countMap: Record<SyncableType, number> = {
     budgets: budgets.length,
@@ -75,6 +166,8 @@ export default function DataStorageScreen() {
 
   // ── Handlers ──────────────────────────────────────────────────────────────
 
+  const showConfirm = (cfg: NonNullable<ConfirmConfig>) => setConfirm(cfg);
+
   const handleToggle = (type: SyncableType, newValue: boolean) => {
     Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
     const label = OPTIONAL_SYNC.find((i) => i.key === type)?.label ?? type;
@@ -83,50 +176,34 @@ export default function DataStorageScreen() {
 
     if (newValue) {
       if (stoppedAt) {
-        // Was previously syncing — offer delta pull resume
-        Alert.alert(
-          `Resume DB Sync — ${label}`,
-          `Sync was stopped on ${formatDate(stoppedAt)}.\n\nChanges made in the DB since then will be pulled and merged with your local data.`,
-          [
-            { text: "Cancel", style: "cancel" },
-            {
-              text: "Resume Sync",
-              onPress: () => handleResume(type, stoppedAt, label),
-            },
-          ]
-        );
+        showConfirm({
+          title: `Resume DB Sync — ${label}`,
+          message: `Sync was stopped on ${formatDate(stoppedAt)}. Changes made in the DB since then will be pulled and merged with your local data.`,
+          buttons: [
+            { text: "Cancel", onPress: () => {} },
+            { text: "Resume Sync", onPress: () => handleResume(type, stoppedAt, label) },
+          ],
+        });
       } else {
-        // First time enabling
-        Alert.alert(
-          `Enable DB Sync — ${label}`,
-          `Store ${label} in the server database for cross-device access.\n\nYou have ${count} local record${count !== 1 ? "s" : ""}.`,
-          [
-            { text: "Cancel", style: "cancel" },
-            {
-              text: "Upload All + Sync",
-              onPress: () => handleEnable(type, true, label),
-            },
-            {
-              text: "Start Fresh Sync",
-              style: "default",
-              onPress: () => handleEnable(type, false, label),
-            },
-          ]
-        );
+        showConfirm({
+          title: `Enable DB Sync — ${label}`,
+          message: `Store ${label} in the server database for cross-device access. You have ${count} local record${count !== 1 ? "s" : ""}.`,
+          buttons: [
+            { text: "Cancel", onPress: () => {} },
+            { text: "Upload All + Sync", onPress: () => handleEnable(type, true, label) },
+            { text: "Start Fresh Sync", onPress: () => handleEnable(type, false, label) },
+          ],
+        });
       }
     } else {
-      Alert.alert(
-        `Disable DB Sync — ${label}`,
-        `New changes to ${label} will only be saved locally. Data already in the DB will remain there.\n\nYou can re-enable sync later and resume from this point.`,
-        [
-          { text: "Cancel", style: "cancel" },
-          {
-            text: "Disable",
-            style: "destructive",
-            onPress: () => handleDisable(type),
-          },
-        ]
-      );
+      showConfirm({
+        title: `Disable DB Sync — ${label}`,
+        message: `New changes to ${label} will only be saved locally. Data already in the DB will remain there. You can re-enable sync later and resume from this point.`,
+        buttons: [
+          { text: "Cancel", onPress: () => {} },
+          { text: "Disable", destructive: true, onPress: () => handleDisable(type) },
+        ],
+      });
     }
   };
 
@@ -137,10 +214,13 @@ export default function DataStorageScreen() {
       if (uploadExisting) {
         const { uploaded, error } = await uploadToDb(type, true);
         if (error) {
-          Alert.alert("Partial Sync", `Enabled sync but upload had errors. ${uploaded} records uploaded.`);
+          showConfirm({
+            title: "Partial Sync",
+            message: `Enabled sync but upload had errors. ${uploaded} records uploaded.`,
+            buttons: [{ text: "OK", onPress: () => {} }],
+          });
         } else {
-          const now = new Date().toISOString();
-          await setLastSync(type, now);
+          await setLastSync(type, new Date().toISOString());
         }
       } else {
         await setLastSync(type, new Date().toISOString());
@@ -165,12 +245,18 @@ export default function DataStorageScreen() {
       const { pulled, error } = await pullFromDb(type, stoppedAt);
       await toggleDbSync(type, true);
       await setLastSync(type, new Date().toISOString());
-      if (!error) {
-        if (pulled > 0) {
-          Alert.alert("Sync Resumed", `Pulled ${pulled} updated record${pulled !== 1 ? "s" : ""} from the DB.`);
-        }
-      } else {
-        Alert.alert("Sync Resumed", `Sync enabled but pull failed. New changes will sync going forward.`);
+      if (pulled > 0 && !error) {
+        showConfirm({
+          title: "Sync Resumed",
+          message: `Pulled ${pulled} updated record${pulled !== 1 ? "s" : ""} from the DB.`,
+          buttons: [{ text: "OK", onPress: () => {} }],
+        });
+      } else if (error) {
+        showConfirm({
+          title: "Sync Resumed",
+          message: "Sync enabled but pull failed. New changes will sync going forward.",
+          buttons: [{ text: "OK", onPress: () => {} }],
+        });
       }
     } finally {
       setItemLoading(type, false);
@@ -181,6 +267,7 @@ export default function DataStorageScreen() {
 
   return (
     <View style={[styles.root, { backgroundColor: colors.background }]}>
+      <ConfirmModal config={confirm} onClose={() => setConfirm(null)} colors={colors} />
       {/* Header */}
       <View
         style={[
@@ -395,7 +482,6 @@ const styles = StyleSheet.create({
   card: {
     borderRadius: 14,
     borderWidth: 1,
-    overflow: "hidden",
   },
   divider: { height: 1, marginHorizontal: 16 },
   row: {
