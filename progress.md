@@ -149,6 +149,63 @@ Standalone release APK that works without a Metro server — JS bundle is embedd
 
 ---
 
+## ✅ Render Deployment
+
+api-server deployed to Render as a Web Service at `https://fintrack-api-fmfl.onrender.com`.
+
+**Files touched:**
+- `render.yaml` — Blueprint config: build command, start command, env vars, health check path
+- `artifacts/api-server/src/routes/health.ts` — added `/api/health` alias (Render probes this; actual route was `/api/healthz`)
+- `artifacts/mobile/context/AppContext.tsx` — updated `getApiBase()` fallback to Render URL
+- `artifacts/mobile/app/email-debug.tsx` — updated hardcoded fallback to Render URL
+
+**Keep-alive:** cron-job.org pings `GET /api/healthz` every 13 min to prevent free-tier sleep.
+
+---
+
+## ✅ Bill Payment Auto-Verification
+
+Server-side bill checker triggered every 2 hours via cron-job.org. Detects matching transactions, marks bills paid, and sends push notifications — once per state change only.
+
+**How it works:**
+- External cron calls `POST /api/cron/bill-check` with `X-Cron-Secret` header every 2 hours
+- Checks unpaid bills in ±2 day window around due date
+- Matches by **amount ±10%** (not category — manual bill categories ≠ Plaid taxonomy)
+- On match: marks bill paid, tags transaction note, sends "✅ paid" push
+- On no match: sends state alert (upcoming / due today / overdue) — **once per state only** (`lastNotifState`)
+- Recurring bills: on match, advances `dueDate` to next cycle + resets state (no permanent isPaid)
+
+**State machine:** `upcoming → due_unpaid → overdue → paid` — each fires exactly once per bill per cycle
+
+**⚠️ Routing gotcha — MUST register before household-auth routers:**
+Express `router.use(requireHouseholdId)` at the top of a router runs for **all paths through that router**, not just matched ones. Every data router (accounts, transactions, bills, categories, etc.) has this. Any new "public" endpoint (no household auth) **must be registered in the public section of `routes/index.ts`**, before the data CRUD block — otherwise it gets a 400 from the wrong router's middleware.
+
+```ts
+// routes/index.ts — correct order
+router.use(healthRouter);
+router.use(configRouter);
+router.use(billCheckRouter);   // ✅ public — cron secret auth, placed here
+// router.use(accountsRouter); // ❌ would intercept if placed after this
+```
+
+**Files touched:**
+- `lib/db/src/schema/bills.ts` — added `lastNotifState text` column
+- `lib/db/src/schema/push_tokens.ts` — new table, composite PK `(householdId, deviceId)`
+- `lib/db/src/schema/index.ts` — exported `pushTokensTable`
+- `artifacts/api-server/src/lib/billChecker.ts` — core checker logic
+- `artifacts/api-server/src/lib/pushNotifications.ts` — Expo Push API via fetch, stale token cleanup
+- `artifacts/api-server/src/routes/billCheck.ts` — `POST /api/cron/bill-check`
+- `artifacts/api-server/src/routes/pushTokens.ts` — `POST /api/push-token` upsert
+- `artifacts/api-server/src/routes/index.ts` — billCheckRouter in public section (before data routers)
+- `artifacts/mobile/services/notificationService.ts` — added `registerPushTokenWithServer()`
+- `artifacts/mobile/context/AppContext.tsx` — calls token registration after household init
+
+**cron-job.org jobs:**
+- Keep-alive: `GET https://fintrack-api-fmfl.onrender.com/api/healthz` every 13 min
+- Bill checker: `POST https://fintrack-api-fmfl.onrender.com/api/cron/bill-check` with `X-Cron-Secret` header, every 2 hours (`0 */2 * * *`)
+
+---
+
 ## How to rebuild & restart API server
 ```powershell
 # From project root:
