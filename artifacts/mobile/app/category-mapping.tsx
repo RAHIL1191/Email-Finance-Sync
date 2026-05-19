@@ -379,7 +379,6 @@ export default function CategoryMappingScreen() {
                 placeholderTextColor={colors.mutedForeground}
                 value={pickerTarget === "merchant" ? merchantSearch : catSearch}
                 onChangeText={pickerTarget === "merchant" ? setMerchantSearch : setCatSearch}
-                autoFocus
               />
             </View>
 
