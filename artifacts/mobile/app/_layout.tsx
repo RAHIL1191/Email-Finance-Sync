@@ -10,7 +10,7 @@ import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { Stack } from "expo-router";
 import * as SplashScreen from "expo-splash-screen";
 import React, { useEffect, useState } from "react";
-import { View } from "react-native";
+import { LogBox, View } from "react-native";
 import { GestureHandlerRootView } from "react-native-gesture-handler";
 import { KeyboardProvider } from "react-native-keyboard-controller";
 import { SafeAreaProvider } from "react-native-safe-area-context";
@@ -22,6 +22,11 @@ import { AIProviderProvider } from "@/context/AIProviderContext";
 import { DrawerProvider } from "@/context/DrawerContext";
 import { FeatureFlagsProvider } from "@/context/FeatureFlagsContext";
 import { DbSyncPrefsProvider } from "@/context/DbSyncPrefsContext";
+
+// expo-keep-awake (used by Expo dev tools) lacks a .catch() on activateKeepAwakeAsync.
+// On fast-refresh with the new architecture the activity is briefly absent, causing an
+// unhandled promise rejection that shows the dev error overlay as a black screen.
+LogBox.ignoreLogs([/Unable to activate keep awake/]);
 
 SplashScreen.preventAutoHideAsync();
 
