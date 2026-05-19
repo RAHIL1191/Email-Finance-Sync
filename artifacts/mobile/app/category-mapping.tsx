@@ -653,7 +653,7 @@ const p = StyleSheet.create({
     borderTopLeftRadius: 20,
     borderTopRightRadius: 20,
     borderWidth: 1,
-    maxHeight: "70%",
+    height: "65%",
   },
   sheetHeader: {
     flexDirection: "row",
