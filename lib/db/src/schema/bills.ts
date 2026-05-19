@@ -13,6 +13,7 @@ export const billsTable = pgTable("bills", {
   isRecurring: boolean("is_recurring").default(false).notNull(),
   frequency: text("frequency"), // weekly | monthly | yearly
   accountId: text("account_id"),
+  lastNotifState: text("last_notif_state"), // upcoming | due_unpaid | overdue | paid | null
   createdAt: timestamp("created_at").defaultNow().notNull(),
   updatedAt: timestamp("updated_at").defaultNow().notNull(),
 });

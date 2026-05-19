@@ -3,6 +3,7 @@ import {
   cancelBillNotifications,
   scheduleBillNotifications,
   setupNotificationsOnInit,
+  registerPushTokenWithServer,
   scheduleTaskReminder,
   cancelTaskReminder,
 } from "@/services/notificationService";
@@ -679,6 +680,7 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
         const parsedBills: Bill[] = billRaw ? JSON.parse(billRaw) : [];
         setBills(parsedBills);
         setupNotificationsOnInit(parsedBills);
+        registerPushTokenWithServer(getApiBase(), hId, dId);
         setBudgets(budgetRaw ? JSON.parse(budgetRaw) : []);
         setGoals(goalRaw ? JSON.parse(goalRaw) : []);
         setTasks(taskRaw ? JSON.parse(taskRaw) : []);

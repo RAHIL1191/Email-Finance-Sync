@@ -12,6 +12,8 @@ import aiReviewRouter from "./ai-review.js";
 import aiChatRouter from "./ai-chat.js";
 import categoriesRouter from "./categories.js";
 import categoryRulesRouter from "./categoryRules.js";
+import pushTokensRouter from "./pushTokens.js";
+import billCheckRouter from "./billCheck.js";
 
 const router: IRouter = Router();
 
@@ -29,6 +31,8 @@ router.use(transactionsRouter);
 router.use(billsRouter);
 router.use(categoriesRouter);
 router.use(categoryRulesRouter);
+router.use(pushTokensRouter);
+router.use(billCheckRouter);
 
 // AI features (rate-limited)
 router.use(strictRateLimit, aiReviewRouter);

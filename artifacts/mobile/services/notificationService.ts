@@ -34,6 +34,8 @@ async function getNotif() {
             shouldShowAlert: true,
             shouldPlaySound: true,
             shouldSetBadge: true,
+            shouldShowBanner: true,
+            shouldShowList: true,
           }),
         });
       }
@@ -235,6 +237,33 @@ export async function cancelTaskReminder(taskId: string): Promise<void> {
   const N = await getNotif();
   if (!N) return;
   try { await N.cancelScheduledNotificationAsync(`task-${taskId}`).catch(() => {}); } catch {}
+}
+
+/** Register this device's Expo push token with the api-server for server-initiated notifications. */
+export async function registerPushTokenWithServer(
+  apiBase: string,
+  householdId: string,
+  deviceId: string
+): Promise<void> {
+  if (Platform.OS === "web") return;
+  try {
+    const N = await getNotif();
+    if (!N) return;
+    const { status } = await N.getPermissionsAsync();
+    if (status !== "granted") return;
+    const tokenData = await N.getExpoPushTokenAsync();
+    const token = tokenData.data;
+    const platform = Platform.OS === "ios" ? "ios" : "android";
+    await fetch(`${apiBase}/api/push-token`, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        "X-Household-ID": householdId,
+        "X-Device-ID": deviceId,
+      },
+      body: JSON.stringify({ token, platform }),
+    });
+  } catch {}
 }
 
 /** Called on app init: reschedules only if permission already granted — no dialog at startup. */
