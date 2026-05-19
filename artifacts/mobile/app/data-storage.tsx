@@ -4,7 +4,6 @@ import { router } from "expo-router";
 import React, { useState } from "react";
 import {
   ActivityIndicator,
-  Modal,
   Platform,
   Pressable,
   ScrollView,
@@ -70,59 +69,54 @@ function ConfirmModal({
   colors: ReturnType<typeof useColors>;
 }) {
   if (!config) return null;
+  // Use an absolutely-positioned View instead of a Modal — avoids the Android
+  // new-arch transparent-window bug where the Fabric surface behind the Modal
+  // goes black until touched.
   return (
-    <Modal
-      visible
-      transparent
-      animationType="fade"
-      onRequestClose={onClose}
-      statusBarTranslucent
-    >
-      <Pressable style={modalStyles.backdrop} onPress={onClose}>
-        <Pressable
-          style={[modalStyles.sheet, { backgroundColor: colors.card, borderColor: colors.border }]}
-          onPress={() => {}}
-        >
-          <Text style={[modalStyles.title, { color: colors.foreground }]}>{config.title}</Text>
-          <Text style={[modalStyles.message, { color: colors.mutedForeground }]}>{config.message}</Text>
-          <View style={[modalStyles.divider, { backgroundColor: colors.border }]} />
-          {config.buttons.map((btn, i) => (
-            <TouchableOpacity
-              key={i}
-              style={modalStyles.btnRow}
-              activeOpacity={0.7}
-              onPress={() => { onClose(); btn.onPress(); }}
+    <Pressable style={modalStyles.backdrop} onPress={onClose}>
+      <Pressable
+        style={[modalStyles.sheet, { backgroundColor: colors.card, borderColor: colors.border }]}
+        onPress={(e) => e.stopPropagation()}
+      >
+        <Text style={[modalStyles.title, { color: colors.foreground }]}>{config.title}</Text>
+        <Text style={[modalStyles.message, { color: colors.mutedForeground }]}>{config.message}</Text>
+        <View style={[modalStyles.divider, { backgroundColor: colors.border }]} />
+        {config.buttons.map((btn, i) => (
+          <TouchableOpacity
+            key={i}
+            style={modalStyles.btnRow}
+            activeOpacity={0.7}
+            onPress={() => { onClose(); btn.onPress(); }}
+          >
+            <Text
+              style={[
+                modalStyles.btnText,
+                { color: btn.destructive ? "#ef4444" : colors.primary },
+              ]}
             >
-              <Text
-                style={[
-                  modalStyles.btnText,
-                  { color: btn.destructive ? "#ef4444" : colors.primary },
-                  i === config.buttons.length - 1 && modalStyles.btnLast,
-                ]}
-              >
-                {btn.text}
-              </Text>
-            </TouchableOpacity>
-          ))}
-        </Pressable>
+              {btn.text}
+            </Text>
+          </TouchableOpacity>
+        ))}
       </Pressable>
-    </Modal>
+    </Pressable>
   );
 }
 
 const modalStyles = StyleSheet.create({
   backdrop: {
-    flex: 1,
+    ...StyleSheet.absoluteFillObject,
     backgroundColor: "rgba(0,0,0,0.55)",
     justifyContent: "center",
     alignItems: "center",
     padding: 28,
+    zIndex: 100,
+    elevation: 10,
   },
   sheet: {
     width: "100%",
     borderRadius: 18,
     borderWidth: 1,
-    overflow: "hidden",
   },
   title: {
     fontSize: 15,
@@ -267,7 +261,6 @@ export default function DataStorageScreen() {
 
   return (
     <View style={[styles.root, { backgroundColor: colors.background }]}>
-      <ConfirmModal config={confirm} onClose={() => setConfirm(null)} colors={colors} />
       {/* Header */}
       <View
         style={[
@@ -429,6 +422,7 @@ export default function DataStorageScreen() {
           </Text>
         </View>
       </ScrollView>
+      <ConfirmModal config={confirm} onClose={() => setConfirm(null)} colors={colors} />
     </View>
   );
 }
@@ -436,7 +430,7 @@ export default function DataStorageScreen() {
 // ── Styles ────────────────────────────────────────────────────────────────────
 
 const styles = StyleSheet.create({
-  root: { flex: 1 },
+  root: { flex: 1, overflow: "hidden" },
   header: {
     flexDirection: "row",
     alignItems: "center",
