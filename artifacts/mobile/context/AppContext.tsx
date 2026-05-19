@@ -364,7 +364,7 @@ export function getApiBase(): string {
   if (process.env.EXPO_PUBLIC_API_URL) return process.env.EXPO_PUBLIC_API_URL;
   const domain = process.env.EXPO_PUBLIC_DOMAIN;
   if (domain) return `https://${domain}`;
-  return "http://localhost:80";
+  return "https://fintrack-api-fmfl.onrender.com";
 }
 
 async function apiCall(

@@ -49,7 +49,7 @@ export default function EmailDebugScreen() {
   const [expandedIndex, setExpandedIndex] = useState<number | null>(null);
 
   const getApiBase = () => {
-    return process.env.EXPO_PUBLIC_API_URL || "http://192.168.2.19:80";
+    return process.env.EXPO_PUBLIC_API_URL || "https://fintrack-api-fmfl.onrender.com";
   };
 
   const runDebug = async () => {
