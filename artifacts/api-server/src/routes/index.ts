@@ -14,6 +14,10 @@ import categoriesRouter from "./categories.js";
 import categoryRulesRouter from "./categoryRules.js";
 import pushTokensRouter from "./pushTokens.js";
 import billCheckRouter from "./billCheck.js";
+import budgetsRouter from "./budgets.js";
+import goalsRouter from "./goals.js";
+import tasksRouter from "./tasks.js";
+import projectsRouter from "./projects.js";
 
 const router: IRouter = Router();
 
@@ -33,6 +37,10 @@ router.use(billsRouter);
 router.use(categoriesRouter);
 router.use(categoryRulesRouter);
 router.use(pushTokensRouter);
+router.use(budgetsRouter);
+router.use(goalsRouter);
+router.use(tasksRouter);
+router.use(projectsRouter);
 
 // AI features (rate-limited)
 router.use(strictRateLimit, aiReviewRouter);

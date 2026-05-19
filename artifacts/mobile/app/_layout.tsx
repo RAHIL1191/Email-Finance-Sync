@@ -21,6 +21,7 @@ import { AppProvider } from "@/context/AppContext";
 import { AIProviderProvider } from "@/context/AIProviderContext";
 import { DrawerProvider } from "@/context/DrawerContext";
 import { FeatureFlagsProvider } from "@/context/FeatureFlagsContext";
+import { DbSyncPrefsProvider } from "@/context/DbSyncPrefsContext";
 
 SplashScreen.preventAutoHideAsync();
 
@@ -36,6 +37,7 @@ function RootLayoutNav() {
       <Stack.Screen name="projects" options={{ headerShown: false, animation: "slide_from_right" }} />
       <Stack.Screen name="project-detail" options={{ headerShown: false, animation: "slide_from_right" }} />
       <Stack.Screen name="notifications" options={{ headerShown: false, animation: "slide_from_right" }} />
+      <Stack.Screen name="data-storage" options={{ headerShown: false, animation: "slide_from_right" }} />
     </Stack>
   );
 }
@@ -72,6 +74,7 @@ export default function RootLayout() {
       <ErrorBoundary>
         <QueryClientProvider client={queryClient}>
           <FeatureFlagsProvider>
+            <DbSyncPrefsProvider>
             <AppProvider>
               <AIProviderProvider>
               <DrawerProvider>
@@ -86,6 +89,7 @@ export default function RootLayout() {
               </DrawerProvider>
               </AIProviderProvider>
             </AppProvider>
+            </DbSyncPrefsProvider>
           </FeatureFlagsProvider>
         </QueryClientProvider>
       </ErrorBoundary>

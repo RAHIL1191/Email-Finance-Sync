@@ -1,4 +1,5 @@
 import AsyncStorage from "@react-native-async-storage/async-storage";
+import { useDbSyncPrefs, SyncableType } from "./DbSyncPrefsContext";
 import {
   cancelBillNotifications,
   scheduleBillNotifications,
@@ -258,6 +259,8 @@ interface AppContextType {
   deviceId: string;
   householdId: string;
   changeHouseholdId: (code: string) => Promise<void>;
+  uploadToDb: (type: SyncableType, uploadExisting: boolean) => Promise<{ uploaded: number; error?: string }>;
+  pullFromDb: (type: SyncableType, since?: string) => Promise<{ pulled: number; error?: string }>;
 }
 
 const AppContext = createContext<AppContextType | null>(null);
@@ -624,15 +627,26 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
   const [householdId, setHouseholdId] = useState<string>("");
   const [userName, setUserNameState] = useState<string>("");
   const [reviewedTransactionIds, setReviewedTransactionIds] = useState<string[]>([]);
+  const { prefs: syncPrefs } = useDbSyncPrefs();
+  const syncPrefsRef = useRef(syncPrefs);
+  useEffect(() => { syncPrefsRef.current = syncPrefs; }, [syncPrefs]);
   const deviceIdRef = useRef<string>("");
   const householdIdRef = useRef<string>("");
   const accountsRef = useRef<Account[]>([]);
   const transactionsRef = useRef<Transaction[]>([]);
   const billsRef = useRef<Bill[]>([]);
+  const budgetsRef = useRef<Budget[]>([]);
+  const goalsRef = useRef<Goal[]>([]);
+  const tasksRef = useRef<Task[]>([]);
+  const projectsRef = useRef<Project[]>([]);
   const categoryRulesRef = useRef<CategoryRule[]>([]);
   useEffect(() => { categoryRulesRef.current = categoryRules; }, [categoryRules]);
   useEffect(() => { transactionsRef.current = transactions; }, [transactions]);
   useEffect(() => { billsRef.current = bills; }, [bills]);
+  useEffect(() => { budgetsRef.current = budgets; }, [budgets]);
+  useEffect(() => { goalsRef.current = goals; }, [goals]);
+  useEffect(() => { tasksRef.current = tasks; }, [tasks]);
+  useEffect(() => { projectsRef.current = projects; }, [projects]);
 
   useEffect(() => {
     (async () => {
@@ -956,29 +970,43 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
   // ── CRUD: Budgets ──────────────────────────────────────────────────────────
   const addBudget = useCallback((b: Omit<Budget, "id" | "createdAt" | "updatedAt">) => {
     const now = new Date().toISOString();
-    setBudgets((prev) => [...prev, { ...b, id: genId(), createdAt: now, updatedAt: now }]);
+    const newB: Budget = { ...b, id: genId(), createdAt: now, updatedAt: now };
+    setBudgets((prev) => [...prev, newB]);
+    if (syncPrefsRef.current.budgets)
+      apiCall("/api/budgets", "POST", householdIdRef.current, deviceIdRef.current, { ...newB, householdId: householdIdRef.current, deviceId: deviceIdRef.current });
   }, []);
 
   const updateBudget = useCallback((id: string, updates: Partial<Budget>) => {
     setBudgets((prev) => prev.map((b) => (b.id === id ? { ...b, ...updates, updatedAt: new Date().toISOString() } : b)));
+    if (syncPrefsRef.current.budgets)
+      apiCall(`/api/budgets/${id}`, "PUT", householdIdRef.current, deviceIdRef.current, updates);
   }, []);
 
   const deleteBudget = useCallback((id: string) => {
     setBudgets((prev) => prev.filter((b) => b.id !== id));
+    if (syncPrefsRef.current.budgets)
+      apiCall(`/api/budgets/${id}`, "DELETE", householdIdRef.current, deviceIdRef.current);
   }, []);
 
   // ── CRUD: Goals ───────────────────────────────────────────────────────────
   const addGoal = useCallback((g: Omit<Goal, "id" | "createdAt" | "updatedAt">) => {
     const now = new Date().toISOString();
-    setGoals((prev) => [...prev, { ...g, id: genId(), createdAt: now, updatedAt: now }]);
+    const newG: Goal = { ...g, id: genId(), createdAt: now, updatedAt: now };
+    setGoals((prev) => [...prev, newG]);
+    if (syncPrefsRef.current.goals)
+      apiCall("/api/goals", "POST", householdIdRef.current, deviceIdRef.current, { ...newG, householdId: householdIdRef.current, deviceId: deviceIdRef.current });
   }, []);
 
   const updateGoal = useCallback((id: string, updates: Partial<Goal>) => {
     setGoals((prev) => prev.map((g) => (g.id === id ? { ...g, ...updates, updatedAt: new Date().toISOString() } : g)));
+    if (syncPrefsRef.current.goals)
+      apiCall(`/api/goals/${id}`, "PUT", householdIdRef.current, deviceIdRef.current, updates);
   }, []);
 
   const deleteGoal = useCallback((id: string) => {
     setGoals((prev) => prev.filter((g) => g.id !== id));
+    if (syncPrefsRef.current.goals)
+      apiCall(`/api/goals/${id}`, "DELETE", householdIdRef.current, deviceIdRef.current);
   }, []);
 
   // ── CRUD: Tasks ───────────────────────────────────────────────────────────
@@ -988,6 +1016,8 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
     setTasks((prev) => [...prev, newT]);
     if (newT.reminderEnabled && newT.reminderDate)
       scheduleTaskReminder({ id: newT.id, title: newT.title, reminderDate: newT.reminderDate, notes: newT.notes });
+    if (syncPrefsRef.current.tasks)
+      apiCall("/api/tasks", "POST", householdIdRef.current, deviceIdRef.current, { ...newT, householdId: householdIdRef.current, deviceId: deviceIdRef.current });
   }, []);
 
   const updateTask = useCallback((id: string, updates: Partial<Task>) => {
@@ -999,11 +1029,15 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
       else cancelTaskReminder(id);
       return updated;
     }));
+    if (syncPrefsRef.current.tasks)
+      apiCall(`/api/tasks/${id}`, "PUT", householdIdRef.current, deviceIdRef.current, updates);
   }, []);
 
   const deleteTask = useCallback((id: string) => {
     setTasks((prev) => prev.filter((t) => t.id !== id));
     cancelTaskReminder(id);
+    if (syncPrefsRef.current.tasks)
+      apiCall(`/api/tasks/${id}`, "DELETE", householdIdRef.current, deviceIdRef.current);
   }, []);
 
   // ── CRUD: Bills ───────────────────────────────────────────────────────────
@@ -1031,16 +1065,22 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
   const addProject = useCallback((p: Omit<Project, "id" | "createdAt">): string => {
     const created: Project = { ...p, id: genId(), createdAt: new Date().toISOString() };
     setProjects((prev) => [...prev, created]);
+    if (syncPrefsRef.current.projects)
+      apiCall("/api/projects", "POST", householdIdRef.current, deviceIdRef.current, { ...created, householdId: householdIdRef.current, deviceId: deviceIdRef.current });
     return created.id;
   }, []);
 
   const updateProject = useCallback((id: string, updates: Partial<Project>) => {
     setProjects((prev) => prev.map((p) => (p.id === id ? { ...p, ...updates } : p)));
+    if (syncPrefsRef.current.projects)
+      apiCall(`/api/projects/${id}`, "PUT", householdIdRef.current, deviceIdRef.current, updates);
   }, []);
 
   const deleteProject = useCallback((id: string) => {
     setProjects((prev) => prev.filter((p) => p.id !== id));
     setTransactions((prev) => prev.map((t) => (t.projectId === id ? { ...t, projectId: undefined, projectName: undefined } : t)));
+    if (syncPrefsRef.current.projects)
+      apiCall(`/api/projects/${id}`, "DELETE", householdIdRef.current, deviceIdRef.current);
   }, []);
 
   const addCategory = useCallback((c: Omit<Category, "id" | "householdId" | "createdAt" | "updatedAt">) => {
@@ -1137,6 +1177,48 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
         return [...prev, newRule];
       }
     });
+  }, []);
+
+  // ── DB sync helpers (called by data-storage screen) ──────────────────────
+  const uploadToDb = useCallback(async (type: SyncableType, uploadExisting: boolean): Promise<{ uploaded: number; error?: string }> => {
+    if (!uploadExisting) return { uploaded: 0 };
+    const hId = householdIdRef.current;
+    const dId = deviceIdRef.current;
+    const recordsMap: Record<SyncableType, any[]> = {
+      budgets: budgetsRef.current.map((b) => ({ ...b, householdId: hId, deviceId: dId })),
+      goals: goalsRef.current.map((g) => ({ ...g, householdId: hId, deviceId: dId })),
+      tasks: tasksRef.current.map((t) => ({ ...t, householdId: hId, deviceId: dId })),
+      projects: projectsRef.current.map((p) => ({ ...p, householdId: hId, deviceId: dId })),
+    };
+    const records = recordsMap[type];
+    let uploaded = 0;
+    for (const record of records) {
+      const res = await apiCall(`/api/${type}`, "POST", hId, dId, record);
+      if (res?.ok) uploaded++;
+    }
+    return { uploaded };
+  }, []);
+
+  const pullFromDb = useCallback(async (type: SyncableType, since?: string): Promise<{ pulled: number; error?: string }> => {
+    const hId = householdIdRef.current;
+    const dId = deviceIdRef.current;
+    const url = `/api/${type}${since ? `?since=${encodeURIComponent(since)}` : ""}`;
+    const res = await apiCall(url, "GET", hId, dId);
+    if (!res?.ok) return { pulled: 0, error: "Fetch failed" };
+    const data: any[] = await res.json();
+    if (!Array.isArray(data) || data.length === 0) return { pulled: 0 };
+    const merge = <T extends { id: string }>(setter: React.Dispatch<React.SetStateAction<T[]>>, incoming: T[]) => {
+      setter((prev) => {
+        const byId = new Map(prev.map((r) => [r.id, r]));
+        incoming.forEach((r) => byId.set(r.id, { ...byId.get(r.id), ...r }));
+        return Array.from(byId.values());
+      });
+    };
+    if (type === "budgets") merge(setBudgets, data as Budget[]);
+    else if (type === "goals") merge(setGoals, data as Goal[]);
+    else if (type === "tasks") merge(setTasks, data as Task[]);
+    else if (type === "projects") merge(setProjects, data as Project[]);
+    return { pulled: data.length };
   }, []);
 
   const seedCategories = useCallback(async () => {
@@ -1780,6 +1862,7 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
         connectPlaid, syncPlaidTransactions, delinkPlaid, disconnectPlaid,
         isSyncing, totalBalance, monthlyIncome, monthlyExpense,
         deviceId, householdId, changeHouseholdId,
+        uploadToDb, pullFromDb,
       }}
     >
       {children}

@@ -238,6 +238,27 @@ export default function Drawer() {
           {/* Divider */}
           <View style={[styles.divider, { backgroundColor: colors.border }]} />
 
+          {/* Data Storage */}
+          <TouchableOpacity
+            style={styles.menuItem}
+            onPress={() => navigateTo("/data-storage")}
+            activeOpacity={0.8}
+          >
+            <View style={[styles.menuIconWrap, { backgroundColor: "#10b981" + "18" }]}>
+              <Feather name="database" size={15} color="#10b981" />
+            </View>
+            <View style={styles.menuTextWrap}>
+              <Text style={[styles.menuTitle, { color: colors.foreground }]}>Data Storage</Text>
+              <Text style={[styles.menuSub, { color: colors.mutedForeground }]}>
+                Server vs local storage settings
+              </Text>
+            </View>
+            <Feather name="chevron-right" size={16} color={colors.mutedForeground} />
+          </TouchableOpacity>
+
+          {/* Divider */}
+          <View style={[styles.divider, { backgroundColor: colors.border }]} />
+
           {/* Notifications */}
           <TouchableOpacity
             style={styles.menuItem}
