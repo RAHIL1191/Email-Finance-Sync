@@ -191,9 +191,13 @@ export interface CategoryRule {
   householdId: string;
   merchantPattern: string;
   merchantExact?: string;
+  /** Source category to remap FROM. Null/undefined = any category (merchant-only rule). */
+  fromCategory?: string | null;
   category: string;
   hitCount: number;
   source: "manual" | "learned";
+  /** "future" = apply to new txs only. "past_and_future" = also retroactively applied on creation. */
+  applyScope?: "future" | "past_and_future";
   createdAt: string;
   updatedAt: string;
 }
@@ -243,6 +247,8 @@ interface AppContextType {
   seedCategories: () => Promise<void>;
   learnCategoryRule: (merchantTitle: string, category: string) => void;
   autoCategorize: (title: string) => string | null;
+  addCategoryMappingRule: (rule: { merchantPattern?: string; merchantExact?: string; fromCategory?: string | null; category: string; applyScope: "future" | "past_and_future" }) => void;
+  deleteCategoryRule: (id: string) => void;
   connectEmail: (email: string, appPassword: string) => Promise<{ success: boolean; error?: string }>;
   disconnectEmail: () => void;
   resetEmailTransactions: () => void;
@@ -1126,6 +1132,58 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
       .trim();
   }
 
+  // ── Add a user-defined category mapping rule ────────────────────────────
+  const addCategoryMappingRule = useCallback((
+    rule: { merchantPattern?: string; merchantExact?: string; fromCategory?: string | null; category: string; applyScope: "future" | "past_and_future" }
+  ) => {
+    const now = new Date().toISOString();
+    const newRule: CategoryRule = {
+      id: genId(),
+      householdId: householdIdRef.current,
+      merchantPattern: rule.merchantPattern ?? "",
+      merchantExact: rule.merchantExact,
+      fromCategory: rule.fromCategory ?? null,
+      category: rule.category,
+      hitCount: 1,
+      source: "manual",
+      applyScope: rule.applyScope,
+      createdAt: now,
+      updatedAt: now,
+    };
+    setCategoryRules((prev) => {
+      const next = [...prev, newRule];
+      AsyncStorage.setItem(STORAGE_KEYS.categoryRules, JSON.stringify(next)).catch(() => {});
+      return next;
+    });
+    apiCall("/api/category-rules", "POST", householdIdRef.current, deviceIdRef.current, newRule).catch(() => {});
+
+    if (rule.applyScope === "past_and_future") {
+      const pattern = rule.merchantPattern ?? "";
+      setTransactions((prev) => {
+        const next = prev.map((tx) => {
+          if (newRule.fromCategory && tx.category !== newRule.fromCategory) return tx;
+          if (pattern) {
+            const needle = (tx.merchant || tx.title || "").toLowerCase().replace(/[^a-z0-9\s]/g, "").replace(/\s+/g, " ").trim();
+            if (!needle.includes(pattern) && !pattern.includes(needle)) return tx;
+          }
+          return { ...tx, category: rule.category };
+        });
+        AsyncStorage.setItem(STORAGE_KEYS.transactions, JSON.stringify(next)).catch(() => {});
+        return next;
+      });
+    }
+  }, []);
+
+  // ── Delete a category rule ────────────────────────────────────────────────
+  const deleteCategoryRule = useCallback((id: string) => {
+    setCategoryRules((prev) => {
+      const next = prev.filter((r) => r.id !== id);
+      AsyncStorage.setItem(STORAGE_KEYS.categoryRules, JSON.stringify(next)).catch(() => {});
+      return next;
+    });
+    apiCall(`/api/category-rules/${id}`, "DELETE", householdIdRef.current, deviceIdRef.current).catch(() => {});
+  }, []);
+
   // ── Auto-categorization ───────────────────────────────────────────────────
   const autoCategorize = useCallback((title: string): string | null => {
     const needle = normalizeMerchant(title);
@@ -1857,7 +1915,7 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
         tasks, addTask, updateTask, deleteTask,
         addProject, updateProject, deleteProject,
         addCategory, updateCategory, deleteCategory, seedCategories,
-        learnCategoryRule, autoCategorize,
+        learnCategoryRule, autoCategorize, addCategoryMappingRule, deleteCategoryRule,
         connectEmail, disconnectEmail, resetEmailTransactions, syncEmailTransactions, wipeAllTransactions,
         connectPlaid, syncPlaidTransactions, delinkPlaid, disconnectPlaid,
         isSyncing, totalBalance, monthlyIncome, monthlyExpense,
