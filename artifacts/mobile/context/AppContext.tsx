@@ -1311,7 +1311,33 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
     (id: string) => {
       const bill = bills.find((b) => b.id === id);
       if (!bill) return;
-      setBills((prev) => prev.map((b) => (b.id === id ? { ...b, isPaid: true } : b)));
+
+      if (bill.isRecurring && bill.frequency) {
+        const d = new Date(bill.dueDate);
+        switch (bill.frequency) {
+          case "daily":      d.setDate(d.getDate() + 1);         break;
+          case "weekly":     d.setDate(d.getDate() + 7);         break;
+          case "biweekly":   d.setDate(d.getDate() + 14);        break;
+          case "monthly":    d.setMonth(d.getMonth() + 1);       break;
+          case "quarterly":  d.setMonth(d.getMonth() + 3);       break;
+          case "semiannual": d.setMonth(d.getMonth() + 6);       break;
+          case "yearly":     d.setFullYear(d.getFullYear() + 1); break;
+        }
+        const paidRecord: Bill = {
+          ...bill,
+          id: `${bill.id}_paid_${Date.now()}`,
+          isPaid: true,
+          isRecurring: false,
+          frequency: undefined,
+        };
+        setBills((prev) => [
+          ...prev.map((b) => b.id === id ? { ...b, dueDate: d.toISOString(), isPaid: false } : b),
+          paidRecord,
+        ]);
+      } else {
+        setBills((prev) => prev.map((b) => (b.id === id ? { ...b, isPaid: true } : b)));
+      }
+
       apiCall(`/api/bills/${id}/pay`, "POST", householdIdRef.current, deviceIdRef.current);
       cancelBillNotifications(id);
       addTransaction({
