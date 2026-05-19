@@ -20,6 +20,7 @@ const router: IRouter = Router();
 // Public routes (no auth)
 router.use(healthRouter);
 router.use(configRouter);
+router.use(billCheckRouter); // cron-triggered, auth via X-Cron-Secret — must be before household-auth routers
 
 // Plaid Link popup page — must be registered before any household-auth middleware
 // so browser-opened popups (which carry no custom headers) can reach it.
@@ -32,7 +33,6 @@ router.use(billsRouter);
 router.use(categoriesRouter);
 router.use(categoryRulesRouter);
 router.use(pushTokensRouter);
-router.use(billCheckRouter);
 
 // AI features (rate-limited)
 router.use(strictRateLimit, aiReviewRouter);
