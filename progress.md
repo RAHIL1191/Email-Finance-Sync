@@ -206,6 +206,46 @@ router.use(billCheckRouter);   // ✅ public — cron secret auth, placed here
 
 ---
 
+## ✅ Data Storage Settings Screen
+
+Drawer → "Data Storage" screen showing which data lives in server DB vs AsyncStorage, with toggles to opt async-only data types (Budgets, Goals, Tasks, Projects) into DB sync.
+
+### Storage map
+| Data type | Default storage | Toggleable? |
+|-----------|----------------|-------------|
+| Transactions | DB + Local | ❌ Always synced |
+| Accounts | DB + Local | ❌ Always synced |
+| Bills | DB + Local | ❌ Always synced |
+| Categories | DB + Local | ❌ Always synced |
+| Category Rules | DB + Local | ❌ Always synced |
+| **Budgets** | Local only | ✅ Optional |
+| **Goals** | Local only | ✅ Optional |
+| **Tasks** | Local only | ✅ Optional |
+| **Projects** | Local only | ✅ Optional |
+
+### Confirmation flows
+- **Toggle ON (first time):** Alert with "Upload All existing + Sync" or "Start Fresh Sync" choice
+- **Toggle OFF:** Warning that data remains in DB; records `stoppedAt` timestamp
+- **Toggle ON again:** "Resume from [stoppedAt]" — pulls delta via `?since=` query, merges locally
+
+### Ongoing CRUD sync
+When a type has sync enabled, every `add*` / `update*` / `delete*` call in AppContext also fires the corresponding API endpoint (fire-and-forget).
+
+**Files touched:**
+- `lib/db/src/schema/budgets.ts|goals.ts|tasks.ts|projects.ts` — new Drizzle tables (created)
+- `lib/db/src/schema/index.ts` — exports 4 new schemas
+- `artifacts/api-server/src/routes/budgets.ts|goals.ts|tasks.ts|projects.ts` — CRUD routers with `?since=` and `onConflictDoUpdate`
+- `artifacts/api-server/src/routes/index.ts` — registered 4 new routers
+- `artifacts/mobile/context/DbSyncPrefsContext.tsx` — new context: per-type `enabled/lastSync/stoppedAt` in AsyncStorage
+- `artifacts/mobile/context/AppContext.tsx` — `useDbSyncPrefs` hook, `syncPrefsRef`, sync-aware CRUD, `uploadToDb`/`pullFromDb` helpers
+- `artifacts/mobile/app/_layout.tsx` — added `DbSyncPrefsProvider` wrapping `AppProvider`; registered `data-storage` screen
+- `artifacts/mobile/app/data-storage.tsx` — new settings screen
+- `artifacts/mobile/components/Drawer.tsx` — "Data Storage" menu item
+
+**DB migration:** `drizzle-kit push` run — 4 new tables created in Neon ✅
+
+---
+
 ## How to rebuild & restart API server
 ```powershell
 # From project root:
