@@ -3,7 +3,7 @@ import { runBillCheck } from "../lib/billChecker.js";
 
 const router = Router();
 
-router.post("/bills/check", async (req, res) => {
+router.post("/cron/bill-check", async (req, res) => {
   const secret = req.headers["x-cron-secret"];
   if (!secret || secret !== process.env.CRON_SECRET) {
     res.status(401).json({ error: "Unauthorized" });
