@@ -234,7 +234,7 @@ function occurrenceLimit(freq: string): Date {
 }
 
 function generateOccurrences(bill: Bill): Bill[] {
-  if (!bill.isRecurring || !bill.frequency || bill.isPaid) return [];
+  if (!bill.isRecurring || !bill.frequency) return [];
   const result: Bill[] = [];
   const limit = occurrenceLimit(bill.frequency);
   let next = addFreq(new Date(bill.dueDate), bill.frequency);
@@ -690,7 +690,7 @@ export default function BillsScreen() {
   const upcomingBills = useMemo(() => {
     const base = bills.filter((b) => !b.isPaid && (b.isRecurring || daysUntil(b.dueDate) >= 0));
     const virtual = bills
-      .filter((b) => b.isRecurring && !b.isPaid)
+      .filter((b) => b.isRecurring)
       .flatMap(generateOccurrences)
       .filter((b) => daysUntil(b.dueDate) >= 0);
     return [...base, ...virtual];
