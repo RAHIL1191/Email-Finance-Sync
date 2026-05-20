@@ -229,7 +229,7 @@ router.post("/plaid/exchange-token", async (req, res) => {
       const invCount = 500;
       let invTotal = Infinity;
       while (investmentTransactions.length < invTotal) {
-        const invRes = await client.investmentTransactionsGet({
+        const invRes = await client.investmentsTransactionsGet({
           access_token,
           start_date: iStartDate,
           end_date: iEndDate,
@@ -396,7 +396,7 @@ router.post("/plaid/sync/:itemId", async (req, res) => {
       const invCount = 500;
       let invTotal = Infinity;
       while (investmentTransactions.length < invTotal) {
-        const invRes = await client.investmentTransactionsGet({
+        const invRes = await client.investmentsTransactionsGet({
           access_token: record.accessToken,
           start_date: iStartDate,
           end_date: iEndDate,
