@@ -1541,8 +1541,11 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
       setTransactions((prev) => {
         const next = prev.filter((t) => {
           // If transaction matches filters and matches selected category/type, delete it (filter it out)
-          const matchesDate = (!filters?.startDate || t.date >= filters.startDate) &&
-                              (!filters?.endDate || t.date <= filters.endDate);
+          const txStartStr = String(filters?.startDate ?? "");
+          const txEndStr = filters?.endDate ? (String(filters.endDate).includes("T") ? String(filters.endDate) : `${filters.endDate}T23:59:59.999Z`) : "";
+
+          const matchesDate = (!filters?.startDate || t.date >= txStartStr) &&
+                              (!filters?.endDate || t.date <= txEndStr);
           const matchesAccount = !filters?.accountIds || filters.accountIds.includes(t.accountId);
 
           if (matchesDate && matchesAccount) {

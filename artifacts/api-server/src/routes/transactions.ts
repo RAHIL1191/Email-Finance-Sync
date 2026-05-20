@@ -126,7 +126,9 @@ router.delete("/transactions", async (req, res) => {
       conds.push(gte(transactionsTable.date, String(startDate)));
     }
     if (endDate) {
-      conds.push(lte(transactionsTable.date, String(endDate)));
+      // Append maximum timestamp bound so same-day transactions are correctly included
+      const endString = String(endDate).includes("T") ? String(endDate) : `${endDate}T23:59:59.999Z`;
+      conds.push(lte(transactionsTable.date, endString));
     }
     if (accountIds) {
       const ids = String(accountIds).split(",");
