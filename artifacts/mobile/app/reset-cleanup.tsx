@@ -64,8 +64,15 @@ export default function ResetCleanupScreen() {
 
   // Filter helper
   const isFiltered = (t: any) => {
-    if (fromDate && new Date(t.date) < fromDate) return false;
-    if (toDate && new Date(t.date) > toDate) return false;
+    const txDate = new Date(t.date);
+    if (fromDate) {
+      const startOfFromDate = new Date(fromDate.getFullYear(), fromDate.getMonth(), fromDate.getDate(), 0, 0, 0, 0);
+      if (txDate < startOfFromDate) return false;
+    }
+    if (toDate) {
+      const endOfToDate = new Date(toDate.getFullYear(), toDate.getMonth(), toDate.getDate(), 23, 59, 59, 999);
+      if (txDate > endOfToDate) return false;
+    }
     if (selectedAccounts.length > 0 && !selectedAccounts.includes(t.accountId)) return false;
     return true;
   };
