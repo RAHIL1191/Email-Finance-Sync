@@ -804,7 +804,7 @@ function CashFlowTab({
                     styles.barWrapper,
                     {
                       height: BAR_HEIGHT,
-                      backgroundColor: isCurrent ? "#b0b8c8" : "transparent",
+                      backgroundColor: isCurrent ? "rgba(176, 184, 200, 0.25)" : "transparent",
                       borderRadius: 6,
                     },
                   ]}
