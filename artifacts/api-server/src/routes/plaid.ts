@@ -216,18 +216,32 @@ router.post("/plaid/exchange-token", async (req, res) => {
       const holdRes = await client.investmentsHoldingsGet({ access_token });
       const secMap = buildSecMap(holdRes.data.securities);
       holdings = holdRes.data.holdings.map((h) => mapHolding(h, secMap));
-    } catch {}
+    } catch (invErr) {
+      req.log.warn({ invErr }, "investmentsHoldingsGet failed (product may not be enabled for this item)");
+    }
     try {
-      const iStartDate = new Date(Date.now() - 90 * 86400000).toISOString().slice(0, 10);
+      const iStartDate = new Date(Date.now() - 730 * 86400000).toISOString().slice(0, 10);
       const iEndDate = new Date().toISOString().slice(0, 10);
-      const invRes = await client.investmentTransactionsGet({
-        access_token,
-        start_date: iStartDate,
-        end_date: iEndDate,
-      });
-      const secMap = buildSecMap(invRes.data.securities);
-      investmentTransactions = invRes.data.investment_transactions.map((t) => mapInvestmentTransaction(t, secMap));
-    } catch {}
+      let invOffset = 0;
+      const invCount = 500;
+      let invTotal = Infinity;
+      while (investmentTransactions.length < invTotal) {
+        const invRes = await client.investmentTransactionsGet({
+          access_token,
+          start_date: iStartDate,
+          end_date: iEndDate,
+          options: { count: invCount, offset: invOffset },
+        });
+        invTotal = invRes.data.total_investment_transactions;
+        const secMap = buildSecMap(invRes.data.securities);
+        const page = invRes.data.investment_transactions.map((t) => mapInvestmentTransaction(t, secMap));
+        investmentTransactions = [...investmentTransactions, ...page];
+        invOffset += page.length;
+        if (page.length === 0) break;
+      }
+    } catch (invErr) {
+      req.log.warn({ invErr }, "investmentTransactionsGet failed (product may not be enabled for this item)");
+    }
 
     // 5. Store item in DB
     const dbId = `pi_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 7)}`;
@@ -362,18 +376,32 @@ router.post("/plaid/sync/:itemId", async (req, res) => {
       const holdRes = await client.investmentsHoldingsGet({ access_token: record.accessToken });
       const secMap = buildSecMap(holdRes.data.securities);
       holdings = holdRes.data.holdings.map((h) => mapHolding(h, secMap));
-    } catch {}
+    } catch (invErr) {
+      req.log.warn({ invErr }, "investmentsHoldingsGet failed during sync");
+    }
     try {
-      const iStartDate = new Date(Date.now() - 90 * 86400000).toISOString().slice(0, 10);
+      const iStartDate = new Date(Date.now() - 730 * 86400000).toISOString().slice(0, 10);
       const iEndDate = new Date().toISOString().slice(0, 10);
-      const invRes = await client.investmentTransactionsGet({
-        access_token: record.accessToken,
-        start_date: iStartDate,
-        end_date: iEndDate,
-      });
-      const secMap = buildSecMap(invRes.data.securities);
-      investmentTransactions = invRes.data.investment_transactions.map((t) => mapInvestmentTransaction(t, secMap));
-    } catch {}
+      let invOffset = 0;
+      const invCount = 500;
+      let invTotal = Infinity;
+      while (investmentTransactions.length < invTotal) {
+        const invRes = await client.investmentTransactionsGet({
+          access_token: record.accessToken,
+          start_date: iStartDate,
+          end_date: iEndDate,
+          options: { count: invCount, offset: invOffset },
+        });
+        invTotal = invRes.data.total_investment_transactions;
+        const secMap = buildSecMap(invRes.data.securities);
+        const page = invRes.data.investment_transactions.map((t) => mapInvestmentTransaction(t, secMap));
+        investmentTransactions = [...investmentTransactions, ...page];
+        invOffset += page.length;
+        if (page.length === 0) break;
+      }
+    } catch (invErr) {
+      req.log.warn({ invErr }, "investmentTransactionsGet failed during sync");
+    }
 
     res.json({
       transactions: transactions.map(mapPlaidTransaction),

@@ -128,7 +128,7 @@ export default function PlaidLinkModal({
   const [serverTransactions, setServerTransactions] = useState<ServerTransaction[]>([]);
   const [serverHoldings, setServerHoldings] = useState<any[]>([]);
   const [serverInvTxs, setServerInvTxs] = useState<any[]>([]);
-  const [importResult, setImportResult] = useState<{ accounts: number; transactions: number } | null>(null);
+  const [importResult, setImportResult] = useState<{ accounts: number; transactions: number; holdings: number; investmentTxs: number } | null>(null);
   const [plaidItemId, setPlaidItemId] = useState("");
   const filteredBanks = query.trim()
     ? PLAID_BANKS.filter((b) => b.name.toLowerCase().includes(query.toLowerCase()))
@@ -225,7 +225,7 @@ export default function PlaidLinkModal({
         }
         setConnectingMsg("Syncing transactions…");
         const result = await syncPlaidTransactions(itemId, true);
-        setImportResult({ accounts: 0, transactions: result.imported });
+        setImportResult({ accounts: 0, transactions: result.imported, holdings: 0, investmentTxs: 0 });
         Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
         setStep("success");
         return;
@@ -329,7 +329,7 @@ export default function PlaidLinkModal({
     };
 
     const { imported } = await connectPlaid(item, newAccounts, initialTxs, serverHoldings, serverInvTxs);
-    setImportResult({ accounts: selected.length, transactions: imported });
+    setImportResult({ accounts: selected.length, transactions: imported, holdings: serverHoldings.length, investmentTxs: serverInvTxs.length });
     Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
     setStep("success");
   };
@@ -539,9 +539,10 @@ export default function PlaidLinkModal({
             </View>
             <Text style={[styles.bigTitle, { color: colors.foreground }]}>Bank Linked!</Text>
             <Text style={[styles.bigSub, { color: colors.mutedForeground }]}>
-              Imported {importResult.accounts} account{importResult.accounts !== 1 ? "s" : ""} and{" "}
-              {importResult.transactions} real transaction{importResult.transactions !== 1 ? "s" : ""} from{" "}
-              {selectedBank?.name}.
+              {importResult.holdings > 0 || importResult.investmentTxs > 0
+                ? `Imported ${importResult.accounts} account${importResult.accounts !== 1 ? "s" : ""}, ${importResult.holdings} holding${importResult.holdings !== 1 ? "s" : ""} and ${importResult.investmentTxs} investment transaction${importResult.investmentTxs !== 1 ? "s" : ""} from ${selectedBank?.name}.`
+                : `Imported ${importResult.accounts} account${importResult.accounts !== 1 ? "s" : ""} and ${importResult.transactions} transaction${importResult.transactions !== 1 ? "s" : ""} from ${selectedBank?.name}.`
+              }
             </Text>
             <View style={[styles.statsRow, { backgroundColor: colors.card }]}>
               <View style={styles.statItem}>
@@ -551,12 +552,30 @@ export default function PlaidLinkModal({
                 <Text style={[styles.statLabel, { color: colors.mutedForeground }]}>Accounts</Text>
               </View>
               <View style={[styles.statDivider, { backgroundColor: colors.border }]} />
-              <View style={styles.statItem}>
-                <Text style={[styles.statNum, { color: selectedBank?.color ?? colors.primary }]}>
-                  {importResult.transactions}
-                </Text>
-                <Text style={[styles.statLabel, { color: colors.mutedForeground }]}>Transactions</Text>
-              </View>
+              {importResult.holdings > 0 || importResult.investmentTxs > 0 ? (
+                <>
+                  <View style={styles.statItem}>
+                    <Text style={[styles.statNum, { color: selectedBank?.color ?? colors.primary }]}>
+                      {importResult.holdings}
+                    </Text>
+                    <Text style={[styles.statLabel, { color: colors.mutedForeground }]}>Holdings</Text>
+                  </View>
+                  <View style={[styles.statDivider, { backgroundColor: colors.border }]} />
+                  <View style={styles.statItem}>
+                    <Text style={[styles.statNum, { color: selectedBank?.color ?? colors.primary }]}>
+                      {importResult.investmentTxs}
+                    </Text>
+                    <Text style={[styles.statLabel, { color: colors.mutedForeground }]}>Activity</Text>
+                  </View>
+                </>
+              ) : (
+                <View style={styles.statItem}>
+                  <Text style={[styles.statNum, { color: selectedBank?.color ?? colors.primary }]}>
+                    {importResult.transactions}
+                  </Text>
+                  <Text style={[styles.statLabel, { color: colors.mutedForeground }]}>Transactions</Text>
+                </View>
+              )}
             </View>
             <View style={[styles.infoNote, { backgroundColor: colors.muted }]}>
               <Feather name="shield" size={13} color={colors.mutedForeground} />
