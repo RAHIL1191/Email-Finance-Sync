@@ -734,7 +734,10 @@ export default function AccountsScreen() {
   const [collapsedGroups, setCollapsedGroups] = useState<Record<string, boolean>>({});
 
   const toggleGroup = (key: string) =>
-    setCollapsedGroups((prev) => ({ ...prev, [key]: !prev[key] }));
+    setCollapsedGroups((prev) => {
+      const isCurrentlyCollapsed = prev[key] !== false;
+      return { ...prev, [key]: !isCurrentlyCollapsed };
+    });
 
   const groupedAccounts = useMemo(() => {
     const map: Record<string, Account[]> = {};
@@ -886,7 +889,7 @@ export default function AccountsScreen() {
                 total={total}
                 icon={meta.icon}
                 isLiability={meta.isLiability}
-                collapsed={!!collapsedGroups[key]}
+                collapsed={collapsedGroups[key] !== false}
                 onToggle={() => toggleGroup(key)}
               />
             ))}
