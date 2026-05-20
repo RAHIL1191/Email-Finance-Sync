@@ -464,16 +464,29 @@ function buildSecMap(securities: any[]): Map<string, any> {
 
 function mapHolding(h: any, secMap: Map<string, any>) {
   const sec = secMap.get(h.security_id);
+  const qty = (h.quantity ?? 0) as number;
+  const instValue = h.institution_value as number | null;
+  const instPrice = h.institution_price as number | null;
+  const closePrice = sec?.close_price as number | null;
+  // Best-effort value: institution_value → institution_price*qty → close_price*qty
+  let value = 0;
+  if (instValue != null && instValue > 0) {
+    value = instValue;
+  } else if (instPrice != null && instPrice > 0 && qty > 0) {
+    value = qty * instPrice;
+  } else if (closePrice != null && closePrice > 0 && qty > 0) {
+    value = qty * closePrice;
+  }
   return {
     plaidAccountId: h.account_id as string,
     ticker: (sec?.ticker_symbol as string | null) ?? null,
     name: (sec?.name ?? "Unknown") as string,
     securityType: (sec?.type ?? "other") as string,
-    quantity: h.quantity as number,
-    value: (h.institution_value ?? 0) as number,
+    quantity: qty,
+    value,
     costBasis: (h.cost_basis ?? null) as number | null,
     currency: (h.iso_currency_code ?? h.unofficial_currency_code ?? "CAD") as string,
-    asOf: (sec?.close_price_as_of ?? null) as string | null,
+    asOf: (h.institution_price_as_of ?? sec?.close_price_as_of ?? null) as string | null,
   };
 }
 
