@@ -285,9 +285,9 @@ router.post("/plaid/sync/:itemId", async (req, res) => {
       hasMore = syncRes.data.has_more;
     }
 
-    // When a force-resync returns 0 (e.g. Wealthsimple Canada async processing),
+    // When sync returns 0 (e.g. Wealthsimple Canada async processing or exhausted cursor),
     // fall back to transactionsGet to pick up whatever is currently available.
-    if (force && transactions.length === 0) {
+    if (transactions.length === 0) {
       try {
         const startDate = new Date(Date.now() - 90 * 86400000).toISOString().slice(0, 10);
         const endDate   = new Date().toISOString().slice(0, 10);

@@ -1722,12 +1722,14 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
           return false;
         });
 
+        // Auto-force when item has never successfully imported any transactions
+        const neverImported = !item.lastImported || item.lastImported === 0;
         const res = await apiCall(
           `/api/plaid/sync/${itemId}`,
           "POST",
           householdIdRef.current,
           deviceIdRef.current,
-          (hasMismatched || forceFullSync) ? { force: true } : undefined
+          (hasMismatched || forceFullSync || neverImported) ? { force: true } : undefined
         );
 
         if (!res) {
