@@ -290,7 +290,10 @@ interface AppContextType {
   syncEmailTransactions: () => Promise<{ imported: number; parsed?: any[]; error?: string }>;
   wipeAllTransactions: () => Promise<void>;
   wipePortfolio: () => Promise<void>;
-  wipeData: (categories: Array<"transactions" | "accounts" | "bills" | "budgets" | "goals" | "portfolio" | "connections">) => Promise<void>;
+  wipeData: (
+    categories: Array<"expenses" | "income" | "transfers" | "transactions" | "accounts" | "bills" | "budgets" | "goals" | "portfolio" | "connections">,
+    filters?: { startDate?: string; endDate?: string; accountIds?: string[] }
+  ) => Promise<void>;
   connectPlaid: (item: PlaidItem, newAccounts: Omit<Account, "id">[], initialTransactions: Omit<Transaction, "id">[], rawHoldingsData?: any[], rawInvTxsData?: any[]) => Promise<{ imported: number }>;
   syncPlaidTransactions: (itemId: string, forceFullSync?: boolean) => Promise<{ imported: number; error?: string }>;
   delinkPlaid: (itemId: string) => void;
@@ -1527,19 +1530,51 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
     await AsyncStorage.setItem(STORAGE_KEYS.investmentTransactions, JSON.stringify([]));
   }, []);
 
-  const wipeData = useCallback(async (categories: Array<"transactions" | "accounts" | "bills" | "budgets" | "goals" | "portfolio" | "connections">) => {
+  const wipeData = useCallback(async (
+    categories: Array<"expenses" | "income" | "transfers" | "transactions" | "accounts" | "bills" | "budgets" | "goals" | "portfolio" | "connections">,
+    filters?: { startDate?: string; endDate?: string; accountIds?: string[] }
+  ) => {
     const set = new Set(categories);
-    if (set.has("transactions")) {
-      setTransactions([]);
-      await AsyncStorage.setItem(STORAGE_KEYS.transactions, JSON.stringify([]));
+    const hasTransactions = set.has("transactions") || set.has("expenses") || set.has("income") || set.has("transfers");
+
+    if (hasTransactions) {
+      setTransactions((prev) => {
+        const next = prev.filter((t) => {
+          // If transaction matches filters and matches selected category/type, delete it (filter it out)
+          const matchesDate = (!filters?.startDate || t.date >= filters.startDate) &&
+                              (!filters?.endDate || t.date <= filters.endDate);
+          const matchesAccount = !filters?.accountIds || filters.accountIds.includes(t.accountId);
+
+          if (matchesDate && matchesAccount) {
+            if (set.has("transactions")) return false;
+            if (set.has("expenses") && t.type === "expense") return false;
+            if (set.has("income") && t.type === "income") return false;
+            if (set.has("transfers") && t.category === "Transfer") return false;
+          }
+          return true;
+        });
+        AsyncStorage.setItem(STORAGE_KEYS.transactions, JSON.stringify(next));
+        return next;
+      });
     }
     if (set.has("accounts")) {
       setAccounts([]);
       await AsyncStorage.setItem(STORAGE_KEYS.accounts, JSON.stringify([]));
     }
     if (set.has("bills")) {
-      setBills([]);
-      await AsyncStorage.setItem(STORAGE_KEYS.bills, JSON.stringify([]));
+      setBills((prev) => {
+        // Bills don't have transaction type, but if date range filters are set, we filter them out
+        // Just empty completely if no date range is set, or filter by date if they have a date/due date
+        const next = prev.filter((b) => {
+          // If bill matches filters, delete it
+          const matchesAccount = !filters?.accountIds || (b.accountId && filters.accountIds.includes(b.accountId));
+          // Note: bills don't have standard "date" field, so we just filter by account if specified, otherwise wipe
+          if (matchesAccount) return false;
+          return true;
+        });
+        AsyncStorage.setItem(STORAGE_KEYS.bills, JSON.stringify(next));
+        return next;
+      });
     }
     if (set.has("budgets")) {
       setBudgets([]);

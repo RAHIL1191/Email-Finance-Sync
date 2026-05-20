@@ -912,17 +912,6 @@ export default function AccountsScreen() {
                 <Text style={[styles.addAcctText, { color: colors.primary }]}>Add Account</Text>
               </TouchableOpacity>
             )}
-
-            <TouchableOpacity
-              style={[styles.addAcctBtn, { borderColor: colors.expense, marginTop: 10 }]}
-              onPress={() => {
-                Haptics.notificationAsync(Haptics.NotificationFeedbackType.Warning);
-                wipeAllTransactions();
-              }}
-            >
-              <Feather name="trash-2" size={16} color={colors.expense} />
-              <Text style={[styles.addAcctText, { color: colors.expense }]}>Reset All Transactions</Text>
-            </TouchableOpacity>
           </View>
         ) : (
           <View style={{ paddingHorizontal: 16, paddingTop: 16 }}>
