@@ -2063,7 +2063,9 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
   );
 
   const delinkPlaid = useCallback((itemId: string) => {
-    // Remove Plaid token only — keeps accounts and transactions intact
+    // Remove Plaid token only — keeps accounts and transactions intact, but clears investment data
+    setHoldings((prev) => prev.filter((h) => h.plaidItemId !== itemId));
+    setInvestmentTransactions((prev) => prev.filter((t) => t.plaidItemId !== itemId));
     setPlaidSync((prev) => ({ items: prev.items.filter((i) => i.itemId !== itemId) }));
     apiCall(
       `/api/plaid/disconnect/${itemId}`,
@@ -2081,6 +2083,8 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
         prev.filter((t) => !item.accountIds.includes(t.accountId) || t.source !== "plaid")
       );
     }
+    setHoldings((prev) => prev.filter((h) => h.plaidItemId !== itemId));
+    setInvestmentTransactions((prev) => prev.filter((t) => t.plaidItemId !== itemId));
     setPlaidSync((prev) => ({ items: prev.items.filter((i) => i.itemId !== itemId) }));
     // Best-effort: remove access token from server
     apiCall(
