@@ -5,6 +5,80 @@
 
 ---
 
+## ✅ Accounts Tab — Reset Button Removal & Type Fix
+Removed the "Reset All Transactions" button from the Accounts tab header to match design mockups, and resolved the TypeScript warning for `wipeData` on the main `AppProvider` context.
+
+**Files touched:**
+- `@/artifacts/mobile/app/(tabs)/accounts.tsx:1-125` — removed Reset Button from header
+- `@/artifacts/mobile/context/AppContext.tsx:2100-2210` — fixed context typing for `wipeData`
+
+---
+
+## ✅ Add Entry Validation
+Added clear Alerts for when users try to save manual Expenses, Income, or Transfers without entering an amount or selecting an account, replacing silent failures.
+
+**Files touched:**
+- `@/artifacts/mobile/components/AddEntrySheet.tsx:830-1410` — implemented input & account validation pop-ups for all tabs
+
+---
+
+## ✅ Bar Chart Visual Fixes
+Made the active/selected month indicator in the transactions bar chart a subtle semi-transparent color instead of a solid slate gray. This ensures empty months look empty and do not mimic a massive transaction entry.
+
+**Files touched:**
+- `@/artifacts/mobile/app/(tabs)/transactions.tsx:800-815` — updated bar column highlight style
+
+---
+
+## ✅ Date Validation for Reset & Clean Up
+The "NEXT" button in the Reset & Clean Up modal now requires both "From Date" and "To Date" to be selected first, alerting the user explicitly if missing.
+
+**Files touched:**
+- `@/artifacts/mobile/app/reset-cleanup.tsx:380-400` — added date validation alert to the NEXT button
+
+---
+
+## ✅ Same-Day Data Filtering & Deletion Fix
+Normalized date range comparisons to use the start-of-day for the start date and end-of-day for the end date, ensuring that transactions occurring on the selected days are correctly counted and deleted.
+
+**Files touched:**
+- `@/artifacts/mobile/app/reset-cleanup.tsx:65-78` — normalized local date range check times
+- `@/artifacts/api-server/src/routes/transactions.ts:125-132` — normalized backend date string comparison bounds
+
+---
+
+## ✅ Reset Screen Zero-State Defaults
+Ensured that all transaction and bill category counts start at `0` before any date range is selected, rather than displaying unfiltered historical totals.
+
+**Files touched:**
+- `@/artifacts/mobile/app/reset-cleanup.tsx:65-86` — adjusted filteredCounts to evaluate to 0 until date bounds are set
+
+---
+
+## ✅ Portfolio Deletion Toggle
+Added the **Portfolio** category (holdings & investment transactions) to the Reset & Clean Up screen, allowing atomic local portfolio data wipes alongside transaction wipes.
+
+**Files touched:**
+- `@/artifacts/mobile/app/reset-cleanup.tsx:24-155` — added portfolio selection, item counting, and wipe routine
+
+---
+
+## ✅ Closed Accounts Dropdown by Default
+Defaulted all account groups (Chequing, Savings, Credit Cards, Investment) in the Accounts Tab to a collapsed state on launch, allowing users to expand them dynamically.
+
+**Files touched:**
+- `@/artifacts/mobile/app/(tabs)/accounts.tsx:735-895` — defaulted category dropdown states to collapsed
+
+---
+
+## ✅ Reliable Credit Card Transaction Sync
+Upgraded the Plaid sync flows to combine both `/transactions/sync` and `/transactions/get` endpoints, deduplicating the results by their unique `transaction_id`. This guarantees credit card transactions (such as the Wealthsimple Cash card) are immediately fetched even when Plaid is processing sync events asynchronously.
+
+**Files touched:**
+- `@/artifacts/api-server/src/routes/plaid.ts:195-351` — integrated and deduplicated dual-sync endpoints
+
+---
+
 ## ✅ Merchant Picker Modal
 Allow users to pick a merchant when adding or editing a transaction.
 
