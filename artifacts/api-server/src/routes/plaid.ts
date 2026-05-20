@@ -242,8 +242,13 @@ router.post("/plaid/exchange-token", async (req, res) => {
         invOffset += page.length;
         if (page.length === 0) break;
       }
-    } catch (invErr) {
-      req.log.warn({ invErr }, "investmentTransactionsGet failed (product may not be enabled for this item)");
+    } catch (invErr: any) {
+      req.log.warn({
+        err: invErr?.message || String(invErr),
+        code: invErr?.response?.data?.error_code,
+        type: invErr?.response?.data?.error_type,
+        msg: invErr?.response?.data?.error_message
+      }, "investmentTransactionsGet failed (product may not be enabled for this item)");
     }
 
     // 5. Store item in DB
@@ -404,8 +409,13 @@ router.post("/plaid/sync/:itemId", async (req, res) => {
         invOffset += page.length;
         if (page.length === 0) break;
       }
-    } catch (invErr) {
-      req.log.warn({ invErr }, "investmentTransactionsGet failed during sync");
+    } catch (invErr: any) {
+      req.log.warn({
+        err: invErr?.message || String(invErr),
+        code: invErr?.response?.data?.error_code,
+        type: invErr?.response?.data?.error_type,
+        msg: invErr?.response?.data?.error_message
+      }, "investmentTransactionsGet failed during sync");
     }
 
     res.json({
