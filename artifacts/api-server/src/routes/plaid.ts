@@ -107,8 +107,15 @@ router.post("/plaid/create-link-token", async (req, res) => {
         res.status(404).json({ error: "Plaid item not found" });
         return;
       }
-      const response = await client.linkTokenCreate({ ...base, access_token: rows[0].accessToken });
-      res.json({ link_token: response.data.link_token, update_mode: true });
+      try {
+        const response = await client.linkTokenCreate({ ...base, access_token: rows[0].accessToken });
+        res.json({ link_token: response.data.link_token, update_mode: true });
+      } catch {
+        // Access token is invalid (item was removed from Plaid) — fall back to fresh link.
+        // The client will pass existing_item_id on exchange so we update rather than insert.
+        const response = await client.linkTokenCreate({ ...base, products: [Products.Transactions] });
+        res.json({ link_token: response.data.link_token, update_mode: false, stale_item: true });
+      }
     } else {
       const response = await client.linkTokenCreate({ ...base, products: [Products.Transactions] });
       res.json({ link_token: response.data.link_token, update_mode: false });
