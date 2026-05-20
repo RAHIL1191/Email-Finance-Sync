@@ -1485,26 +1485,28 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
   const wipeAllTransactions = useCallback(async () => {
     setIsSyncing(true);
     try {
-      // 1. Wipe backend - verify it succeeds before wiping local
-      const res = await apiCall("/api/transactions", "DELETE", householdIdRef.current, deviceIdRef.current);
+      // 1. Wipe backend (transactions + accounts) — both must succeed before wiping local
+      const [txRes, acctRes] = await Promise.all([
+        apiCall("/api/transactions", "DELETE", householdIdRef.current, deviceIdRef.current),
+        apiCall("/api/accounts", "DELETE", householdIdRef.current, deviceIdRef.current),
+      ]);
 
-      // apiCall returns null on network/timeout errors
-      if (!res) {
-        throw new Error("Network error: Could not connect to server to delete transactions");
+      if (!txRes || !acctRes) {
+        throw new Error("Network error: Could not connect to server");
       }
-
-      // Check HTTP status code
-      if (!res.ok) {
-        const errorData = await res.json().catch(() => ({ error: "Unknown server error" }));
-        throw new Error(errorData.error || `Server error: ${res.status} ${res.statusText}`);
+      if (!txRes.ok) {
+        const e = await txRes.json().catch(() => ({ error: "Unknown error" }));
+        throw new Error(e.error || `Server error: ${txRes.status}`);
       }
 
       // 2. Only wipe local if backend succeeded
       setTransactions([]);
+      setAccounts([]);
       setHoldings([]);
       setInvestmentTransactions([]);
       setPlaidSync({ items: [] });
       await AsyncStorage.setItem(STORAGE_KEYS.transactions, JSON.stringify([]));
+      await AsyncStorage.setItem(STORAGE_KEYS.accounts, JSON.stringify([]));
       await AsyncStorage.setItem(STORAGE_KEYS.holdings, JSON.stringify([]));
       await AsyncStorage.setItem(STORAGE_KEYS.investmentTransactions, JSON.stringify([]));
       await AsyncStorage.setItem(STORAGE_KEYS.plaidSync, JSON.stringify({ items: [] }));

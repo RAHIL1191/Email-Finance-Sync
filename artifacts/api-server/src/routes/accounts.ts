@@ -61,6 +61,20 @@ router.put("/accounts/:id", validate(updateAccountSchema), async (req, res) => {
   }
 });
 
+/** DELETE /api/accounts — delete ALL accounts for this household */
+router.delete("/accounts", async (req, res) => {
+  try {
+    const rows = await db
+      .delete(accountsTable)
+      .where(eq(accountsTable.householdId, res.locals.householdId))
+      .returning();
+    res.json({ success: true, count: rows.length });
+  } catch (err) {
+    req.log.error({ err }, "Failed to bulk-delete accounts");
+    res.status(500).json({ error: "Failed to delete accounts" });
+  }
+});
+
 /** DELETE /api/accounts/:id — delete an account */
 router.delete("/accounts/:id", async (req, res) => {
   try {
