@@ -73,7 +73,7 @@ type SettingsRow =
 
 export default function SettingsScreen() {
   const colors = useColors();
-  const { wipeAllTransactions } = useApp();
+  const { wipeAllTransactions, wipePortfolio } = useApp();
   const [settings, setSettings] = useState<SettingsState>(DEFAULT_SETTINGS);
   const [picker, setPicker] = useState<PickerMode>(null);
 
@@ -112,7 +112,7 @@ export default function SettingsScreen() {
   const handleReset = useCallback(() => {
     Alert.alert(
       "Reset & Clean Up",
-      "This will wipe all transactions and reset app settings. This cannot be undone.",
+      "This will wipe all transactions, portfolio data, and reset app settings. This cannot be undone.",
       [
         { text: "Cancel", style: "cancel" },
         {
@@ -128,6 +128,24 @@ export default function SettingsScreen() {
       ]
     );
   }, [wipeAllTransactions]);
+
+  const handleWipePortfolio = useCallback(() => {
+    Alert.alert(
+      "Wipe Portfolio Data",
+      "This will clear all holdings and investment transactions. Regular transactions and accounts are kept. This cannot be undone.",
+      [
+        { text: "Cancel", style: "cancel" },
+        {
+          text: "Wipe Portfolio",
+          style: "destructive",
+          onPress: async () => {
+            await wipePortfolio();
+            Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
+          },
+        },
+      ]
+    );
+  }, [wipePortfolio]);
 
   const SECTIONS: SettingsSection[] = [
     {
@@ -243,6 +261,12 @@ export default function SettingsScreen() {
     {
       title: "Advanced",
       items: [
+        {
+          kind: "destructive",
+          label: "Wipe Portfolio Data",
+          icon: "trending-down",
+          onPress: handleWipePortfolio,
+        },
         {
           kind: "destructive",
           label: "Reset & Clean Up",

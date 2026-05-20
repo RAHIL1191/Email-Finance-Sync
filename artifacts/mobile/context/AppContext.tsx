@@ -289,6 +289,7 @@ interface AppContextType {
   resetEmailTransactions: () => void;
   syncEmailTransactions: () => Promise<{ imported: number; parsed?: any[]; error?: string }>;
   wipeAllTransactions: () => Promise<void>;
+  wipePortfolio: () => Promise<void>;
   connectPlaid: (item: PlaidItem, newAccounts: Omit<Account, "id">[], initialTransactions: Omit<Transaction, "id">[], rawHoldingsData?: any[], rawInvTxsData?: any[]) => Promise<{ imported: number }>;
   syncPlaidTransactions: (itemId: string, forceFullSync?: boolean) => Promise<{ imported: number; error?: string }>;
   delinkPlaid: (itemId: string) => void;
@@ -1500,16 +1501,27 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
 
       // 2. Only wipe local if backend succeeded
       setTransactions([]);
+      setHoldings([]);
+      setInvestmentTransactions([]);
+      setPlaidSync({ items: [] });
       await AsyncStorage.setItem(STORAGE_KEYS.transactions, JSON.stringify([]));
-
-      // Optional: log success
-      console.log("Transactions wiped successfully from both server and local storage");
+      await AsyncStorage.setItem(STORAGE_KEYS.holdings, JSON.stringify([]));
+      await AsyncStorage.setItem(STORAGE_KEYS.investmentTransactions, JSON.stringify([]));
+      await AsyncStorage.setItem(STORAGE_KEYS.plaidSync, JSON.stringify({ items: [] }));
+      console.log("All data wiped successfully");
     } catch (err) {
       console.error("Transaction wipe failed:", err);
       throw err; // Re-throw so UI can show error to user
     } finally {
       setIsSyncing(false);
     }
+  }, []);
+
+  const wipePortfolio = useCallback(async () => {
+    setHoldings([]);
+    setInvestmentTransactions([]);
+    await AsyncStorage.setItem(STORAGE_KEYS.holdings, JSON.stringify([]));
+    await AsyncStorage.setItem(STORAGE_KEYS.investmentTransactions, JSON.stringify([]));
   }, []);
 
   const syncEmailTransactions = useCallback(async (): Promise<{ imported: number; parsed?: any[]; error?: string }> => {
@@ -2077,12 +2089,15 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
 
   const disconnectPlaid = useCallback((itemId: string) => {
     const item = plaidSync.items.find((i) => i.itemId === itemId);
-    if (item) {
-      setAccounts((prev) => prev.filter((a) => !item.accountIds.includes(a.id)));
-      setTransactions((prev) =>
-        prev.filter((t) => !item.accountIds.includes(t.accountId) || t.source !== "plaid")
-      );
-    }
+    // Remove accounts by BOTH accountIds list AND plaidItemId (handles stale/incomplete accountIds)
+    setAccounts((prev) =>
+      prev.filter((a) => !(item?.accountIds.includes(a.id) || a.plaidItemId === itemId))
+    );
+    setTransactions((prev) =>
+      prev.filter((t) =>
+        !(item?.accountIds.includes(t.accountId) && t.source === "plaid") && t.plaidItemId !== itemId
+      )
+    );
     setHoldings((prev) => prev.filter((h) => h.plaidItemId !== itemId));
     setInvestmentTransactions((prev) => prev.filter((t) => t.plaidItemId !== itemId));
     setPlaidSync((prev) => ({ items: prev.items.filter((i) => i.itemId !== itemId) }));
@@ -2127,7 +2142,7 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
         addProject, updateProject, deleteProject,
         addCategory, updateCategory, deleteCategory, seedCategories,
         learnCategoryRule, autoCategorize, addCategoryMappingRule, deleteCategoryRule,
-        connectEmail, disconnectEmail, resetEmailTransactions, syncEmailTransactions, wipeAllTransactions,
+        connectEmail, disconnectEmail, resetEmailTransactions, syncEmailTransactions, wipeAllTransactions, wipePortfolio,
         connectPlaid, syncPlaidTransactions, delinkPlaid, disconnectPlaid,
         // investmentTransactions + holdings already exposed above
         isSyncing, totalBalance, monthlyIncome, monthlyExpense,
