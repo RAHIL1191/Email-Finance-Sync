@@ -85,6 +85,17 @@ router.post("/bills/:id/pay", async (req, res) => {
   }
 });
 
+/** DELETE /api/bills — delete ALL bills for this household */
+router.delete("/bills", async (req, res) => {
+  try {
+    const rows = await db.delete(billsTable).where(eq(billsTable.householdId, res.locals.householdId)).returning();
+    res.json({ success: true, count: rows.length });
+  } catch (err) {
+    req.log.error({ err }, "Failed to bulk-delete bills");
+    res.status(500).json({ error: "Failed to delete bills" });
+  }
+});
+
 /** DELETE /api/bills/:id — delete a bill */
 router.delete("/bills/:id", async (req, res) => {
   try {

@@ -290,6 +290,7 @@ interface AppContextType {
   syncEmailTransactions: () => Promise<{ imported: number; parsed?: any[]; error?: string }>;
   wipeAllTransactions: () => Promise<void>;
   wipePortfolio: () => Promise<void>;
+  wipeData: (categories: Array<"transactions" | "accounts" | "bills" | "budgets" | "goals" | "portfolio" | "connections">) => Promise<void>;
   connectPlaid: (item: PlaidItem, newAccounts: Omit<Account, "id">[], initialTransactions: Omit<Transaction, "id">[], rawHoldingsData?: any[], rawInvTxsData?: any[]) => Promise<{ imported: number }>;
   syncPlaidTransactions: (itemId: string, forceFullSync?: boolean) => Promise<{ imported: number; error?: string }>;
   delinkPlaid: (itemId: string) => void;
@@ -1526,6 +1527,40 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
     await AsyncStorage.setItem(STORAGE_KEYS.investmentTransactions, JSON.stringify([]));
   }, []);
 
+  const wipeData = useCallback(async (categories: Array<"transactions" | "accounts" | "bills" | "budgets" | "goals" | "portfolio" | "connections">) => {
+    const set = new Set(categories);
+    if (set.has("transactions")) {
+      setTransactions([]);
+      await AsyncStorage.setItem(STORAGE_KEYS.transactions, JSON.stringify([]));
+    }
+    if (set.has("accounts")) {
+      setAccounts([]);
+      await AsyncStorage.setItem(STORAGE_KEYS.accounts, JSON.stringify([]));
+    }
+    if (set.has("bills")) {
+      setBills([]);
+      await AsyncStorage.setItem(STORAGE_KEYS.bills, JSON.stringify([]));
+    }
+    if (set.has("budgets")) {
+      setBudgets([]);
+      await AsyncStorage.setItem(STORAGE_KEYS.budgets, JSON.stringify([]));
+    }
+    if (set.has("goals")) {
+      setGoals([]);
+      await AsyncStorage.setItem(STORAGE_KEYS.goals, JSON.stringify([]));
+    }
+    if (set.has("portfolio")) {
+      setHoldings([]);
+      setInvestmentTransactions([]);
+      await AsyncStorage.setItem(STORAGE_KEYS.holdings, JSON.stringify([]));
+      await AsyncStorage.setItem(STORAGE_KEYS.investmentTransactions, JSON.stringify([]));
+    }
+    if (set.has("connections")) {
+      setPlaidSync({ items: [] });
+      await AsyncStorage.setItem(STORAGE_KEYS.plaidSync, JSON.stringify({ items: [] }));
+    }
+  }, []);
+
   const syncEmailTransactions = useCallback(async (): Promise<{ imported: number; parsed?: any[]; error?: string }> => {
     if (!emailSync.isConnected || !emailSync.email || !emailSync.appPassword) {
       return { imported: 0, error: "Email not connected" };
@@ -2144,7 +2179,7 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
         addProject, updateProject, deleteProject,
         addCategory, updateCategory, deleteCategory, seedCategories,
         learnCategoryRule, autoCategorize, addCategoryMappingRule, deleteCategoryRule,
-        connectEmail, disconnectEmail, resetEmailTransactions, syncEmailTransactions, wipeAllTransactions, wipePortfolio,
+        connectEmail, disconnectEmail, resetEmailTransactions, syncEmailTransactions, wipeAllTransactions, wipePortfolio, wipeData,
         connectPlaid, syncPlaidTransactions, delinkPlaid, disconnectPlaid,
         // investmentTransactions + holdings already exposed above
         isSyncing, totalBalance, monthlyIncome, monthlyExpense,

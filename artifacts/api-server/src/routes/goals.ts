@@ -76,6 +76,17 @@ router.put("/goals/:id", validate(updateGoalSchema), async (req, res) => {
   }
 });
 
+/** DELETE /api/goals — delete ALL goals for this household */
+router.delete("/goals", async (req, res) => {
+  try {
+    const rows = await db.delete(goalsTable).where(eq(goalsTable.householdId, res.locals.householdId)).returning();
+    res.json({ success: true, count: rows.length });
+  } catch (err) {
+    req.log.error({ err }, "Failed to bulk-delete goals");
+    res.status(500).json({ error: "Failed to delete goals" });
+  }
+});
+
 /** DELETE /api/goals/:id — delete a goal */
 router.delete("/goals/:id", async (req, res) => {
   try {

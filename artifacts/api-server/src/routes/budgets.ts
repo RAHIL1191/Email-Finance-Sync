@@ -76,6 +76,17 @@ router.put("/budgets/:id", validate(updateBudgetSchema), async (req, res) => {
   }
 });
 
+/** DELETE /api/budgets — delete ALL budgets for this household */
+router.delete("/budgets", async (req, res) => {
+  try {
+    const rows = await db.delete(budgetsTable).where(eq(budgetsTable.householdId, res.locals.householdId)).returning();
+    res.json({ success: true, count: rows.length });
+  } catch (err) {
+    req.log.error({ err }, "Failed to bulk-delete budgets");
+    res.status(500).json({ error: "Failed to delete budgets" });
+  }
+});
+
 /** DELETE /api/budgets/:id — delete a budget */
 router.delete("/budgets/:id", async (req, res) => {
   try {
