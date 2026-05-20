@@ -381,7 +381,16 @@ export default function ResetCleanupScreen() {
         {step === "select" ? (
           <Pressable
             style={[s.btn, { backgroundColor: anySelected ? "#3b82f6" : colors.border }]}
-            onPress={() => { if (anySelected) { Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium); setStep("confirm"); } }}
+            onPress={() => {
+              if (anySelected) {
+                if (!fromDate || !toDate) {
+                  Alert.alert("Date Range Required", "Please select date range first.");
+                  return;
+                }
+                Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium);
+                setStep("confirm");
+              }
+            }}
             disabled={!anySelected}
           >
             <Text style={[s.btnText, { color: anySelected ? "#fff" : colors.mutedForeground }]}>NEXT</Text>
