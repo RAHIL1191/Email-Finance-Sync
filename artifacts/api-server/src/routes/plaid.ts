@@ -193,21 +193,24 @@ router.post("/plaid/exchange-token", async (req, res) => {
     }
 
     // Some institutions (e.g. Wealthsimple Canada) return 0 via transactionsSync
-    // on first link because transactions are processed asynchronously. Fall back
-    // to transactionsGet with a 90-day window to get whatever is available now.
-    if (transactions.length === 0) {
-      try {
-        const startDate = new Date(Date.now() - 90 * 86400000).toISOString().slice(0, 10);
-        const endDate = new Date().toISOString().slice(0, 10);
-        const txRes = await client.transactionsGet({
-          access_token,
-          start_date: startDate,
-          end_date: endDate,
-          options: { count: 500 },
-        });
-        transactions = txRes.data.transactions ?? [];
-      } catch {}
-    }
+    // on first link because transactions are processed asynchronously. Additionally,
+    // we always call transactionsGet to pull in Credit Card / depository transactions,
+    // merging them by transaction_id to ensure complete historical backfill.
+    try {
+      const startDate = new Date(Date.now() - 90 * 86400000).toISOString().slice(0, 10);
+      const endDate = new Date().toISOString().slice(0, 10);
+      const txRes = await client.transactionsGet({
+        access_token,
+        start_date: startDate,
+        end_date: endDate,
+        options: { count: 500 },
+      });
+      const getTxs = txRes.data.transactions ?? [];
+      const txMap = new Map();
+      transactions.forEach((t) => txMap.set(t.transaction_id, t));
+      getTxs.forEach((t) => txMap.set(t.transaction_id, t));
+      transactions = Array.from(txMap.values());
+    } catch {}
 
     // 4. Fetch investment holdings + transactions (best-effort)
     let holdings: ReturnType<typeof mapHolding>[] = [];
@@ -329,20 +332,22 @@ router.post("/plaid/sync/:itemId", async (req, res) => {
     }
 
     // When sync returns 0 (e.g. Wealthsimple Canada async processing or exhausted cursor),
-    // fall back to transactionsGet to pick up whatever is currently available.
-    if (transactions.length === 0) {
-      try {
-        const startDate = new Date(Date.now() - 90 * 86400000).toISOString().slice(0, 10);
-        const endDate   = new Date().toISOString().slice(0, 10);
-        const txRes = await client.transactionsGet({
-          access_token: record.accessToken,
-          start_date: startDate,
-          end_date: endDate,
-          options: { count: 500 },
-        });
-        transactions = txRes.data.transactions ?? [];
-      } catch {}
-    }
+    // we always call transactionsGet to pick up and backfill whatever is currently available.
+    try {
+      const startDate = new Date(Date.now() - 90 * 86400000).toISOString().slice(0, 10);
+      const endDate   = new Date().toISOString().slice(0, 10);
+      const txRes = await client.transactionsGet({
+        access_token: record.accessToken,
+        start_date: startDate,
+        end_date: endDate,
+        options: { count: 500 },
+      });
+      const getTxs = txRes.data.transactions ?? [];
+      const txMap = new Map();
+      transactions.forEach((t) => txMap.set(t.transaction_id, t));
+      getTxs.forEach((t) => txMap.set(t.transaction_id, t));
+      transactions = Array.from(txMap.values());
+    } catch {}
 
     // Backfill plaid_item_id + plaid_account_id on DB accounts that are missing them.
     // This self-heals accounts created before these columns existed.
