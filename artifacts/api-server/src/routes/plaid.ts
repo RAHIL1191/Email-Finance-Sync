@@ -7,7 +7,7 @@ import {
   CountryCode,
 } from "plaid";
 import { eq, and } from "drizzle-orm";
-import { db, plaidItemsTable, accountsTable } from "@workspace/db";
+import { db, plaidItemsTable, accountsTable, transactionsTable } from "@workspace/db";
 import { requireHouseholdId } from "../middlewares/validate.js";
 
 const router = Router();
@@ -449,9 +449,29 @@ router.delete("/plaid/disconnect/:itemId", async (req, res) => {
     await client.itemRemove({ access_token: record.accessToken });
   } catch {}
 
+  // Cascade-delete all accounts (and their transactions) linked to this item
+  const linkedAccounts = await db
+    .select({ id: accountsTable.id })
+    .from(accountsTable)
+    .where(
+      and(
+        eq(accountsTable.plaidItemId, itemId),
+        eq(accountsTable.householdId, res.locals.householdId)
+      )
+    );
+
+  if (linkedAccounts.length > 0) {
+    for (const acct of linkedAccounts) {
+      await db.delete(transactionsTable).where(eq(transactionsTable.accountId, acct.id));
+    }
+    for (const acct of linkedAccounts) {
+      await db.delete(accountsTable).where(eq(accountsTable.id, acct.id));
+    }
+  }
+
   await db.delete(plaidItemsTable).where(eq(plaidItemsTable.id, itemId));
 
-  res.json({ success: true });
+  res.json({ success: true, removedAccounts: linkedAccounts.length });
 });
 
 // ── Helpers ───────────────────────────────────────────────────────────────

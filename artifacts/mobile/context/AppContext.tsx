@@ -1674,8 +1674,8 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
             continue;
           }
         }
-        // 3. New account — create it
-        const created: Account = { ...a, id: genId() };
+        // 3. New account — create it (stamp plaidItemId so disconnect can reliably clean up)
+        const created: Account = { ...a, id: genId(), plaidItemId: item.itemId };
         toCreate.push(created);
         if (a.plaidAccountId) plaidAccMap[a.plaidAccountId] = created.id;
       }
