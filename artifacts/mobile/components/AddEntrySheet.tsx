@@ -837,7 +837,14 @@ function ExpenseTab({ onSave, onRegisterSave }: { onSave: () => void; onRegister
 
   const save = () => {
     const parsedTotal = parseFloat(amount);
-    if (isNaN(parsedTotal) || parsedTotal <= 0 || !accountId) return;
+    if (isNaN(parsedTotal) || parsedTotal <= 0) {
+      Alert.alert("Invalid Amount", "Please enter a valid amount greater than 0.");
+      return;
+    }
+    if (!accountId) {
+      Alert.alert("Account Required", "Please select or create an account first.");
+      return;
+    }
 
     if (isSplitMode) {
       if (splitCategories.length === 0) {
@@ -1168,7 +1175,14 @@ function IncomeTab({ onSave, onRegisterSave }: { onSave: () => void; onRegisterS
 
   const save = () => {
     const parsed = parseFloat(amount);
-    if (isNaN(parsed) || parsed <= 0 || !accountId) return;
+    if (isNaN(parsed) || parsed <= 0) {
+      Alert.alert("Invalid Amount", "Please enter a valid amount greater than 0.");
+      return;
+    }
+    if (!accountId) {
+      Alert.alert("Account Required", "Please select or create an account first.");
+      return;
+    }
     Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
     addTransaction({
       title: merchant || category || "Income",
@@ -1353,7 +1367,18 @@ function TransferTab({ onSave, onRegisterSave }: { onSave: () => void; onRegiste
 
   const save = () => {
     const parsed = parseFloat(amount);
-    if (isNaN(parsed) || parsed <= 0 || !fromId || !toId || fromId === toId) return;
+    if (isNaN(parsed) || parsed <= 0) {
+      Alert.alert("Invalid Amount", "Please enter a valid amount greater than 0.");
+      return;
+    }
+    if (!fromId || !toId) {
+      Alert.alert("Accounts Required", "Please select both a source and destination account.");
+      return;
+    }
+    if (fromId === toId) {
+      Alert.alert("Invalid Selection", "Source and destination accounts must be different.");
+      return;
+    }
     Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
     addTransaction({
       title: `Transfer to ${toAcc?.name ?? "Account"}`,
