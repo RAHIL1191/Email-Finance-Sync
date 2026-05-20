@@ -1,5 +1,5 @@
 import { Router } from "express";
-import { eq, and, desc } from "drizzle-orm";
+import { eq, and, desc, gte, lte, inArray } from "drizzle-orm";
 import { db, transactionsTable, insertTransactionSchema, updateTransactionSchema } from "@workspace/db";
 import { validate, requireHouseholdId } from "../middlewares/validate.js";
 
@@ -113,12 +113,31 @@ router.put("/transactions/:id", validate(updateTransactionSchema), async (req, r
   }
 });
 
-/** DELETE /api/transactions — delete all transactions for this household */
+/** DELETE /api/transactions — delete all transactions for this household with optional filters */
 router.delete("/transactions", async (req, res) => {
   try {
+    const { type, startDate, endDate, accountIds } = req.query;
+    const conds = [eq(transactionsTable.householdId, res.locals.householdId)];
+
+    if (type) {
+      conds.push(eq(transactionsTable.type, String(type)));
+    }
+    if (startDate) {
+      conds.push(gte(transactionsTable.date, String(startDate)));
+    }
+    if (endDate) {
+      conds.push(lte(transactionsTable.date, String(endDate)));
+    }
+    if (accountIds) {
+      const ids = String(accountIds).split(",");
+      if (ids.length > 0) {
+        conds.push(inArray(transactionsTable.accountId, ids));
+      }
+    }
+
     const rows = await db
       .delete(transactionsTable)
-      .where(eq(transactionsTable.householdId, res.locals.householdId))
+      .where(and(...conds))
       .returning();
     res.json({ success: true, count: rows.length });
   } catch (err: any) {
