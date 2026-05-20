@@ -71,11 +71,13 @@ Defaulted all account groups (Chequing, Savings, Credit Cards, Investment) in th
 
 ---
 
-## ✅ Reliable Credit Card Transaction Sync
+## ✅ Reliable Credit Card & Investment Transaction Sync
 Upgraded the Plaid sync flows to combine both `/transactions/sync` and `/transactions/get` endpoints, deduplicating the results by their unique `transaction_id`. This guarantees credit card transactions (such as the Wealthsimple Cash card) are immediately fetched even when Plaid is processing sync events asynchronously.
 
+Additionally, fixed a critical typo in the Plaid Node SDK call where `client.investmentTransactionsGet` (singular) was being invoked instead of the correct `client.investmentsTransactionsGet` (plural, corresponding to the `/investments/transactions/get` endpoint). This typo was causing investment transaction fetches to fail with a silent JavaScript error on the backend, returning empty arrays and leaving the client with no RRSP or Spousal RRSP transaction activity.
+
 **Files touched:**
-- `@/artifacts/api-server/src/routes/plaid.ts:195-351` — integrated and deduplicated dual-sync endpoints
+- `@/artifacts/api-server/src/routes/plaid.ts:195-410` — integrated and deduplicated dual-sync endpoints, corrected singular investment typo to plural investments for investmentsTransactionsGet inside exchange-token and sync routes.
 
 ---
 
