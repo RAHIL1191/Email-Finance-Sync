@@ -113,11 +113,11 @@ router.post("/plaid/create-link-token", async (req, res) => {
       } catch {
         // Access token is invalid (item was removed from Plaid) — fall back to fresh link.
         // The client will pass existing_item_id on exchange so we update rather than insert.
-        const response = await client.linkTokenCreate({ ...base, products: [Products.Transactions] });
+        const response = await client.linkTokenCreate({ ...base, products: [Products.Transactions, Products.Investments] });
         res.json({ link_token: response.data.link_token, update_mode: false, stale_item: true });
       }
     } else {
-      const response = await client.linkTokenCreate({ ...base, products: [Products.Transactions] });
+      const response = await client.linkTokenCreate({ ...base, products: [Products.Transactions, Products.Investments] });
       res.json({ link_token: response.data.link_token, update_mode: false });
     }
   } catch (err) {
@@ -209,7 +209,27 @@ router.post("/plaid/exchange-token", async (req, res) => {
       } catch {}
     }
 
-    // 4. Store item in DB
+    // 4. Fetch investment holdings + transactions (best-effort)
+    let holdings: ReturnType<typeof mapHolding>[] = [];
+    let investmentTransactions: ReturnType<typeof mapInvestmentTransaction>[] = [];
+    try {
+      const holdRes = await client.investmentsHoldingsGet({ access_token });
+      const secMap = buildSecMap(holdRes.data.securities);
+      holdings = holdRes.data.holdings.map((h) => mapHolding(h, secMap));
+    } catch {}
+    try {
+      const iStartDate = new Date(Date.now() - 90 * 86400000).toISOString().slice(0, 10);
+      const iEndDate = new Date().toISOString().slice(0, 10);
+      const invRes = await client.investmentTransactionsGet({
+        access_token,
+        start_date: iStartDate,
+        end_date: iEndDate,
+      });
+      const secMap = buildSecMap(invRes.data.securities);
+      investmentTransactions = invRes.data.investment_transactions.map((t) => mapInvestmentTransaction(t, secMap));
+    } catch {}
+
+    // 5. Store item in DB
     const dbId = `pi_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 7)}`;
     await db.insert(plaidItemsTable).values({
       id: dbId,
@@ -234,6 +254,8 @@ router.post("/plaid/exchange-token", async (req, res) => {
       })),
       transactions: transactions.map(mapPlaidTransaction),
       transactionCount: transactions.length,
+      holdings,
+      investmentTransactions,
     });
   } catch (err) {
     req.log.error({ err }, "Failed to exchange Plaid token");
@@ -333,9 +355,31 @@ router.post("/plaid/sync/:itemId", async (req, res) => {
       .set({ cursor: cursor ?? null, lastSyncedAt: new Date() })
       .where(eq(plaidItemsTable.id, itemId));
 
+    // Fetch investment holdings + transactions alongside regular sync
+    let holdings: ReturnType<typeof mapHolding>[] = [];
+    let investmentTransactions: ReturnType<typeof mapInvestmentTransaction>[] = [];
+    try {
+      const holdRes = await client.investmentsHoldingsGet({ access_token: record.accessToken });
+      const secMap = buildSecMap(holdRes.data.securities);
+      holdings = holdRes.data.holdings.map((h) => mapHolding(h, secMap));
+    } catch {}
+    try {
+      const iStartDate = new Date(Date.now() - 90 * 86400000).toISOString().slice(0, 10);
+      const iEndDate = new Date().toISOString().slice(0, 10);
+      const invRes = await client.investmentTransactionsGet({
+        access_token: record.accessToken,
+        start_date: iStartDate,
+        end_date: iEndDate,
+      });
+      const secMap = buildSecMap(invRes.data.securities);
+      investmentTransactions = invRes.data.investment_transactions.map((t) => mapInvestmentTransaction(t, secMap));
+    } catch {}
+
     res.json({
       transactions: transactions.map(mapPlaidTransaction),
       count: transactions.length,
+      holdings,
+      investmentTransactions,
       // Return Plaid accounts so client can self-heal accountIds / plaidAccMap
       plaidAccounts: plaidAccounts.map((a) => ({
         plaidAccountId: a.account_id,
@@ -383,6 +427,44 @@ router.delete("/plaid/disconnect/:itemId", async (req, res) => {
 });
 
 // ── Helpers ───────────────────────────────────────────────────────────────
+
+function buildSecMap(securities: any[]): Map<string, any> {
+  const m = new Map<string, any>();
+  for (const s of securities) m.set(s.security_id, s);
+  return m;
+}
+
+function mapHolding(h: any, secMap: Map<string, any>) {
+  const sec = secMap.get(h.security_id);
+  return {
+    plaidAccountId: h.account_id as string,
+    ticker: (sec?.ticker_symbol as string | null) ?? null,
+    name: (sec?.name ?? "Unknown") as string,
+    securityType: (sec?.type ?? "other") as string,
+    quantity: h.quantity as number,
+    value: (h.institution_value ?? 0) as number,
+    costBasis: (h.cost_basis ?? null) as number | null,
+    currency: (h.iso_currency_code ?? h.unofficial_currency_code ?? "CAD") as string,
+    asOf: (sec?.close_price_as_of ?? null) as string | null,
+  };
+}
+
+function mapInvestmentTransaction(t: any, secMap: Map<string, any>) {
+  const sec = secMap.get(t.security_id);
+  return {
+    plaidTxId: t.investment_transaction_id as string,
+    plaidAccountId: t.account_id as string,
+    date: t.date as string,
+    name: (sec?.name ?? t.name ?? "Unknown") as string,
+    ticker: (sec?.ticker_symbol ?? null) as string | null,
+    type: (t.type ?? "other") as string,
+    subtype: (t.subtype ?? null) as string | null,
+    quantity: (t.quantity ?? null) as number | null,
+    amount: Math.abs(t.amount ?? 0) as number,
+    fees: (t.fees ?? null) as number | null,
+    currency: (t.iso_currency_code ?? t.unofficial_currency_code ?? "CAD") as string,
+  };
+}
 
 function mapAccountType(
   type: string,

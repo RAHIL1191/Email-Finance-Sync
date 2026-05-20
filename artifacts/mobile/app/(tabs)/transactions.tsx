@@ -22,7 +22,7 @@ import TransactionFilterModal, { DEFAULT_TX_FILTER, TxFilterSettings } from "@/c
 import MonthDetailModal from "@/components/MonthDetailModal";
 import TransactionDetailModal from "@/components/TransactionDetailModal";
 import TransactionItem from "@/components/TransactionItem";
-import { Account, Bill, Category, Transaction, useApp } from "@/context/AppContext";
+import { Account, Bill, Category, Transaction, InvestmentTransaction, Holding, useApp } from "@/context/AppContext";
 import { useDrawer } from "@/context/DrawerContext";
 import { useColors } from "@/hooks/useColors";
 
@@ -302,7 +302,7 @@ const psSt = StyleSheet.create({
   checkbox:        { width: 22, height: 22, borderRadius: 6, borderWidth: 2, alignItems: "center", justifyContent: "center" },
 });
 
-const SUBTABS = ["CASH FLOW", "SPENDING", "TRENDS", "TRANSACTIONS", "REVIEW"] as const;
+const SUBTABS = ["CASH FLOW", "SPENDING", "TRENDS", "TRANSACTIONS", "PORTFOLIO", "REVIEW"] as const;
 type Subtab = (typeof SUBTABS)[number];
 
 const CHART_VIEWS = ["Chart", "Calendar", "Monthly"] as const;
@@ -1678,6 +1678,181 @@ function ReviewTab({
   );
 }
 
+// ── Investment type → icon/label ─────────────────────────────────────────────
+function invTypeLabel(type: string, subtype?: string | null): string {
+  const t = type.toLowerCase();
+  const s = (subtype ?? "").toLowerCase();
+  if (t === "buy") return "Buy";
+  if (t === "sell") return "Sell";
+  if (t === "dividend" || s === "dividend") return "Dividend";
+  if (t === "cash" || t === "deposit") return "Deposit";
+  if (t === "withdrawal") return "Withdrawal";
+  if (t === "transfer") return "Transfer";
+  if (t === "fee") return "Fee";
+  return type.charAt(0).toUpperCase() + type.slice(1);
+}
+
+function invTypeColor(type: string, colors: any): string {
+  const t = type.toLowerCase();
+  if (t === "buy") return "#3b82f6";
+  if (t === "sell") return "#ef4444";
+  if (t === "dividend") return "#22c55e";
+  if (t === "deposit" || t === "cash") return "#22c55e";
+  if (t === "withdrawal") return "#f97316";
+  return colors.mutedForeground;
+}
+
+function PortfolioTab({ holdings, investmentTransactions, accounts, colors }: {
+  holdings: Holding[];
+  investmentTransactions: InvestmentTransaction[];
+  accounts: Account[];
+  colors: any;
+}) {
+  const totalValue = holdings.reduce((s, h) => s + h.value, 0);
+  const totalCost = holdings.reduce((s, h) => s + (h.costBasis ?? 0), 0);
+  const totalGain = totalCost > 0 ? totalValue - totalCost : 0;
+  const totalGainPct = totalCost > 0 ? (totalGain / totalCost) * 100 : 0;
+
+  // Group investment transactions by date
+  const sortedTxs = useMemo(
+    () => [...investmentTransactions].sort((a, b) => b.date.localeCompare(a.date)),
+    [investmentTransactions]
+  );
+  const grouped = useMemo(() => {
+    const map = new Map<string, InvestmentTransaction[]>();
+    for (const t of sortedTxs) {
+      const key = t.date.slice(0, 10);
+      if (!map.has(key)) map.set(key, []);
+      map.get(key)!.push(t);
+    }
+    return Array.from(map.entries());
+  }, [sortedTxs]);
+
+  const fmtCAD = (n: number) =>
+    (n < 0 ? "-" : "") + "$" + Math.abs(n).toLocaleString("en-CA", { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+
+  const fmtDate = (d: string) => {
+    const dt = new Date(d + "T00:00:00");
+    return dt.toLocaleDateString("en-CA", { month: "short", day: "numeric", year: "numeric" });
+  };
+
+  return (
+    <ScrollView style={{ flex: 1 }} contentContainerStyle={{ paddingBottom: 120 }} showsVerticalScrollIndicator={false}>
+      {/* Portfolio summary card */}
+      <View style={[ptSt.summaryCard, { backgroundColor: colors.card, borderColor: colors.border }]}>
+        <Text style={[ptSt.summaryLabel, { color: colors.mutedForeground }]}>Total Portfolio Value</Text>
+        <Text style={[ptSt.summaryValue, { color: colors.foreground }]}>{fmtCAD(totalValue)}</Text>
+        {totalCost > 0 && (
+          <View style={ptSt.gainRow}>
+            <Text style={[ptSt.gainAmt, { color: totalGain >= 0 ? "#22c55e" : "#ef4444" }]}>
+              {totalGain >= 0 ? "+" : ""}{fmtCAD(totalGain)}
+            </Text>
+            <Text style={[ptSt.gainPct, { color: totalGain >= 0 ? "#22c55e" : "#ef4444" }]}>
+              ({totalGainPct >= 0 ? "+" : ""}{totalGainPct.toFixed(2)}%)
+            </Text>
+          </View>
+        )}
+      </View>
+
+      {/* Holdings list */}
+      {holdings.length > 0 && (
+        <View style={{ paddingHorizontal: 16, marginTop: 12 }}>
+          <Text style={[ptSt.sectionTitle, { color: colors.mutedForeground }]}>HOLDINGS</Text>
+          {holdings.map((h) => {
+            const gain = h.costBasis != null ? h.value - h.costBasis : null;
+            const gainPct = h.costBasis != null && h.costBasis > 0 ? ((h.value - h.costBasis) / h.costBasis) * 100 : null;
+            return (
+              <View key={h.id} style={[ptSt.holdingRow, { backgroundColor: colors.card, borderColor: colors.border }]}>
+                <View style={[ptSt.tickerBadge, { backgroundColor: colors.muted }]}>
+                  <Text style={[ptSt.tickerText, { color: colors.foreground }]} numberOfLines={1}>
+                    {h.ticker ?? h.name.slice(0, 4).toUpperCase()}
+                  </Text>
+                </View>
+                <View style={{ flex: 1 }}>
+                  <Text style={[ptSt.holdingName, { color: colors.foreground }]} numberOfLines={1}>{h.name}</Text>
+                  <Text style={[ptSt.holdingSub, { color: colors.mutedForeground }]}>
+                    {h.quantity.toLocaleString("en-CA", { maximumFractionDigits: 4 })} units · {h.currency}
+                  </Text>
+                </View>
+                <View style={{ alignItems: "flex-end" }}>
+                  <Text style={[ptSt.holdingValue, { color: colors.foreground }]}>{fmtCAD(h.value)}</Text>
+                  {gain != null && gainPct != null && (
+                    <Text style={[ptSt.holdingGain, { color: gain >= 0 ? "#22c55e" : "#ef4444" }]}>
+                      {gain >= 0 ? "+" : ""}{gainPct.toFixed(1)}%
+                    </Text>
+                  )}
+                </View>
+              </View>
+            );
+          })}
+        </View>
+      )}
+
+      {/* Investment transactions */}
+      {grouped.length > 0 && (
+        <View style={{ paddingHorizontal: 16, marginTop: 20 }}>
+          <Text style={[ptSt.sectionTitle, { color: colors.mutedForeground }]}>ACTIVITY</Text>
+          {grouped.map(([date, txs]) => (
+            <View key={date}>
+              <Text style={[ptSt.dateHeader, { color: colors.mutedForeground }]}>{fmtDate(date)}</Text>
+              {txs.map((t) => (
+                <View key={t.id} style={[ptSt.invTxRow, { backgroundColor: colors.card, borderColor: colors.border }]}>
+                  <View style={[ptSt.typeBadge, { backgroundColor: invTypeColor(t.type, colors) + "22" }]}>
+                    <Text style={[ptSt.typeText, { color: invTypeColor(t.type, colors) }]}>{invTypeLabel(t.type, t.subtype)}</Text>
+                  </View>
+                  <View style={{ flex: 1 }}>
+                    <Text style={[ptSt.invTxName, { color: colors.foreground }]} numberOfLines={1}>{t.name}</Text>
+                    {t.ticker && (
+                      <Text style={[ptSt.invTxSub, { color: colors.mutedForeground }]}>
+                        {t.ticker}{t.quantity != null ? ` · ${t.quantity.toLocaleString("en-CA", { maximumFractionDigits: 4 })} units` : ""}
+                      </Text>
+                    )}
+                  </View>
+                  <Text style={[ptSt.invTxAmt, { color: colors.foreground }]}>{fmtCAD(t.amount)}</Text>
+                </View>
+              ))}
+            </View>
+          ))}
+        </View>
+      )}
+
+      {holdings.length === 0 && investmentTransactions.length === 0 && (
+        <View style={{ alignItems: "center", paddingTop: 80 }}>
+          <Text style={{ fontSize: 40 }}>📈</Text>
+          <Text style={[{ fontSize: 16, fontFamily: "Inter_600SemiBold", marginTop: 16, color: colors.foreground }]}>No portfolio data yet</Text>
+          <Text style={[{ fontSize: 14, fontFamily: "Inter_400Regular", marginTop: 8, color: colors.mutedForeground, textAlign: "center", paddingHorizontal: 40 }]}>
+            Sync your Wealthsimple account to see holdings and investment activity here.
+          </Text>
+        </View>
+      )}
+    </ScrollView>
+  );
+}
+
+const ptSt = StyleSheet.create({
+  summaryCard:   { margin: 16, borderRadius: 16, padding: 20, borderWidth: StyleSheet.hairlineWidth },
+  summaryLabel:  { fontSize: 13, fontFamily: "Inter_400Regular", marginBottom: 4 },
+  summaryValue:  { fontSize: 28, fontFamily: "Inter_700Bold" },
+  gainRow:       { flexDirection: "row", alignItems: "center", gap: 6, marginTop: 4 },
+  gainAmt:       { fontSize: 14, fontFamily: "Inter_600SemiBold" },
+  gainPct:       { fontSize: 13, fontFamily: "Inter_400Regular" },
+  sectionTitle:  { fontSize: 11, fontFamily: "Inter_600SemiBold", letterSpacing: 1, marginBottom: 8 },
+  holdingRow:    { flexDirection: "row", alignItems: "center", gap: 12, borderRadius: 12, padding: 14, marginBottom: 8, borderWidth: StyleSheet.hairlineWidth },
+  tickerBadge:   { width: 48, height: 48, borderRadius: 12, alignItems: "center", justifyContent: "center" },
+  tickerText:    { fontSize: 11, fontFamily: "Inter_700Bold" },
+  holdingName:   { fontSize: 14, fontFamily: "Inter_600SemiBold" },
+  holdingSub:    { fontSize: 12, fontFamily: "Inter_400Regular", marginTop: 2 },
+  holdingValue:  { fontSize: 15, fontFamily: "Inter_700Bold" },
+  holdingGain:   { fontSize: 12, fontFamily: "Inter_500Medium", marginTop: 2 },
+  dateHeader:    { fontSize: 12, fontFamily: "Inter_500Medium", marginBottom: 8, marginTop: 4 },
+  invTxRow:      { flexDirection: "row", alignItems: "center", gap: 10, borderRadius: 12, padding: 12, marginBottom: 8, borderWidth: StyleSheet.hairlineWidth },
+  typeBadge:     { paddingHorizontal: 8, paddingVertical: 4, borderRadius: 6 },
+  typeText:      { fontSize: 11, fontFamily: "Inter_600SemiBold" },
+  invTxName:     { fontSize: 14, fontFamily: "Inter_500Medium" },
+  invTxSub:      { fontSize: 12, fontFamily: "Inter_400Regular", marginTop: 2 },
+  invTxAmt:      { fontSize: 14, fontFamily: "Inter_700Bold" },
+});
+
 // Dedup key identical to TransactionsTab so both views work on the same set
 function txDedupKey(t: Transaction): string {
   return `${(t.source ?? "").toLowerCase()}|${(t.bank ?? "").toLowerCase()}|${(t.accountId ?? "").toLowerCase()}|${t.amount}|${(t.title ?? "").toLowerCase().trim()}|${(t.date ?? "").slice(0, 10)}`;
@@ -1686,16 +1861,21 @@ function txDedupKey(t: Transaction): string {
 export default function InsightsScreen() {
   const colors = useColors();
   const { openDrawer } = useDrawer();
-  const { transactions, bills, accounts, addTransaction, reviewedTransactionIds } = useApp();
+  const { transactions, bills, accounts, addTransaction, reviewedTransactionIds, investmentTransactions, holdings } = useApp();
   const [activeTab, setActiveTab] = useState<Subtab>("CASH FLOW");
 
   const pendingReviewCount = useMemo(
     () => transactions.filter((t) => (t.fromEmail || t.source === "email") && !reviewedTransactionIds.includes(t.id)).length,
     [transactions, reviewedTransactionIds]
   );
+  const hasPortfolio = investmentTransactions.length > 0 || holdings.length > 0;
   const visibleTabs = useMemo(
-    () => SUBTABS.filter((tab) => tab !== "REVIEW" || pendingReviewCount > 0),
-    [pendingReviewCount]
+    () => SUBTABS.filter((tab) => {
+      if (tab === "REVIEW") return pendingReviewCount > 0;
+      if (tab === "PORTFOLIO") return hasPortfolio;
+      return true;
+    }),
+    [pendingReviewCount, hasPortfolio]
   );
   // If the active tab is no longer visible (e.g. REVIEW emptied), switch to CASH FLOW
   useEffect(() => {
@@ -1813,6 +1993,14 @@ export default function InsightsScreen() {
             transactions={transactions}
             colors={colors}
             onAllReviewed={() => setActiveTab("CASH FLOW")}
+          />
+        )}
+        {activeTab === "PORTFOLIO" && (
+          <PortfolioTab
+            holdings={holdings}
+            investmentTransactions={investmentTransactions}
+            accounts={accounts}
+            colors={colors}
           />
         )}
       </View>

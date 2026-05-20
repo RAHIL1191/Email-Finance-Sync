@@ -126,6 +126,8 @@ export default function PlaidLinkModal({
   const [connectingMsg, setConnectingMsg] = useState("Connecting to your bank…");
   const [discovered, setDiscovered] = useState<DiscoveredAccount[]>([]);
   const [serverTransactions, setServerTransactions] = useState<ServerTransaction[]>([]);
+  const [serverHoldings, setServerHoldings] = useState<any[]>([]);
+  const [serverInvTxs, setServerInvTxs] = useState<any[]>([]);
   const [importResult, setImportResult] = useState<{ accounts: number; transactions: number } | null>(null);
   const [plaidItemId, setPlaidItemId] = useState("");
   const filteredBanks = query.trim()
@@ -266,6 +268,8 @@ export default function PlaidLinkModal({
 
       setDiscovered(accts);
       setServerTransactions(data.transactions as ServerTransaction[]);
+      setServerHoldings((data.holdings as any[]) ?? []);
+      setServerInvTxs((data.investmentTransactions as any[]) ?? []);
       Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
       setStep("accounts");
     } catch {
@@ -324,7 +328,7 @@ export default function PlaidLinkModal({
       accountIds: [],
     };
 
-    const { imported } = await connectPlaid(item, newAccounts, initialTxs);
+    const { imported } = await connectPlaid(item, newAccounts, initialTxs, serverHoldings, serverInvTxs);
     setImportResult({ accounts: selected.length, transactions: imported });
     Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
     setStep("success");

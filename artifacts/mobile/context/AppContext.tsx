@@ -186,6 +186,39 @@ export interface PlaidSync {
   items: PlaidItem[];
 }
 
+export interface InvestmentTransaction {
+  id: string;
+  plaidTxId: string;
+  plaidItemId: string;
+  plaidAccountId: string;
+  accountId: string;
+  date: string;
+  name: string;
+  ticker?: string | null;
+  type: string;
+  subtype?: string | null;
+  quantity?: number | null;
+  amount: number;
+  fees?: number | null;
+  currency: string;
+}
+
+export interface Holding {
+  id: string;
+  plaidItemId: string;
+  plaidAccountId: string;
+  accountId: string;
+  ticker?: string | null;
+  name: string;
+  securityType: string;
+  quantity: number;
+  value: number;
+  costBasis?: number | null;
+  currency: string;
+  asOf?: string | null;
+  updatedAt: string;
+}
+
 export interface CategoryRule {
   id: string;
   householdId: string;
@@ -213,6 +246,8 @@ interface AppContextType {
   categoryRules: CategoryRule[];
   emailSync: EmailSync;
   plaidSync: PlaidSync;
+  investmentTransactions: InvestmentTransaction[];
+  holdings: Holding[];
   userName: string;
   setUserName: (name: string) => void;
   reviewedTransactionIds: string[];
@@ -254,7 +289,7 @@ interface AppContextType {
   resetEmailTransactions: () => void;
   syncEmailTransactions: () => Promise<{ imported: number; parsed?: any[]; error?: string }>;
   wipeAllTransactions: () => Promise<void>;
-  connectPlaid: (item: PlaidItem, newAccounts: Omit<Account, "id">[], initialTransactions: Omit<Transaction, "id">[]) => Promise<{ imported: number }>;
+  connectPlaid: (item: PlaidItem, newAccounts: Omit<Account, "id">[], initialTransactions: Omit<Transaction, "id">[], rawHoldingsData?: any[], rawInvTxsData?: any[]) => Promise<{ imported: number }>;
   syncPlaidTransactions: (itemId: string, forceFullSync?: boolean) => Promise<{ imported: number; error?: string }>;
   delinkPlaid: (itemId: string) => void;
   disconnectPlaid: (itemId: string) => void;
@@ -291,6 +326,8 @@ const STORAGE_KEYS = {
   reviewedTransactionIds: "@fintrack/reviewedTransactionIds",
   categoryRules: "@fintrack/categoryRules",
   tasks: "@fintrack/tasks",
+  investmentTransactions: "@fintrack/investmentTransactions",
+  holdings: "@fintrack/holdings",
 };
 
 // ── Helpers ──────────────────────────────────────────────────────────────────
@@ -627,6 +664,8 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
   const [categoryRules, setCategoryRules] = useState<CategoryRule[]>([]);
   const [emailSync, setEmailSync] = useState<EmailSync>({ email: "", appPassword: "", isConnected: false });
   const [plaidSync, setPlaidSync] = useState<PlaidSync>({ items: [] });
+  const [investmentTransactions, setInvestmentTransactions] = useState<InvestmentTransaction[]>([]);
+  const [holdings, setHoldings] = useState<Holding[]>([]);
   const [isSyncing, setIsSyncing] = useState(false);
   const [initialized, setInitialized] = useState(false);
   const [deviceId, setDeviceId] = useState<string>("");
@@ -657,7 +696,7 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
   useEffect(() => {
     (async () => {
       try {
-        const [storedVersion, txRaw, accRaw, billRaw, budgetRaw, goalRaw, projectRaw, catRaw, rulesRaw, emailRaw, plaidRaw, storedDeviceId, storedHouseholdId, storedUserName, storedReviewedIds, taskRaw] =
+        const [storedVersion, txRaw, accRaw, billRaw, budgetRaw, goalRaw, projectRaw, catRaw, rulesRaw, emailRaw, plaidRaw, storedDeviceId, storedHouseholdId, storedUserName, storedReviewedIds, taskRaw, invTxRaw, holdRaw] =
           await Promise.all([
             AsyncStorage.getItem(STORAGE_KEYS.version),
             AsyncStorage.getItem(STORAGE_KEYS.transactions),
@@ -675,6 +714,8 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
             AsyncStorage.getItem(STORAGE_KEYS.userName),
             AsyncStorage.getItem(STORAGE_KEYS.reviewedTransactionIds),
             AsyncStorage.getItem(STORAGE_KEYS.tasks),
+            AsyncStorage.getItem(STORAGE_KEYS.investmentTransactions),
+            AsyncStorage.getItem(STORAGE_KEYS.holdings),
           ]);
 
         const dId = storedDeviceId || generateDeviceId();
@@ -731,6 +772,8 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
         setCategoryRules(rulesRaw ? JSON.parse(rulesRaw) : []);
         if (emailRaw) setEmailSync(JSON.parse(emailRaw));
         if (plaidRaw) setPlaidSync(JSON.parse(plaidRaw));
+        if (invTxRaw) setInvestmentTransactions(JSON.parse(invTxRaw));
+        if (holdRaw) setHoldings(JSON.parse(holdRaw));
         if (storedUserName) setUserNameState(storedUserName);
         if (storedReviewedIds) setReviewedTransactionIds(JSON.parse(storedReviewedIds));
 
@@ -840,6 +883,8 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
   useEffect(() => { if (initialized) AsyncStorage.setItem(STORAGE_KEYS.userName, userName); }, [userName, initialized]);
   useEffect(() => { if (initialized) AsyncStorage.setItem(STORAGE_KEYS.reviewedTransactionIds, JSON.stringify(reviewedTransactionIds)); }, [reviewedTransactionIds, initialized]);
   useEffect(() => { if (initialized) AsyncStorage.setItem(STORAGE_KEYS.tasks, JSON.stringify(tasks)); }, [tasks, initialized]);
+  useEffect(() => { if (initialized) AsyncStorage.setItem(STORAGE_KEYS.investmentTransactions, JSON.stringify(investmentTransactions)); }, [investmentTransactions, initialized]);
+  useEffect(() => { if (initialized) AsyncStorage.setItem(STORAGE_KEYS.holdings, JSON.stringify(holdings)); }, [holdings, initialized]);
 
   const setUserName = useCallback((name: string) => {
     setUserNameState(name.trim());
@@ -1584,7 +1629,9 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
     async (
       item: PlaidItem,
       newAccounts: Omit<Account, "id">[],
-      initialTransactions: Omit<Transaction, "id">[]
+      initialTransactions: Omit<Transaction, "id">[],
+      rawHoldingsData?: any[],
+      rawInvTxsData?: any[]
     ): Promise<{ imported: number }> => {
       const current = accountsRef.current;
 
@@ -1680,6 +1727,54 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
         lastSynced: new Date().toISOString(),
         lastImported: imported,
       };
+      // Process investment data returned from exchange-token
+      const rawHoldings: any[] = rawHoldingsData ?? [];
+      const rawInvTxs: any[] = rawInvTxsData ?? [];
+      if (rawHoldings.length > 0 || rawInvTxs.length > 0) {
+        const now = new Date().toISOString();
+        setHoldings((prev) => {
+          const withoutItem = prev.filter((h) => h.plaidItemId !== item.itemId);
+          const newHoldings: Holding[] = rawHoldings.map((h: any) => ({
+            id: genId(),
+            plaidItemId: item.itemId,
+            plaidAccountId: h.plaidAccountId,
+            accountId: plaidAccMap[h.plaidAccountId] ?? "",
+            ticker: h.ticker ?? null,
+            name: h.name,
+            securityType: h.securityType,
+            quantity: h.quantity,
+            value: h.value,
+            costBasis: h.costBasis ?? null,
+            currency: h.currency,
+            asOf: h.asOf ?? null,
+            updatedAt: now,
+          }));
+          return [...withoutItem, ...newHoldings];
+        });
+        setInvestmentTransactions((prev) => {
+          const existingIds = new Set(prev.map((t) => t.plaidTxId));
+          const fresh: InvestmentTransaction[] = rawInvTxs
+            .filter((t: any) => !existingIds.has(t.plaidTxId))
+            .map((t: any) => ({
+              id: genId(),
+              plaidTxId: t.plaidTxId,
+              plaidItemId: item.itemId,
+              plaidAccountId: t.plaidAccountId,
+              accountId: plaidAccMap[t.plaidAccountId] ?? "",
+              date: t.date,
+              name: t.name,
+              ticker: t.ticker ?? null,
+              type: t.type,
+              subtype: t.subtype ?? null,
+              quantity: t.quantity ?? null,
+              amount: t.amount,
+              fees: t.fees ?? null,
+              currency: t.currency,
+            }));
+          return [...prev, ...fresh];
+        });
+      }
+
       setPlaidSync((prev) => ({ items: [...prev.items, registeredItem] }));
 
       return { imported };
@@ -1902,6 +1997,54 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
           return upsertTransactions(remapped, fresh);
         });
 
+        // Process investment data from sync
+        const rawHoldings: any[] = data.holdings ?? [];
+        const rawInvTxs: any[] = data.investmentTransactions ?? [];
+        if (rawHoldings.length > 0 || rawInvTxs.length > 0) {
+          const now2 = new Date().toISOString();
+          setHoldings((prev) => {
+            const withoutItem = prev.filter((h) => h.plaidItemId !== itemId);
+            const newHoldings: Holding[] = rawHoldings.map((h: any) => ({
+              id: genId(),
+              plaidItemId: itemId,
+              plaidAccountId: h.plaidAccountId,
+              accountId: plaidAccMap[h.plaidAccountId] ?? "",
+              ticker: h.ticker ?? null,
+              name: h.name,
+              securityType: h.securityType,
+              quantity: h.quantity,
+              value: h.value,
+              costBasis: h.costBasis ?? null,
+              currency: h.currency,
+              asOf: h.asOf ?? null,
+              updatedAt: now2,
+            }));
+            return [...withoutItem, ...newHoldings];
+          });
+          setInvestmentTransactions((prev) => {
+            const existingIds = new Set(prev.map((t) => t.plaidTxId));
+            const fresh: InvestmentTransaction[] = rawInvTxs
+              .filter((t: any) => !existingIds.has(t.plaidTxId))
+              .map((t: any) => ({
+                id: genId(),
+                plaidTxId: t.plaidTxId,
+                plaidItemId: itemId,
+                plaidAccountId: t.plaidAccountId,
+                accountId: plaidAccMap[t.plaidAccountId] ?? "",
+                date: t.date,
+                name: t.name,
+                ticker: t.ticker ?? null,
+                type: t.type,
+                subtype: t.subtype ?? null,
+                quantity: t.quantity ?? null,
+                amount: t.amount,
+                fees: t.fees ?? null,
+                currency: t.currency,
+              }));
+            return [...prev, ...fresh];
+          });
+        }
+
         setPlaidSync((prev) => ({
           items: prev.items.map((i) =>
             i.itemId === itemId
@@ -1968,6 +2111,7 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
     <AppContext.Provider
       value={{
         transactions, accounts, bills, budgets, goals, projects, categories, categoryRules, emailSync, plaidSync,
+        investmentTransactions, holdings,
         userName, setUserName,
         reviewedTransactionIds, markTransactionReviewed,
         addTransaction, updateTransaction, deleteTransaction,
@@ -1981,6 +2125,7 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
         learnCategoryRule, autoCategorize, addCategoryMappingRule, deleteCategoryRule,
         connectEmail, disconnectEmail, resetEmailTransactions, syncEmailTransactions, wipeAllTransactions,
         connectPlaid, syncPlaidTransactions, delinkPlaid, disconnectPlaid,
+        // investmentTransactions + holdings already exposed above
         isSyncing, totalBalance, monthlyIncome, monthlyExpense,
         deviceId, householdId, changeHouseholdId,
         uploadToDb, pullFromDb,
