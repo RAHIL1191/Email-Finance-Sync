@@ -2157,5 +2157,6 @@ export const PLAID_BANKS = [
   { id: "atb", name: "ATB Financial", color: "#004B87", icon: "🏔", accountTypes: ["checking", "savings", "credit"] },
   { id: "desjardins", name: "Desjardins", color: "#009A44", icon: "🌿", accountTypes: ["checking", "savings", "credit"] },
   { id: "questrade", name: "Questrade", color: "#E8181C", icon: "📈", accountTypes: ["investment"] },
+  { id: "wealthsimple", name: "Wealthsimple", color: "#000000", icon: "🌱", accountTypes: ["checking", "savings", "investment"] },
 ];
 
