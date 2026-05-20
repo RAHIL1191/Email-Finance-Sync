@@ -849,23 +849,35 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
         }).then(async (r) => {
           if (!r.ok) return;
           const serverAccts: Account[] = await r.json();
-          if (serverAccts.length > 0) {
-            setAccounts((prev) => {
-              const byId = new Map(prev.map((a) => [a.id, a]));
-              const next = serverAccts.map((s) => {
-                const local = byId.get(s.id);
-                return {
-                  ...(local ?? {}),
-                  ...s,
-                  // Preserve local Plaid metadata if server returns null (new columns not yet backfilled)
-                  plaidItemId: s.plaidItemId ?? local?.plaidItemId,
-                  plaidAccountId: s.plaidAccountId ?? local?.plaidAccountId,
-                } as Account;
+          setAccounts((prev) => {
+            const serverAcctsMap = new Map(serverAccts.map((a) => [a.id, a]));
+            const byId = new Map(prev.map((a) => [a.id, a]));
+
+            // Upload any local accounts missing on the server (e.g. after a database wipe or reset)
+            const missingOnServer = prev.filter((a) => !serverAcctsMap.has(a.id));
+            if (missingOnServer.length > 0) {
+              missingOnServer.forEach((a) => {
+                fetch(`${getApiBase()}/api/accounts`, {
+                  method: "POST",
+                  headers: { "Content-Type": "application/json", "X-Household-ID": hId, "X-Device-ID": dId },
+                  body: JSON.stringify(a),
+                }).catch(() => {});
               });
-              const localOnly = prev.filter((a) => !next.find((n) => n.id === a.id));
-              return [...next, ...localOnly];
+            }
+
+            const next = serverAccts.map((s) => {
+              const local = byId.get(s.id);
+              return {
+                ...(local ?? {}),
+                ...s,
+                // Preserve local Plaid metadata if server returns null (new columns not yet backfilled)
+                plaidItemId: s.plaidItemId ?? local?.plaidItemId,
+                plaidAccountId: s.plaidAccountId ?? local?.plaidAccountId,
+              } as Account;
             });
-          }
+            const localOnly = prev.filter((a) => !next.find((n) => n.id === a.id));
+            return [...next, ...localOnly];
+          });
         }).catch(() => {});
       } catch {}
       setInitialized(true);
