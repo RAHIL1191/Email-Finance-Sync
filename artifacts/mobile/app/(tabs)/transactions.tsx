@@ -1682,23 +1682,30 @@ function ReviewTab({
 function invTypeLabel(type: string, subtype?: string | null): string {
   const t = type.toLowerCase();
   const s = (subtype ?? "").toLowerCase();
+  // Check subtype first — Plaid uses type="cash" for dividends, interest, etc.
+  if (s === "dividend" || s === "qualified_dividend" || s === "non_qualified_dividend") return "Dividend";
+  if (s === "interest" || s === "interest_receivable" || s === "interest_paid") return "Interest";
+  if (s === "contribution") return "Contribution";
+  if (s === "withdrawal") return "Withdrawal";
   if (t === "buy") return "Buy";
   if (t === "sell") return "Sell";
-  if (t === "dividend" || s === "dividend") return "Dividend";
-  if (t === "cash" || t === "deposit") return "Deposit";
-  if (t === "withdrawal") return "Withdrawal";
-  if (t === "transfer") return "Transfer";
+  if (t === "cash") return "Cash";
   if (t === "fee") return "Fee";
+  if (t === "transfer") return "Transfer";
   return type.charAt(0).toUpperCase() + type.slice(1);
 }
 
-function invTypeColor(type: string, colors: any): string {
+function invTypeColor(type: string, colors: any, subtype?: string | null): string {
   const t = type.toLowerCase();
+  const s = (subtype ?? "").toLowerCase();
   if (t === "buy") return "#3b82f6";
   if (t === "sell") return "#ef4444";
-  if (t === "dividend") return "#22c55e";
-  if (t === "deposit" || t === "cash") return "#22c55e";
-  if (t === "withdrawal") return "#f97316";
+  if (s === "dividend" || s === "qualified_dividend" || s === "non_qualified_dividend") return "#22c55e";
+  if (s === "interest" || s === "interest_receivable") return "#22c55e";
+  if (s === "withdrawal") return "#f97316";
+  if (t === "fee") return "#f97316";
+  if (t === "cash") return "#22c55e";
+  if (t === "transfer") return "#a855f7";
   return colors.mutedForeground;
 }
 
@@ -1797,8 +1804,8 @@ function PortfolioTab({ holdings, investmentTransactions, accounts, colors }: {
               <Text style={[ptSt.dateHeader, { color: colors.mutedForeground }]}>{fmtDate(date)}</Text>
               {txs.map((t) => (
                 <View key={t.id} style={[ptSt.invTxRow, { backgroundColor: colors.card, borderColor: colors.border }]}>
-                  <View style={[ptSt.typeBadge, { backgroundColor: invTypeColor(t.type, colors) + "22" }]}>
-                    <Text style={[ptSt.typeText, { color: invTypeColor(t.type, colors) }]}>{invTypeLabel(t.type, t.subtype)}</Text>
+                  <View style={[ptSt.typeBadge, { backgroundColor: invTypeColor(t.type, colors, t.subtype) + "22" }]}>
+                    <Text style={[ptSt.typeText, { color: invTypeColor(t.type, colors, t.subtype) }]}>{invTypeLabel(t.type, t.subtype)}</Text>
                   </View>
                   <View style={{ flex: 1 }}>
                     <Text style={[ptSt.invTxName, { color: colors.foreground }]} numberOfLines={1}>{t.name}</Text>
