@@ -64,22 +64,22 @@ export default function ResetCleanupScreen() {
 
   // Filter helper
   const isFiltered = (t: any) => {
+    if (!fromDate || !toDate) return false;
+
     const txDate = new Date(t.date);
-    if (fromDate) {
-      const startOfFromDate = new Date(fromDate.getFullYear(), fromDate.getMonth(), fromDate.getDate(), 0, 0, 0, 0);
-      if (txDate < startOfFromDate) return false;
-    }
-    if (toDate) {
-      const endOfToDate = new Date(toDate.getFullYear(), toDate.getMonth(), toDate.getDate(), 23, 59, 59, 999);
-      if (txDate > endOfToDate) return false;
-    }
+    const startOfFromDate = new Date(fromDate.getFullYear(), fromDate.getMonth(), fromDate.getDate(), 0, 0, 0, 0);
+    if (txDate < startOfFromDate) return false;
+
+    const endOfToDate = new Date(toDate.getFullYear(), toDate.getMonth(), toDate.getDate(), 23, 59, 59, 999);
+    if (txDate > endOfToDate) return false;
+
     if (selectedAccounts.length > 0 && !selectedAccounts.includes(t.accountId)) return false;
     return true;
   };
 
   // Dynamically calculate filtered counts
   const filteredCounts: Record<CategoryId, number> = {
-    bills: bills ? bills.filter((b: any) => selectedAccounts.length === 0 || (b.accountId && selectedAccounts.includes(b.accountId))).length : 0,
+    bills: (bills && fromDate && toDate) ? bills.filter((b: any) => selectedAccounts.length === 0 || (b.accountId && selectedAccounts.includes(b.accountId))).length : 0,
     expenses: transactions ? transactions.filter((t: any) => t.type === "expense" && t.category !== "Transfer" && isFiltered(t)).length : 0,
     income: transactions ? transactions.filter((t: any) => t.type === "income" && t.category !== "Transfer" && isFiltered(t)).length : 0,
     transfers: transactions ? transactions.filter((t: any) => t.category === "Transfer" && isFiltered(t)).length : 0,
