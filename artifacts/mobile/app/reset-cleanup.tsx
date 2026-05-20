@@ -21,7 +21,7 @@ import DateTimePicker from "@react-native-community/datetimepicker";
 import { useApp, getApiBase } from "@/context/AppContext";
 import { useColors } from "@/hooks/useColors";
 
-type CategoryId = "bills" | "expenses" | "income" | "transfers";
+type CategoryId = "bills" | "expenses" | "income" | "transfers" | "portfolio";
 
 interface Category {
   id: CategoryId;
@@ -36,12 +36,13 @@ const CATEGORIES: Category[] = [
   { id: "expenses", label: "Expenses", icon: "arrow-up", color: "#ef4444", description: "Expense transactions" },
   { id: "income", label: "Income", icon: "arrow-down", color: "#22c55e", description: "Income transactions" },
   { id: "transfers", label: "Transfers", icon: "repeat", color: "#3b82f6", description: "Transfer transactions" },
+  { id: "portfolio", label: "Portfolio", icon: "trending-up", color: "#6366f1", description: "Portfolio holdings & transactions" },
 ];
 
 export default function ResetCleanupScreen() {
   const colors = useColors();
   const {
-    transactions, accounts, bills, plaidSync,
+    transactions, accounts, bills, holdings, investmentTransactions, plaidSync,
     wipeData, householdId, deviceId,
   } = useApp();
 
@@ -51,6 +52,7 @@ export default function ResetCleanupScreen() {
     expenses: false,
     income: false,
     transfers: false,
+    portfolio: false,
   });
 
   const [fromDate, setFromDate] = useState<Date | null>(null);
@@ -83,6 +85,7 @@ export default function ResetCleanupScreen() {
     expenses: transactions ? transactions.filter((t: any) => t.type === "expense" && t.category !== "Transfer" && isFiltered(t)).length : 0,
     income: transactions ? transactions.filter((t: any) => t.type === "income" && t.category !== "Transfer" && isFiltered(t)).length : 0,
     transfers: transactions ? transactions.filter((t: any) => t.category === "Transfer" && isFiltered(t)).length : 0,
+    portfolio: (holdings?.length ?? 0) + (investmentTransactions?.length ?? 0),
   };
 
   const selectedCategories = CATEGORIES.filter((c) => selected[c.id]);
@@ -148,6 +151,7 @@ export default function ResetCleanupScreen() {
       if (selected.income) catsToWipe.push("income");
       if (selected.transfers) catsToWipe.push("transfers");
       if (selected.bills) catsToWipe.push("bills");
+      if (selected.portfolio) catsToWipe.push("portfolio");
 
       await wipeData(catsToWipe, {
         startDate: fStart,
