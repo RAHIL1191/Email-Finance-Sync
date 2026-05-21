@@ -13,6 +13,7 @@ import {
   TouchableOpacity,
   View,
 } from "react-native";
+import { KeyboardAwareScrollView } from "react-native-keyboard-controller";
 import { SafeAreaView, useSafeAreaInsets } from "react-native-safe-area-context";
 
 import { Budget, Goal, useApp } from "@/context/AppContext";
@@ -247,7 +248,7 @@ function BudgetFormSheet({
               </View>
             ) : null}
 
-            <ScrollView
+            <KeyboardAwareScrollView
               contentContainerStyle={[fs.formBody, { paddingBottom: insets.bottom + 110 }]}
               keyboardShouldPersistTaps="handled"
               showsVerticalScrollIndicator={false}
@@ -364,7 +365,7 @@ function BudgetFormSheet({
                   <PercentSlider value={alertPct} onChange={setAlertPct} color={colors.primary} />
                 </View>
               )}
-            </ScrollView>
+            </KeyboardAwareScrollView>
 
             {/* ── Bottom bar ── */}
             <View style={[fs.bottomBar, { borderTopColor: colors.border, paddingBottom: insets.bottom + 10, backgroundColor: colors.background }]}>
@@ -541,7 +542,7 @@ function GoalFormSheet({
           <Text style={[fs.headerTitle, { color: colors.foreground }]}>{initial ? "Edit Goal" : "New Goal"}</Text>
           <TouchableOpacity onPress={save} hitSlop={12}><Text style={[fs.saveText, { color: colors.primary }]}>Save</Text></TouchableOpacity>
         </View>
-        <ScrollView contentContainerStyle={[fs.body, { paddingBottom: insets.bottom + 32 }]} keyboardShouldPersistTaps="handled" showsVerticalScrollIndicator={false}>
+        <KeyboardAwareScrollView contentContainerStyle={[fs.body, { paddingBottom: insets.bottom + 32 }]} keyboardShouldPersistTaps="handled" showsVerticalScrollIndicator={false}>
 
           <View style={[fs.card, { backgroundColor: colors.card }]}>
             <View style={[fs.row, { borderBottomColor: colors.border, borderBottomWidth: StyleSheet.hairlineWidth }]}>
@@ -582,7 +583,7 @@ function GoalFormSheet({
               </View>
             </View>
           </View>
-        </ScrollView>
+        </KeyboardAwareScrollView>
       </View>
     </Modal>
   );
@@ -1354,7 +1355,14 @@ export default function BudgetScreen() {
         <Text style={[s.headerTitle, { color: colors.foreground }]}>Budget</Text>
         <View style={s.headerRight}>
           <TouchableOpacity hitSlop={8} style={s.headerBtn} onPress={() => setShowSortModal(true)}>
-            <Feather name="sliders" size={20} color={colors.foreground} />
+            <View>
+              <Feather name="sliders" size={20} color={colors.foreground} />
+              {appliedSort !== null && (
+                <View style={[s.filterBadge, { backgroundColor: colors.expense }]}>
+                  <Text style={s.filterBadgeText}>1</Text>
+                </View>
+              )}
+            </View>
           </TouchableOpacity>
           <TouchableOpacity
             hitSlop={8}
@@ -1535,6 +1543,8 @@ const s = StyleSheet.create({
   headerTitle:  { flex: 1, fontSize: 22, fontFamily: "Inter_700Bold", marginLeft: 12 },
   headerRight:  { flexDirection: "row", alignItems: "center", gap: 8 },
   headerBtn:    { width: 36, height: 36, borderRadius: 10, alignItems: "center", justifyContent: "center" },
+  filterBadge:  { position: "absolute", top: -5, right: -5, minWidth: 16, height: 16, borderRadius: 8, alignItems: "center", justifyContent: "center", paddingHorizontal: 3 },
+  filterBadgeText: { fontSize: 10, fontFamily: "Inter_700Bold", color: "#fff" },
   addBtn:       { borderRadius: 10 },
 
   tabBar:       { flexDirection: "row", borderBottomWidth: StyleSheet.hairlineWidth },

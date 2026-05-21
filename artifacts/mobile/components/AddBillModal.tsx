@@ -4,16 +4,15 @@ import DateTimePicker from "@react-native-community/datetimepicker";
 import React, { useState } from "react";
 import {
   Alert,
-  KeyboardAvoidingView,
   Modal,
   Platform,
-  ScrollView,
   StyleSheet,
   Text,
   TextInput,
   TouchableOpacity,
   View,
 } from "react-native";
+import { KeyboardAwareScrollView } from "react-native-keyboard-controller";
 
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 
@@ -137,10 +136,7 @@ export default function AddBillModal({ visible, onClose }: Props) {
       presentationStyle="pageSheet"
       onRequestClose={onClose}
     >
-      <KeyboardAvoidingView
-        style={{ flex: 1, backgroundColor: colors.background }}
-        behavior={Platform.OS === "ios" ? "padding" : "height"}
-      >
+      <View style={{ flex: 1, backgroundColor: colors.background }}>
         <View
           style={[
             styles.header,
@@ -158,7 +154,7 @@ export default function AddBillModal({ visible, onClose }: Props) {
           </TouchableOpacity>
         </View>
 
-        <ScrollView
+        <KeyboardAwareScrollView
           contentContainerStyle={[
             styles.content,
             { paddingBottom: insets.bottom + 32 },
@@ -298,8 +294,8 @@ export default function AddBillModal({ visible, onClose }: Props) {
               </View>
             )}
           </View>
-        </ScrollView>
-      </KeyboardAvoidingView>
+        </KeyboardAwareScrollView>
+      </View>
 
       <CategoryPickerModal
         visible={showCatPicker}

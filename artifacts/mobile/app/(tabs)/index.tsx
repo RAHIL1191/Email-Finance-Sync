@@ -5,7 +5,6 @@ import React, { useMemo, useState } from "react";
 import {
   ActivityIndicator,
   FlatList,
-  KeyboardAvoidingView,
   Modal,
   Platform,
   RefreshControl,
@@ -16,6 +15,7 @@ import {
   TouchableOpacity,
   View,
 } from "react-native";
+import { KeyboardAvoidingView } from "react-native-keyboard-controller";
 import { Circle, G, Svg } from "react-native-svg";
 import { SafeAreaView } from "react-native-safe-area-context";
 
@@ -828,7 +828,7 @@ export default function HomeScreen() {
       >
         <SafeAreaView edges={["top", "bottom"]} style={[srch.container, { backgroundColor: colors.background }]}>
         <KeyboardAvoidingView
-          behavior={Platform.OS === "ios" ? "padding" : "height"}
+          behavior="padding"
           style={{ flex: 1 }}
         >
           {/* Search Header */}

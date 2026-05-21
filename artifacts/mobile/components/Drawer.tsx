@@ -259,19 +259,19 @@ export default function Drawer() {
           {/* Divider */}
           <View style={[styles.divider, { backgroundColor: colors.border }]} />
 
-          {/* Notifications */}
+          {/* Settings */}
           <TouchableOpacity
             style={styles.menuItem}
-            onPress={() => navigateTo("/notifications")}
+            onPress={() => navigateTo("/settings")}
             activeOpacity={0.8}
           >
-            <View style={[styles.menuIconWrap, { backgroundColor: "#3b82f6" + "18" }]}>
-              <Feather name="bell" size={15} color="#3b82f6" />
+            <View style={[styles.menuIconWrap, { backgroundColor: "#64748b" + "18" }]}>
+              <Feather name="settings" size={15} color="#64748b" />
             </View>
             <View style={styles.menuTextWrap}>
-              <Text style={[styles.menuTitle, { color: colors.foreground }]}>Notifications</Text>
+              <Text style={[styles.menuTitle, { color: colors.foreground }]}>Settings</Text>
               <Text style={[styles.menuSub, { color: colors.mutedForeground }]}>
-                Manage alerts & reminders
+                Currency, theme, notifications & more
               </Text>
             </View>
             <Feather name="chevron-right" size={16} color={colors.mutedForeground} />

@@ -5,7 +5,6 @@ import React, { useMemo, useState } from "react";
 import {
   ActivityIndicator,
   Dimensions,
-  KeyboardAvoidingView,
   Linking,
   Modal,
   Platform,
@@ -16,6 +15,7 @@ import {
   TouchableOpacity,
   View,
 } from "react-native";
+import { KeyboardAwareScrollView } from "react-native-keyboard-controller";
 import { Defs, LinearGradient, Path, Stop, Svg } from "react-native-svg";
 import { SafeAreaView, useSafeAreaInsets } from "react-native-safe-area-context";
 
@@ -290,13 +290,12 @@ function EmailConnectModal({ onClose }: { onClose: () => void }) {
   return (
     <Modal visible animationType="slide" presentationStyle="pageSheet" onRequestClose={onClose}>
       <SafeAreaView style={{ flex: 1, backgroundColor: colors.background }}>
-      <KeyboardAvoidingView style={{ flex: 1 }} behavior={Platform.OS === "ios" ? "padding" : "height"}>
         <View style={[styles.modalHeader, { paddingTop: 16, borderBottomColor: colors.border }]}>
           <TouchableOpacity onPress={onClose}><Feather name="x" size={22} color={colors.foreground} /></TouchableOpacity>
           <Text style={[styles.modalTitle, { color: colors.foreground }]}>{wasConnected ? "Update Email" : "Connect Email"}</Text>
           <View style={{ width: 22 }} />
         </View>
-        <ScrollView contentContainerStyle={[styles.modalContent, { paddingBottom: insets.bottom + 32 }]} keyboardShouldPersistTaps="handled" showsVerticalScrollIndicator={false}>
+        <KeyboardAwareScrollView contentContainerStyle={[styles.modalContent, { paddingBottom: insets.bottom + 32 }]} keyboardShouldPersistTaps="handled" showsVerticalScrollIndicator={false}>
           <View style={[styles.emailIconLarge, { backgroundColor: colors.accent }]}>
             <Feather name="mail" size={36} color={colors.primary} />
           </View>
@@ -379,8 +378,7 @@ function EmailConnectModal({ onClose }: { onClose: () => void }) {
               </TouchableOpacity>
             </View>
           )}
-        </ScrollView>
-      </KeyboardAvoidingView>
+        </KeyboardAwareScrollView>
       </SafeAreaView>
     </Modal>
   );

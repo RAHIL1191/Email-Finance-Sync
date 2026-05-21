@@ -685,10 +685,10 @@ export default function BillsScreen() {
     setDetailBill(b);
   };
   // Has any non-default filter active?
-  const isFiltered =
-    filterSettings.sortBy !== DEFAULT_FILTER.sortBy ||
-    filterSettings.groupBy !== DEFAULT_FILTER.groupBy ||
-    filterSettings.accountIds.length > 0;
+  const filterCount =
+    (filterSettings.sortBy !== DEFAULT_FILTER.sortBy ? 1 : 0) +
+    (filterSettings.groupBy !== DEFAULT_FILTER.groupBy ? 1 : 0) +
+    filterSettings.accountIds.length;
 
   // Apply account filter then sort, then group
   function prepare(list: Bill[]) {
@@ -768,8 +768,10 @@ export default function BillsScreen() {
           >
             <View>
               <Feather name="sliders" size={20} color={colors.primary} />
-              {isFiltered && (
-                <View style={[styles.filterDot, { backgroundColor: colors.expense }]} />
+              {filterCount > 0 && (
+                <View style={[styles.filterBadge, { backgroundColor: colors.expense }]}>
+                  <Text style={styles.filterBadgeText}>{filterCount}</Text>
+                </View>
               )}
             </View>
           </TouchableOpacity>
@@ -918,13 +920,21 @@ const styles = StyleSheet.create({
   },
   headerTitle: { fontSize: 22, fontFamily: "Inter_700Bold" },
   headerIcons: { flexDirection: "row", gap: 18, alignItems: "center" },
-  filterDot: {
+  filterBadge: {
     position: "absolute",
-    top: -2,
-    right: -2,
-    width: 7,
-    height: 7,
-    borderRadius: 4,
+    top: -5,
+    right: -5,
+    minWidth: 16,
+    height: 16,
+    borderRadius: 8,
+    alignItems: "center",
+    justifyContent: "center",
+    paddingHorizontal: 3,
+  },
+  filterBadgeText: {
+    fontSize: 10,
+    fontFamily: "Inter_700Bold",
+    color: "#fff",
   },
   // Summary strip
   strip: { flexDirection: "row", paddingVertical: 12, paddingHorizontal: 18, borderBottomWidth: 1 },

@@ -3,16 +3,15 @@ import * as Haptics from "expo-haptics";
 import React, { useEffect, useState } from "react";
 import {
   Alert,
-  KeyboardAvoidingView,
   Modal,
   Platform,
-  ScrollView,
   StyleSheet,
   Text,
   TextInput,
   TouchableOpacity,
   View,
 } from "react-native";
+import { KeyboardAwareScrollView } from "react-native-keyboard-controller";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 
 import { Transaction, useApp } from "@/context/AppContext";
@@ -313,10 +312,7 @@ export default function TransactionDetailModal({ visible, onClose, transaction }
       onRequestClose={() => editing ? setEditing(false) : onClose()}
     >
       <View style={[s.screen, { backgroundColor: colors.background }]}>
-        <KeyboardAvoidingView
-          style={{ flex: 1 }}
-          behavior={Platform.OS === "ios" ? "padding" : undefined}
-        >
+        <>
           {/* Header */}
           <View style={[s.header, { paddingTop: pt, borderBottomColor: colors.border }]}>
             <TouchableOpacity onPress={() => editing ? setEditing(false) : onClose()} hitSlop={8} style={s.headerBtn}>
@@ -342,7 +338,7 @@ export default function TransactionDetailModal({ visible, onClose, transaction }
           </View>
 
           {editing ? (
-            <ScrollView
+            <KeyboardAwareScrollView
               showsVerticalScrollIndicator={false}
               keyboardShouldPersistTaps="handled"
               contentContainerStyle={[s.editScroll, { paddingBottom: pb }]}
@@ -681,9 +677,9 @@ export default function TransactionDetailModal({ visible, onClose, transaction }
                 </View>
                 <Text style={[s.editRowTitle, { color: colors.foreground }]}>Add Receipts</Text>
               </TouchableOpacity>
-            </ScrollView>
+            </KeyboardAwareScrollView>
           ) : (
-            <ScrollView
+            <KeyboardAwareScrollView
               showsVerticalScrollIndicator={false}
               contentContainerStyle={[s.viewScroll, { paddingBottom: pb }]}
             >
@@ -850,9 +846,9 @@ export default function TransactionDetailModal({ visible, onClose, transaction }
                   {timeStr.toLowerCase()}
                 </Text>
               </View>
-            </ScrollView>
+            </KeyboardAwareScrollView>
           )}
-        </KeyboardAvoidingView>
+        </>
       </View>
 
       <CategoryPickerModal

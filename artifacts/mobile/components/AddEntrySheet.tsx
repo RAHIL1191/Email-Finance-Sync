@@ -5,7 +5,6 @@ import React, { useCallback, useEffect, useRef, useState } from "react";
 import {
   Alert,
   Image,
-  KeyboardAvoidingView,
   Modal,
   Platform,
   ScrollView,
@@ -16,6 +15,7 @@ import {
   TouchableOpacity,
   View,
 } from "react-native";
+import { KeyboardAvoidingView, KeyboardAwareScrollView } from "react-native-keyboard-controller";
 import * as ImagePicker from "expo-image-picker";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 
@@ -908,7 +908,7 @@ function ExpenseTab({ onSave, onRegisterSave }: { onSave: () => void; onRegister
   saveRef.current = save;
 
   return (
-    <ScrollView contentContainerStyle={styles.tabContent} keyboardShouldPersistTaps="handled" showsVerticalScrollIndicator={false}>
+    <KeyboardAwareScrollView contentContainerStyle={styles.tabContent} keyboardShouldPersistTaps="handled" showsVerticalScrollIndicator={false}>
       <AmountHeader
         value={amount}
         onChange={setAmount}
@@ -1140,7 +1140,7 @@ function ExpenseTab({ onSave, onRegisterSave }: { onSave: () => void; onRegister
         onClose={() => setShowCalculator(false)}
         onApply={(v) => setAmount(v)}
       />
-    </ScrollView>
+    </KeyboardAwareScrollView>
   );
 }
 
@@ -1205,7 +1205,7 @@ function IncomeTab({ onSave, onRegisterSave }: { onSave: () => void; onRegisterS
   saveRef.current = save;
 
   return (
-    <ScrollView contentContainerStyle={styles.tabContent} keyboardShouldPersistTaps="handled" showsVerticalScrollIndicator={false}>
+    <KeyboardAwareScrollView contentContainerStyle={styles.tabContent} keyboardShouldPersistTaps="handled" showsVerticalScrollIndicator={false}>
       <AmountHeader
         value={amount}
         onChange={setAmount}
@@ -1335,7 +1335,7 @@ function IncomeTab({ onSave, onRegisterSave }: { onSave: () => void; onRegisterS
         onClose={() => setShowCalculator(false)}
         onApply={(v) => setAmount(v)}
       />
-    </ScrollView>
+    </KeyboardAwareScrollView>
   );
 }
 
@@ -1406,7 +1406,7 @@ function TransferTab({ onSave, onRegisterSave }: { onSave: () => void; onRegiste
   saveRef.current = save;
 
   return (
-    <ScrollView contentContainerStyle={styles.tabContent} keyboardShouldPersistTaps="handled" showsVerticalScrollIndicator={false}>
+    <KeyboardAwareScrollView contentContainerStyle={styles.tabContent} keyboardShouldPersistTaps="handled" showsVerticalScrollIndicator={false}>
       <Text style={[styles.transferNote, { color: colors.mutedForeground }]}>
         The transfer is within the app only and does not connect to your bank.
       </Text>
@@ -1537,7 +1537,7 @@ function TransferTab({ onSave, onRegisterSave }: { onSave: () => void; onRegiste
         onChange={(d) => setDate((prev) => { const n = new Date(prev); n.setHours(d.getHours(), d.getMinutes()); return n; })}
         onClose={() => setShowTimePicker(false)}
       />
-    </ScrollView>
+    </KeyboardAwareScrollView>
   );
 }
 
@@ -1614,7 +1614,7 @@ function BillsTab({ onSave, onRegisterSave }: { onSave: () => void; onRegisterSa
   saveRef.current = save;
 
   return (
-    <ScrollView contentContainerStyle={styles.tabContent} keyboardShouldPersistTaps="handled" showsVerticalScrollIndicator={false}>
+    <KeyboardAwareScrollView contentContainerStyle={styles.tabContent} keyboardShouldPersistTaps="handled" showsVerticalScrollIndicator={false}>
       <View style={[styles.card, { backgroundColor: colors.card }]}>
         <View style={[styles.row, { borderBottomWidth: StyleSheet.hairlineWidth, borderBottomColor: colors.border }]}>
           <View style={[styles.rowIcon, { backgroundColor: colors.accent }]}>
@@ -1771,7 +1771,7 @@ function BillsTab({ onSave, onRegisterSave }: { onSave: () => void; onRegisterSa
         onSelect={setRemindDays}
         onClose={() => setShowRemindPicker(false)}
       />
-    </ScrollView>
+    </KeyboardAwareScrollView>
   );
 }
 
@@ -1799,7 +1799,7 @@ export default function AddEntrySheet({ visible, initialTab = "EXPENSE", onClose
 
   return (
     <Modal visible={visible} animationType="slide" presentationStyle="fullScreen" onRequestClose={onClose}>
-      <KeyboardAvoidingView style={{ flex: 1, backgroundColor: colors.background }} behavior={Platform.OS === "ios" ? "padding" : "height"}>
+      <KeyboardAvoidingView style={{ flex: 1, backgroundColor: colors.background }} behavior="padding">
         {/* Header */}
         <View style={[styles.header, { paddingTop: insets.top + 8, borderBottomColor: colors.border, backgroundColor: colors.card }]}>
           <TouchableOpacity onPress={onClose} style={styles.headerBtn}>

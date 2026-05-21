@@ -14,6 +14,7 @@ import {
   TouchableOpacity,
   View,
 } from "react-native";
+import { KeyboardAwareScrollView } from "react-native-keyboard-controller";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 
 import { useApp } from "@/context/AppContext";
@@ -69,7 +70,7 @@ export default function ProjectDetailScreen() {
           <Text style={[s.headerTitle, { color: colors.foreground }]}>New Project</Text>
           <View style={{ width: 40 }} />
         </View>
-        <ScrollView contentContainerStyle={{ padding: 16, gap: 14 }}>
+        <KeyboardAwareScrollView contentContainerStyle={{ padding: 16, gap: 14 }} keyboardShouldPersistTaps="handled">
           <TextInput style={[s.input, { borderColor: colors.border, color: colors.foreground, backgroundColor: colors.accent }]} placeholder="Project name" placeholderTextColor={colors.mutedForeground} value={createName} onChangeText={setCreateName} />
           <TextInput style={[s.input, { borderColor: colors.border, color: colors.foreground, backgroundColor: colors.accent }]} placeholder="Description (optional)" placeholderTextColor={colors.mutedForeground} value={createDesc} onChangeText={setCreateDesc} />
           <View style={s.colorRow}>
@@ -80,7 +81,7 @@ export default function ProjectDetailScreen() {
           <TouchableOpacity style={[s.saveBtn, { backgroundColor: createName.trim() ? colors.primary : colors.border }]} onPress={handleCreate} activeOpacity={createName.trim() ? 0.8 : 1}>
             <Text style={s.saveBtnText}>Create Project</Text>
           </TouchableOpacity>
-        </ScrollView>
+        </KeyboardAwareScrollView>
       </SafeAreaView>
     );
   }
@@ -230,7 +231,7 @@ export default function ProjectDetailScreen() {
               <Feather name="x" size={20} color={colors.foreground} />
             </TouchableOpacity>
           </View>
-          <ScrollView showsVerticalScrollIndicator={false} contentContainerStyle={{ padding: 16, gap: 14 }}>
+          <KeyboardAwareScrollView showsVerticalScrollIndicator={false} contentContainerStyle={{ padding: 16, gap: 14 }} keyboardShouldPersistTaps="handled">
             <TextInput
               style={[s.input, { borderColor: colors.border, color: colors.foreground, backgroundColor: colors.accent }]}
               placeholder="Project name"
@@ -264,7 +265,7 @@ export default function ProjectDetailScreen() {
             >
               <Text style={s.saveBtnText}>Save Changes</Text>
             </TouchableOpacity>
-          </ScrollView>
+          </KeyboardAwareScrollView>
         </View>
       </Modal>
     </View>

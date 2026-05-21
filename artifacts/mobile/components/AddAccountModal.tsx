@@ -3,7 +3,6 @@ import * as Haptics from "expo-haptics";
 import React, { useState } from "react";
 import {
   Alert,
-  KeyboardAvoidingView,
   Modal,
   Platform,
   ScrollView,
@@ -14,6 +13,7 @@ import {
   TouchableOpacity,
   View,
 } from "react-native";
+import { KeyboardAwareScrollView } from "react-native-keyboard-controller";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 
 import ConfirmModal from "@/components/ConfirmModal";
@@ -203,10 +203,7 @@ export default function AddAccountModal({ visible, onClose, onConnectBank }: Pro
       presentationStyle="pageSheet"
       onRequestClose={handleClose}
     >
-      <KeyboardAvoidingView
-        style={{ flex: 1, backgroundColor: colors.background }}
-        behavior={Platform.OS === "ios" ? "padding" : "height"}
-      >
+      <View style={{ flex: 1, backgroundColor: colors.background }}>
         {/* ── Header ── */}
         <View
           style={[
@@ -384,7 +381,7 @@ export default function AddAccountModal({ visible, onClose, onConnectBank }: Pro
         {/* ── Step 3: Form ── */}
         {step === "form" && (
           <>
-            <ScrollView
+            <KeyboardAwareScrollView
               contentContainerStyle={{ paddingBottom: (Platform.OS === "web" ? 20 : insets.bottom) + 100 }}
               keyboardShouldPersistTaps="handled"
               showsVerticalScrollIndicator={false}
@@ -558,7 +555,7 @@ export default function AddAccountModal({ visible, onClose, onConnectBank }: Pro
                 </View>
 
               </View>
-            </ScrollView>
+            </KeyboardAwareScrollView>
 
             {/* Bottom bar */}
             <View
@@ -597,7 +594,7 @@ export default function AddAccountModal({ visible, onClose, onConnectBank }: Pro
             </View>
           </>
         )}
-      </KeyboardAvoidingView>
+      </View>
 
       {/* ── Bank Picker Modal ── */}
       <Modal

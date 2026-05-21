@@ -2,7 +2,9 @@ import { Feather } from "@expo/vector-icons";
 import * as Haptics from "expo-haptics";
 import React, { useEffect, useState } from "react";
 import {
+  KeyboardAvoidingView,
   Modal,
+  Platform,
   ScrollView,
   StyleSheet,
   Text,
@@ -101,7 +103,8 @@ export default function TransactionFilterModal({ visible, current, onApply, onCl
   return (
     <Modal visible={visible} transparent animationType="slide" onRequestClose={onClose}>
       <TouchableOpacity style={s.backdrop} activeOpacity={1} onPress={onClose} />
-      <View style={[s.sheet, { backgroundColor: colors.background, paddingBottom: insets.bottom + 16 }]}>
+      <KeyboardAvoidingView behavior={Platform.OS === "ios" ? "padding" : "height"} style={{ flex: 1 }}>
+      <View style={[s.sheet, { backgroundColor: colors.background, paddingTop: insets.top, paddingBottom: insets.bottom + 16 }]}>
         {/* Header */}
         <View style={[s.header, { borderBottomColor: colors.border }]}>
           <View style={{ width: 28 }} />
@@ -111,7 +114,7 @@ export default function TransactionFilterModal({ visible, current, onApply, onCl
           </TouchableOpacity>
         </View>
 
-        <ScrollView showsVerticalScrollIndicator={false} contentContainerStyle={s.body}>
+        <ScrollView showsVerticalScrollIndicator={false} contentContainerStyle={s.body} keyboardShouldPersistTaps="handled">
           {/* Type chips */}
           <View style={s.chipRow}>
             {TX_TYPES.map((t) => (
@@ -336,19 +339,18 @@ export default function TransactionFilterModal({ visible, current, onApply, onCl
           </Modal>
         )}
       </View>
+      </KeyboardAvoidingView>
     </Modal>
   );
 }
 
 const s = StyleSheet.create({
   backdrop: {
-    flex: 1,
+    ...StyleSheet.absoluteFillObject,
     backgroundColor: "rgba(0,0,0,0.45)",
   },
   sheet: {
-    borderTopLeftRadius: 24,
-    borderTopRightRadius: 24,
-    maxHeight: "88%",
+    flex: 1,
   },
   pickerSheet: {
     position: "absolute",

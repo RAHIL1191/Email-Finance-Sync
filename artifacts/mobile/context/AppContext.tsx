@@ -111,6 +111,13 @@ export interface Goal {
   updatedAt: string;
 }
 
+export interface ChecklistItem {
+  id: string;
+  text: string;
+  completed: boolean;
+  note?: string;
+}
+
 export interface Task {
   id: string;
   title: string;
@@ -119,6 +126,7 @@ export interface Task {
   paymentMode?: string;
   dueDate: string;
   notes?: string;
+  checklistItems?: ChecklistItem[];
   priority: "low" | "medium" | "high";
   isCompleted: boolean;
   reminderEnabled: boolean;

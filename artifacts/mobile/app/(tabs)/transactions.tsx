@@ -1436,11 +1436,10 @@ function TrendsTab({ transactions, colors }: { transactions: Transaction[]; colo
 const TX_FILTERS = ["All", "Expenses", "Income", "Transfer"] as const;
 type TxFilter = (typeof TX_FILTERS)[number];
 
-function TransactionsTab({ transactions, colors, showFilter, setShowFilter }: { transactions: Transaction[]; colors: any; showFilter: boolean; setShowFilter: (v: boolean) => void }) {
+function TransactionsTab({ transactions, colors, showFilter, setShowFilter, filterSettings, setFilterSettings }: { transactions: Transaction[]; colors: any; showFilter: boolean; setShowFilter: (v: boolean) => void; filterSettings: TxFilterSettings; setFilterSettings: (s: TxFilterSettings) => void }) {
   const [filter, setFilter] = useState<TxFilter>("All");
   const [showAdd, setShowAdd] = useState(false);
   const [selectedTx, setSelectedTx] = useState<Transaction | null>(null);
-  const [filterSettings, setFilterSettings] = useState<TxFilterSettings>(DEFAULT_TX_FILTER);
 
   // transactions prop is already deduplicated + reviewed-only (from InsightsScreen visibleTxs)
   const filtered = useMemo(() => {
@@ -1930,6 +1929,18 @@ export default function InsightsScreen() {
   const [chartView, setChartView] = useState<ChartView>("Chart");
   const [showAdd, setShowAdd] = useState(false);
   const [showFilter, setShowFilter] = useState(false);
+  const [txFilterSettings, setTxFilterSettings] = useState<TxFilterSettings>(DEFAULT_TX_FILTER);
+  const txFilterCount = useMemo(() => {
+    const f = txFilterSettings;
+    return (
+      (f.type !== "All" ? 1 : 0) +
+      (f.categories.length > 0 ? 1 : 0) +
+      (f.accountIds.length > 0 ? 1 : 0) +
+      (f.dateFrom || f.dateTo ? 1 : 0) +
+      (f.amountMin !== "" || f.amountMax !== "" ? 1 : 0) +
+      (f.notes.trim() ? 1 : 0)
+    );
+  }, [txFilterSettings]);
   const [showPeriodSettings, setShowPeriodSettings] = useState(false);
   const [periodSettings, setPeriodSettings] = useState<PeriodSettings>(DEFAULT_PERIOD_SETTINGS);
   const currentMonthIdx = new Date().getMonth();
@@ -1958,7 +1969,14 @@ export default function InsightsScreen() {
               else setShowPeriodSettings(true);
             }}
           >
-            <Feather name="sliders" size={20} color={colors.primary} />
+            <View>
+              <Feather name="sliders" size={20} color={colors.primary} />
+              {activeTab === "TRANSACTIONS" && txFilterCount > 0 && (
+                <View style={[styles.filterBadge, { backgroundColor: colors.expense }]}>
+                  <Text style={styles.filterBadgeText}>{txFilterCount}</Text>
+                </View>
+              )}
+            </View>
           </TouchableOpacity>
           <TouchableOpacity style={styles.headerIcon}>
             <Feather name="download" size={20} color={colors.primary} />
@@ -2010,7 +2028,7 @@ export default function InsightsScreen() {
           <TrendsTab transactions={visibleTxs} colors={colors} />
         )}
         {activeTab === "TRANSACTIONS" && (
-          <TransactionsTab transactions={visibleTxs} colors={colors} showFilter={showFilter} setShowFilter={setShowFilter} />
+          <TransactionsTab transactions={visibleTxs} colors={colors} showFilter={showFilter} setShowFilter={setShowFilter} filterSettings={txFilterSettings} setFilterSettings={setTxFilterSettings} />
         )}
         {activeTab === "REVIEW" && (
           <ReviewTab
@@ -2069,6 +2087,22 @@ const styles = StyleSheet.create({
   },
   headerIcon: {
     padding: 4,
+  },
+  filterBadge: {
+    position: "absolute",
+    top: -5,
+    right: -5,
+    minWidth: 16,
+    height: 16,
+    borderRadius: 8,
+    alignItems: "center",
+    justifyContent: "center",
+    paddingHorizontal: 3,
+  },
+  filterBadgeText: {
+    fontSize: 10,
+    fontFamily: "Inter_700Bold",
+    color: "#fff",
   },
   headerTitle: {
     flex: 1,

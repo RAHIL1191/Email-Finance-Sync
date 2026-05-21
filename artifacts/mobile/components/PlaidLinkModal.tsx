@@ -256,6 +256,18 @@ export default function PlaidLinkModal({
 
       setPlaidItemId(data.itemId as string);
 
+      // Override selectedBank with the real institution name returned by Plaid
+      if (data.institutionName && typeof data.institutionName === "string") {
+        const realName = data.institutionName as string;
+        const match =
+          PLAID_BANKS.find((b) => b.name.toLowerCase() === realName.toLowerCase()) ??
+          PLAID_BANKS.find((b) => realName.toLowerCase().includes(b.name.split(" ")[0].toLowerCase())) ??
+          PLAID_BANKS.find((b) => b.name.toLowerCase().includes(realName.toLowerCase()));
+        setSelectedBank(
+          match ?? { id: "custom", name: realName, icon: "🏦", color: bank.color, accountTypes: [] }
+        );
+      }
+
       const accts: DiscoveredAccount[] = (
         data.accounts as Array<{
           plaidAccountId: string;
@@ -315,6 +327,7 @@ export default function PlaidLinkModal({
         type: t.type,
         category: t.category,
         accountId: t.accountId,
+        plaidAccountId: t.accountId,
         date: t.date,
         bank: t.bank,
         source: "plaid" as const,
