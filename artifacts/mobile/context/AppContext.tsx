@@ -1761,8 +1761,14 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
             continue;
           }
         }
-        // 3. New account — create it (stamp plaidItemId so disconnect can reliably clean up)
-        const created: Account = { ...a, id: genId(), plaidItemId: item.itemId };
+        // 3. New account — create it (stamp plaidItemId, bank, color so DB insert passes validation)
+        const created: Account = {
+          ...a,
+          id: genId(),
+          plaidItemId: item.itemId,
+          bank: a.bank || item.bankName,
+          color: a.color || item.bankColor || "#6366f1",
+        };
         toCreate.push(created);
         if (a.plaidAccountId) plaidAccMap[a.plaidAccountId] = created.id;
       }
