@@ -6,6 +6,9 @@ import router from "./routes/index.js";
 
 const app: Express = express();
 
+// ── Trust Render/proxy X-Forwarded-For so rate-limiting works correctly ─────
+app.set("trust proxy", 1);
+
 // ── Security ────────────────────────────────────────────────────────────────
 app.use(helmetMiddleware);
 app.use(corsMiddleware);

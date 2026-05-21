@@ -37,24 +37,49 @@ router.post("/accounts", validate(insertAccountSchema), async (req, res) => {
   }
 });
 
-/** PUT /api/accounts/:id — update an account */
-router.put("/accounts/:id", validate(updateAccountSchema), async (req, res) => {
+/** PUT /api/accounts/:id — update an account, or insert if missing (upsert) */
+router.put("/accounts/:id", async (req, res) => {
   try {
+    const id = String(req.params.id);
+    const body = req.body as Record<string, unknown>;
+
+    // Try update first
     const [row] = await db
       .update(accountsTable)
-      .set({ ...(req.body as Record<string, unknown>), updatedAt: new Date() } as any)
-      .where(
-        and(
-          eq(accountsTable.id, String(req.params.id)),
-          eq(accountsTable.householdId, res.locals.householdId)
-        )
-      )
+      .set({ ...body, updatedAt: new Date() } as any)
+      .where(and(eq(accountsTable.id, id), eq(accountsTable.householdId, res.locals.householdId)))
       .returning();
-    if (!row) {
-      res.status(404).json({ error: "Account not found" });
+
+    if (row) {
+      res.json(row);
       return;
     }
-    res.json(row);
+
+    // Account missing (e.g. after DB wipe) — insert if client sent enough fields
+    const { name, bank, type, color } = body as any;
+    if (name && bank && type && color) {
+      const [inserted] = await db
+        .insert(accountsTable)
+        .values({
+          id,
+          householdId: res.locals.householdId,
+          deviceId: res.locals.deviceId ?? "unknown",
+          name: String(name),
+          bank: String(bank),
+          type: type as "checking" | "savings" | "credit" | "investment",
+          color: String(color),
+          balance: typeof body.balance === "number" ? body.balance : 0,
+          lastFour: body.lastFour ? String(body.lastFour) : null,
+          plaidAccountId: body.plaidAccountId ? String(body.plaidAccountId) : null,
+          plaidItemId: body.plaidItemId ? String(body.plaidItemId) : null,
+          accountHolder: body.accountHolder ? String(body.accountHolder) : null,
+        })
+        .returning();
+      res.json(inserted);
+      return;
+    }
+
+    res.status(404).json({ error: "Account not found" });
   } catch (err) {
     req.log.error({ err }, "Failed to update account");
     res.status(500).json({ error: "Failed to update account" });

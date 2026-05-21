@@ -1985,9 +1985,12 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
                 return upd ? { ...a, balance: upd.balance } : a;
               })
             );
-            balanceUpdates.forEach(({ id, balance }) =>
-              apiCall(`/api/accounts/${id}`, "PUT", householdIdRef.current, deviceIdRef.current, { balance }).catch(() => {})
-            );
+            // Send full account data so the server can upsert (recreate) missing accounts after a DB wipe
+            balanceUpdates.forEach(({ id, balance }) => {
+              const fullAccount = accountsRef.current.find((a) => a.id === id);
+              const payload = fullAccount ? { ...fullAccount, balance } : { balance };
+              apiCall(`/api/accounts/${id}`, "PUT", householdIdRef.current, deviceIdRef.current, payload).catch(() => {});
+            });
           }
         }
 
