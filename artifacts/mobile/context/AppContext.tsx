@@ -441,9 +441,31 @@ async function apiCall(
     });
     clearTimeout(timeout);
     return res;
-  } catch {
+  } catch (err: any) {
+    console.warn(`[API] ${method} ${path} — network error:`, err?.message ?? err);
     return null;
   }
+}
+
+/** Fire-and-forget API call. Logs non-ok responses but never throws. */
+function bgCall(
+  path: string,
+  method: string,
+  householdId: string,
+  deviceId: string,
+  body?: unknown
+): void {
+  apiCall(path, method, householdId, deviceId, body)
+    .then((res) => {
+      if (res && !res.ok) {
+        res.json().then((data) =>
+          console.warn(`[API] ${method} ${path} — ${res.status}:`, data?.error ?? data)
+        ).catch(() => {
+          console.warn(`[API] ${method} ${path} — ${res.status} (non-JSON response)`);
+        });
+      }
+    })
+    .catch((err) => console.warn(`[API] ${method} ${path} — unexpected error:`, err));
 }
 
 /** Source priority: higher wins when the same transaction arrives from multiple sources. */
@@ -990,9 +1012,9 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
                     : r
                 )
               );
-              apiCall("/api/category-rules", "POST", householdIdRef.current, deviceIdRef.current, {
+              bgCall("/api/category-rules", "POST", householdIdRef.current, deviceIdRef.current, {
                 ...exRule, category: updates.category!, hitCount: exRule.hitCount + 1, source: "manual",
-              }).catch(() => {});
+              });
             } else {
               const newRule: CategoryRule = {
                 id: genId(), householdId: householdIdRef.current,
@@ -1000,7 +1022,7 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
                 category: updates.category!, hitCount: 1, source: "manual", createdAt: now, updatedAt: now,
               };
               setCategoryRules((rs) => [...rs, newRule]);
-              apiCall("/api/category-rules", "POST", householdIdRef.current, deviceIdRef.current, newRule).catch(() => {});
+              bgCall("/api/category-rules", "POST", householdIdRef.current, deviceIdRef.current, newRule);
             }
           }
         }
@@ -1184,12 +1206,12 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
     };
     setCategories((prev) => [...prev, created]);
     // Sync to backend so other devices (e.g. wife's phone) see it
-    apiCall("/api/categories", "POST", householdIdRef.current, deviceIdRef.current, created).catch(() => {});
+    bgCall("/api/categories", "POST", householdIdRef.current, deviceIdRef.current, created);
   }, []);
 
   const updateCategory = useCallback((id: string, updates: Partial<Category>) => {
     setCategories((prev) => prev.map((cat) => (cat.id === id ? { ...cat, ...updates, updatedAt: new Date().toISOString() } : cat)));
-    apiCall(`/api/categories/${id}`, "PUT", householdIdRef.current, deviceIdRef.current, updates).catch(() => {});
+    bgCall(`/api/categories/${id}`, "PUT", householdIdRef.current, deviceIdRef.current, updates);
   }, []);
 
   const deleteCategory = useCallback((id: string) => {
@@ -1205,7 +1227,7 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
       findSubcats(id);
       return prev.filter((c) => !toDelete.has(c.id));
     });
-    apiCall(`/api/categories/${id}`, "DELETE", householdIdRef.current, deviceIdRef.current).catch(() => {});
+    bgCall(`/api/categories/${id}`, "DELETE", householdIdRef.current, deviceIdRef.current);
   }, []);
 
   // ── Merchant pattern normalization ─────────────────────────────────────────
@@ -1240,7 +1262,7 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
       AsyncStorage.setItem(STORAGE_KEYS.categoryRules, JSON.stringify(next)).catch(() => {});
       return next;
     });
-    apiCall("/api/category-rules", "POST", householdIdRef.current, deviceIdRef.current, newRule).catch(() => {});
+    bgCall("/api/category-rules", "POST", householdIdRef.current, deviceIdRef.current, newRule);
 
     if (rule.applyScope === "past_and_future") {
       const pattern = rule.merchantPattern ?? "";
@@ -1266,7 +1288,7 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
       AsyncStorage.setItem(STORAGE_KEYS.categoryRules, JSON.stringify(next)).catch(() => {});
       return next;
     });
-    apiCall(`/api/category-rules/${id}`, "DELETE", householdIdRef.current, deviceIdRef.current).catch(() => {});
+    bgCall(`/api/category-rules/${id}`, "DELETE", householdIdRef.current, deviceIdRef.current);
   }, []);
 
   // ── Auto-categorization ───────────────────────────────────────────────────
@@ -1299,9 +1321,9 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
             : r
         );
         const rule = updated.find((r) => r.merchantPattern === pattern)!;
-        apiCall("/api/category-rules", "POST", householdIdRef.current, deviceIdRef.current, {
+        bgCall("/api/category-rules", "POST", householdIdRef.current, deviceIdRef.current, {
           ...rule, category, hitCount: rule.hitCount, source: "manual",
-        }).catch(() => {});
+        });
         return updated;
       } else {
         const now = new Date().toISOString();
@@ -1316,7 +1338,7 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
           createdAt: now,
           updatedAt: now,
         };
-        apiCall("/api/category-rules", "POST", householdIdRef.current, deviceIdRef.current, newRule).catch(() => {});
+        bgCall("/api/category-rules", "POST", householdIdRef.current, deviceIdRef.current, newRule);
         return [...prev, newRule];
       }
     });
@@ -1698,13 +1720,13 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
         actuallyNew = importedTransactions.filter((t) => !prevKeys.has(dedupKey(t))).length;
         setTransactions((prev) => upsertTransactions(prev, importedTransactions));
         // Push to server outside the state updater to avoid side effects
-        apiCall(
+        bgCall(
           "/api/transactions/bulk",
           "POST",
           householdIdRef.current,
           deviceIdRef.current,
           { transactions: importedTransactions }
-        ).catch(() => {});
+        );
       }
 
       setEmailSync((prev) => ({
@@ -1776,7 +1798,7 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
       if (toCreate.length > 0) {
         setAccounts((prev) => [...prev, ...toCreate]);
         toCreate.forEach((a) =>
-          apiCall("/api/accounts", "POST", householdIdRef.current, deviceIdRef.current, a)
+          bgCall("/api/accounts", "POST", householdIdRef.current, deviceIdRef.current, a)
         );
       }
       if (toMerge.length > 0) {
@@ -1995,7 +2017,7 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
             balanceUpdates.forEach(({ id, balance }) => {
               const fullAccount = accountsRef.current.find((a) => a.id === id);
               const payload = fullAccount ? { ...fullAccount, balance } : { balance };
-              apiCall(`/api/accounts/${id}`, "PUT", householdIdRef.current, deviceIdRef.current, payload).catch(() => {});
+              bgCall(`/api/accounts/${id}`, "PUT", householdIdRef.current, deviceIdRef.current, payload);
             });
           }
         }
@@ -2072,7 +2094,7 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
 
           // Push any fixed transactions to the server so DB is also corrected
           if (fixed.length > 0) {
-            apiCall("/api/transactions/bulk", "POST", householdIdRef.current, deviceIdRef.current, { transactions: fixed }).catch(() => {});
+            bgCall("/api/transactions/bulk", "POST", householdIdRef.current, deviceIdRef.current, { transactions: fixed });
           }
 
           // 2. Import new transactions ───────────────────────────────────────────
@@ -2092,13 +2114,13 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
             fresh = candidates.filter((t) => !existingKeys.has(dedupKey(t)));
             imported = fresh.length;
             if (fresh.length > 0) {
-              apiCall(
+              bgCall(
                 "/api/transactions/bulk",
                 "POST",
                 householdIdRef.current,
                 deviceIdRef.current,
                 { transactions: fresh }
-              ).catch(() => {});
+              );
             }
           }
 
