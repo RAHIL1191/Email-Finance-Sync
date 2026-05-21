@@ -322,6 +322,61 @@ When a type has sync enabled, every `add*` / `update*` / `delete*` call in AppCo
 
 ---
 
+## ✅ Bulk Account Upsert (Single Request)
+
+Replaced N individual `PUT /api/accounts/:id` requests (one per account) with a single `POST /api/accounts/bulk-upsert` that does one SQL `INSERT … ON CONFLICT DO UPDATE` for all accounts at once. Applied to all three call sites: balance updates after Plaid sync, new account creation in `connectPlaid`, and the startup self-heal loop.
+
+**Files touched:**
+- `artifacts/api-server/src/routes/accounts.ts` — new `POST /api/accounts/bulk-upsert` endpoint
+- `artifacts/mobile/context/AppContext.tsx` — replaced 3 × `forEach(bgCall)` loops with single `bgCall("/api/accounts/bulk-upsert")`
+
+---
+
+## ✅ Health Check Log Suppression
+
+Render pings `GET /api/healthz` every ~5 s. Added `autoLogging.ignore` to `pino-http` so these appear in Render's routing layer but are dropped before they reach the structured log stream, reducing log noise significantly.
+
+**Files touched:**
+- `artifacts/api-server/src/app.ts` — `autoLogging: { ignore: req => req.url?.startsWith("/api/healthz") }`
+
+---
+
+## ✅ Net Worth Period Change Indicator
+
+The Week / Month / Year filter in the Accounts tab now computes the net income/expense change for the selected window and displays it as a coloured delta below the main balance: `↑ +$1,234 this month` or `↓ −$500 this week`. The headline net worth figure remains the authoritative current value.
+
+**Files touched:**
+- `artifacts/mobile/app/(tabs)/accounts.tsx` — `periodStart`, `networthAccountIds`, `periodChange` memos; delta row rendered below `netWorthAmount`
+
+---
+
+## ✅ Investment Transactions on Account Detail
+
+Account detail screen now correctly surfaces investment transactions for an RRSP/investment account. Root cause: the filter used only `t.accountId === id`, but if `plaidAccMap` had a miss during sync, `accountId` was stored as `""`. Fix adds an OR check on `t.plaidAccountId === account.plaidAccountId`.
+
+**Files touched:**
+- `artifacts/mobile/app/account/[id].tsx` — `accountInvTxns` filter extended with `plaidAccountId` fallback
+
+---
+
+## ✅ Portfolio Tab Collapsible Sections
+
+Holdings and Activity sections in the Portfolio subtab are now collapsible. Each section header shows the item count and a chevron that toggles open/closed. Both start expanded by default.
+
+**Files touched:**
+- `artifacts/mobile/app/(tabs)/transactions.tsx` — `holdingsOpen`/`activityOpen` state; `TouchableOpacity` toggle headers with chevron + count
+
+---
+
+## ✅ Account Detail Collapsible Sections
+
+Both "Recent Transactions" and "Investment Activity" sections on the account detail screen are now collapsible with a chevron toggle. The "View All" button remains visible inside the header when the section is open, and uses `e.stopPropagation()` so it doesn't accidentally collapse the section.
+
+**Files touched:**
+- `artifacts/mobile/app/account/[id].tsx` — `txOpen`/`invTxOpen` state; `TouchableOpacity` section headers; proper `&&(ternary)` guard for both sections
+
+---
+
 ## How to rebuild & restart API server
 ```powershell
 # From project root:
