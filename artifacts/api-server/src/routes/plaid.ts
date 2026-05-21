@@ -318,6 +318,20 @@ router.post("/plaid/sync/:itemId", async (req, res) => {
     let transactions: any[] = [];
     let cursor = force ? undefined : (record.cursor ?? undefined);
 
+    // Trigger on-demand refresh so Plaid pulls latest data from the bank before we fetch.
+    // Both are paid add-ons and may return PRODUCT_NOT_SUPPORTED — use allSettled so
+    // a failure on either never blocks the sync.
+    const [txRefresh, invRefresh] = await Promise.allSettled([
+      client.transactionsRefresh({ access_token: record.accessToken }),
+      client.investmentsRefresh({ access_token: record.accessToken }),
+    ]);
+    if (txRefresh.status === "rejected") {
+      req.log.warn({ err: (txRefresh as any).reason?.message }, "transactionsRefresh skipped");
+    }
+    if (invRefresh.status === "rejected") {
+      req.log.warn({ err: (invRefresh as any).reason?.message }, "investmentsRefresh skipped");
+    }
+
     // Fetch accounts + transactions in parallel
     const [accountsRes] = await Promise.all([
       client.accountsGet({ access_token: record.accessToken }),
