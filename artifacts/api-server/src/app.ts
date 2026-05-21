@@ -18,6 +18,9 @@ app.use(generalRateLimit);
 app.use(
   pinoHttp({
     logger,
+    autoLogging: {
+      ignore: (req) => req.url?.startsWith("/api/healthz") ?? false,
+    },
     serializers: {
       req(req) {
         return { id: req.id, method: req.method, url: req.url?.split("?")[0] };
