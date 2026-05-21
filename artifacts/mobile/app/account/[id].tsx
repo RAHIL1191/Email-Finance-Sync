@@ -33,7 +33,7 @@ import ConfirmModal from "@/components/ConfirmModal";
 import TransactionDetailModal from "@/components/TransactionDetailModal";
 import { CATEGORY_COLORS, CATEGORY_ICONS } from "@/components/TransactionItem";
 import { ACCOUNT_CATEGORIES, SubType } from "@/components/AddAccountModal";
-import { PLAID_BANKS, Transaction, computeBalance, isIncludedInNetworth, txBelongsToAccount, useApp } from "@/context/AppContext";
+import { PLAID_BANKS, Transaction, InvestmentTransaction, computeBalance, isIncludedInNetworth, txBelongsToAccount, useApp } from "@/context/AppContext";
 import { useColors } from "@/hooks/useColors";
 
 const { width: SCREEN_W } = Dimensions.get("window");
@@ -949,7 +949,7 @@ export default function AccountDetailScreen() {
   const { id } = useLocalSearchParams<{ id: string }>();
   const colors = useColors();
   const insets = useSafeAreaInsets();
-  const { accounts, transactions, updateAccount, deleteAccount } = useApp();
+  const { accounts, transactions, investmentTransactions, updateAccount, deleteAccount } = useApp();
 
   const account = accounts.find((a) => a.id === id);
   const accountTxns = useMemo(
@@ -968,6 +968,17 @@ export default function AccountDetailScreen() {
         ? buildBalanceHistory(liveBalance, accountTxns, 30)
         : [],
     [account, accountTxns, liveBalance]
+  );
+
+  const accountInvTxns = useMemo(
+    () =>
+      investmentTransactions
+        .filter((t) =>
+          t.accountId === id ||
+          (account?.plaidAccountId && t.plaidAccountId === account.plaidAccountId)
+        )
+        .sort((a, b) => b.date.localeCompare(a.date)),
+    [investmentTransactions, id, account]
   );
 
   const [selectedTx, setSelectedTx] = useState<Transaction | null>(null);
@@ -1230,6 +1241,53 @@ export default function AccountDetailScreen() {
               );
             })}
           </View>
+        )}
+
+        {/* ── Investment Activity (for investment accounts) ── */}
+        {account.type === "investment" && (
+          <>
+            <View style={styles.sectionHeader}>
+              <Text style={[styles.sectionTitle, { color: colors.primary }]}>Investment Activity</Text>
+            </View>
+            {accountInvTxns.length === 0 ? (
+              <View style={[styles.emptyTx, { backgroundColor: colors.card, borderColor: colors.border }]}>
+                <Feather name="inbox" size={32} color={colors.mutedForeground} />
+                <Text style={[styles.emptyTxText, { color: colors.mutedForeground }]}>No investment transactions yet</Text>
+              </View>
+            ) : (
+              <View style={[styles.txList, { backgroundColor: colors.card, borderColor: colors.border }]}>
+                {accountInvTxns.slice(0, 20).map((t, i) => (
+                  <View
+                    key={t.id}
+                    style={[
+                      styles.txRow,
+                      i < accountInvTxns.slice(0, 20).length - 1 && { borderBottomWidth: StyleSheet.hairlineWidth, borderBottomColor: colors.border },
+                    ]}
+                  >
+                    <View style={[styles.txIcon, { backgroundColor: colors.primary + "18" }]}>
+                      <Feather name="trending-up" size={18} color={colors.primary} />
+                    </View>
+                    <View style={styles.txInfo}>
+                      <Text style={[styles.txTitle, { color: colors.foreground }]} numberOfLines={1}>
+                        {t.name}
+                      </Text>
+                      <Text style={[styles.txDate, { color: colors.mutedForeground }]}>
+                        {t.ticker ? `${t.ticker} · ` : ""}{t.type}{t.quantity != null ? ` · ${t.quantity.toLocaleString("en-CA", { maximumFractionDigits: 4 })} units` : ""}
+                      </Text>
+                    </View>
+                    <View style={{ alignItems: "flex-end" }}>
+                      <Text style={[styles.txAmount, { color: colors.foreground }]}>
+                        ${t.amount.toFixed(2)}
+                      </Text>
+                      <Text style={{ fontSize: 11, color: colors.mutedForeground }}>
+                        {new Date(t.date + "T00:00:00").toLocaleDateString("en-US", { month: "short", day: "numeric" })}
+                      </Text>
+                    </View>
+                  </View>
+                ))}
+              </View>
+            )}
+          </>
         )}
 
         {/* ── Include in Networth toggle ── */}

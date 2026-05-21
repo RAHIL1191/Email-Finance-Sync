@@ -1735,6 +1735,9 @@ function PortfolioTab({ holdings, investmentTransactions, accounts, colors }: {
     return Array.from(map.entries());
   }, [sortedTxs]);
 
+  const [holdingsOpen, setHoldingsOpen] = useState(true);
+  const [activityOpen, setActivityOpen] = useState(true);
+
   const fmtCAD = (n: number) =>
     (n < 0 ? "-" : "") + "$" + Math.abs(n).toLocaleString("en-CA", { minimumFractionDigits: 2, maximumFractionDigits: 2 });
 
@@ -1764,8 +1767,15 @@ function PortfolioTab({ holdings, investmentTransactions, accounts, colors }: {
       {/* Holdings list */}
       {holdings.length > 0 && (
         <View style={{ paddingHorizontal: 16, marginTop: 12 }}>
-          <Text style={[ptSt.sectionTitle, { color: colors.mutedForeground }]}>HOLDINGS</Text>
-          {holdings.map((h) => {
+          <TouchableOpacity
+            style={{ flexDirection: "row", alignItems: "center", justifyContent: "space-between", paddingVertical: 4, marginBottom: 4 }}
+            onPress={() => { Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light); setHoldingsOpen((o) => !o); }}
+            activeOpacity={0.7}
+          >
+            <Text style={[ptSt.sectionTitle, { color: colors.mutedForeground }]}>HOLDINGS ({holdings.length})</Text>
+            <Feather name={holdingsOpen ? "chevron-up" : "chevron-down"} size={16} color={colors.mutedForeground} />
+          </TouchableOpacity>
+          {holdingsOpen && holdings.map((h) => {
             const gain = h.costBasis != null ? h.value - h.costBasis : null;
             const gainPct = h.costBasis != null && h.costBasis > 0 ? ((h.value - h.costBasis) / h.costBasis) * 100 : null;
             return (
@@ -1798,8 +1808,15 @@ function PortfolioTab({ holdings, investmentTransactions, accounts, colors }: {
       {/* Investment transactions */}
       {grouped.length > 0 && (
         <View style={{ paddingHorizontal: 16, marginTop: 20 }}>
-          <Text style={[ptSt.sectionTitle, { color: colors.mutedForeground }]}>ACTIVITY</Text>
-          {grouped.map(([date, txs]) => (
+          <TouchableOpacity
+            style={{ flexDirection: "row", alignItems: "center", justifyContent: "space-between", paddingVertical: 4, marginBottom: 4 }}
+            onPress={() => { Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light); setActivityOpen((o) => !o); }}
+            activeOpacity={0.7}
+          >
+            <Text style={[ptSt.sectionTitle, { color: colors.mutedForeground }]}>ACTIVITY ({investmentTransactions.length})</Text>
+            <Feather name={activityOpen ? "chevron-up" : "chevron-down"} size={16} color={colors.mutedForeground} />
+          </TouchableOpacity>
+          {activityOpen && grouped.map(([date, txs]) => (
             <View key={date}>
               <Text style={[ptSt.dateHeader, { color: colors.mutedForeground }]}>{fmtDate(date)}</Text>
               {txs.map((t) => (
