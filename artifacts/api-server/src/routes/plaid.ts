@@ -113,11 +113,11 @@ router.post("/plaid/create-link-token", async (req, res) => {
       } catch {
         // Access token is invalid (item was removed from Plaid) — fall back to fresh link.
         // The client will pass existing_item_id on exchange so we update rather than insert.
-        const response = await client.linkTokenCreate({ ...base, products: [Products.Transactions, Products.Investments] });
+        const response = await client.linkTokenCreate({ ...base, products: [Products.Transactions], optional_products: [Products.Investments] });
         res.json({ link_token: response.data.link_token, update_mode: false, stale_item: true });
       }
     } else {
-      const response = await client.linkTokenCreate({ ...base, products: [Products.Transactions, Products.Investments] });
+      const response = await client.linkTokenCreate({ ...base, products: [Products.Transactions], optional_products: [Products.Investments] });
       res.json({ link_token: response.data.link_token, update_mode: false });
     }
   } catch (err) {
@@ -172,6 +172,22 @@ router.post("/plaid/exchange-token", async (req, res) => {
     // 2. Fetch accounts
     const accountsRes = await client.accountsGet({ access_token });
     const plaidAccounts = accountsRes.data.accounts;
+
+    // Resolve real institution name from Plaid (ignore client-provided bank_name)
+    let resolvedBankName = bank_name ?? "Bank";
+    let resolvedBankColor = bank_color ?? "#1a56db";
+    const institutionId = accountsRes.data.item.institution_id;
+    if (institutionId) {
+      try {
+        const instRes = await client.institutionsGetById({
+          institution_id: institutionId,
+          country_codes: [CountryCode.Ca, CountryCode.Us],
+        });
+        resolvedBankName = instRes.data.institution.name;
+      } catch {
+        // fall back to client-provided name
+      }
+    }
 
     // 3. Fetch initial transactions via sync cursor
     let transactions: any[] = [];
@@ -258,8 +274,8 @@ router.post("/plaid/exchange-token", async (req, res) => {
       householdId: res.locals.householdId,
       itemId: item_id,
       accessToken: access_token,
-      bankName: bank_name ?? "Bank",
-      bankColor: bank_color ?? "#1a56db",
+      bankName: resolvedBankName,
+      bankColor: resolvedBankColor,
       cursor: cursor ?? null,
       connectedAt: new Date(),
       lastSyncedAt: new Date(),
@@ -267,6 +283,7 @@ router.post("/plaid/exchange-token", async (req, res) => {
 
     res.json({
       itemId: dbId,
+      institutionName: resolvedBankName,
       accounts: plaidAccounts.map((a) => ({
         plaidAccountId: a.account_id,
         name: a.name ?? a.official_name ?? "Account",
