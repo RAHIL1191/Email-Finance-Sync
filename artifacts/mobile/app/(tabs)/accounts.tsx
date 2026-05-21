@@ -468,35 +468,31 @@ function PlaidItemPanel({ item, onRelink }: { item: PlaidItem; onRelink: (item: 
           <Feather name="x-circle" size={14} color={colors.expense} />
         </TouchableOpacity>
       </View>
-      {showDelinkConfirm && (
-        <ConfirmModal
-          visible={showDelinkConfirm}
-          title="Delink Bank"
-          message={`Remove Plaid connection for ${item.bankName}? Your accounts and transactions are kept. You can re-add anytime.`}
-          confirmLabel="Delink"
-          confirmDestructive={false}
-          onCancel={() => setShowDelinkConfirm(false)}
-          onConfirm={() => {
-            setShowDelinkConfirm(false);
-            Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
-            delinkPlaid(item.itemId);
-          }}
-        />
-      )}
-      {showRemoveConfirm && (
-        <ConfirmModal
-          visible={showRemoveConfirm}
-          title="Remove Bank"
-          message={`Remove ${item.bankName} and delete all its linked accounts and transactions?`}
-          confirmLabel="Remove"
-          confirmDestructive
-          onCancel={() => setShowRemoveConfirm(false)}
-          onConfirm={() => {
-            setShowRemoveConfirm(false);
-            disconnectPlaid(item.itemId);
-          }}
-        />
-      )}
+      <ConfirmModal
+        visible={showDelinkConfirm}
+        title="Delink Bank"
+        message={`Remove Plaid connection for ${item.bankName}? Your accounts and transactions are kept. You can re-add anytime.`}
+        confirmLabel="Delink"
+        confirmDestructive={false}
+        onCancel={() => setShowDelinkConfirm(false)}
+        onConfirm={() => {
+          setShowDelinkConfirm(false);
+          Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
+          delinkPlaid(item.itemId);
+        }}
+      />
+      <ConfirmModal
+        visible={showRemoveConfirm}
+        title="Remove Bank"
+        message={`Remove ${item.bankName} and delete all its linked accounts and transactions?`}
+        confirmLabel="Remove"
+        confirmDestructive
+        onCancel={() => setShowRemoveConfirm(false)}
+        onConfirm={() => {
+          setShowRemoveConfirm(false);
+          disconnectPlaid(item.itemId);
+        }}
+      />
     </View>
   );
 }
@@ -694,20 +690,18 @@ function ConnectedInstitutionsModal({
         </ScrollView>
       </View>
 
-      {showEmailDisconnectConfirm && (
-        <ConfirmModal
-          visible={showEmailDisconnectConfirm}
-          title="Disconnect Email"
-          message="Remove email sync connection? Your imported transactions will remain."
-          confirmLabel="Disconnect"
-          confirmDestructive
-          onCancel={() => setShowEmailDisconnectConfirm(false)}
-          onConfirm={() => {
-            setShowEmailDisconnectConfirm(false);
-            disconnectEmail();
-          }}
-        />
-      )}
+      <ConfirmModal
+        visible={showEmailDisconnectConfirm}
+        title="Disconnect Email"
+        message="Remove email sync connection? Your imported transactions will remain."
+        confirmLabel="Disconnect"
+        confirmDestructive
+        onCancel={() => setShowEmailDisconnectConfirm(false)}
+        onConfirm={() => {
+          setShowEmailDisconnectConfirm(false);
+          disconnectEmail();
+        }}
+      />
     </Modal>
   );
 }
@@ -737,7 +731,10 @@ export default function AccountsScreen() {
     if (period === "Week") d.setDate(d.getDate() - 7);
     else if (period === "Month") d.setMonth(d.getMonth() - 1);
     else d.setFullYear(d.getFullYear() - 1);
-    return d.toISOString().slice(0, 10);
+    const y = d.getFullYear();
+    const m = String(d.getMonth() + 1).padStart(2, "0");
+    const day = String(d.getDate()).padStart(2, "0");
+    return `${y}-${m}-${day}`;
   }, [period]);
 
   const networthAccountIds = useMemo(
