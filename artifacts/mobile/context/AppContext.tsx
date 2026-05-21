@@ -875,16 +875,14 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
             const serverAcctsMap = new Map(serverAccts.map((a) => [a.id, a]));
             const byId = new Map(prev.map((a) => [a.id, a]));
 
-            // Upload any local accounts missing on the server (e.g. after a database wipe or reset)
+            // Upload any local accounts missing on the server in one bulk request (e.g. after a DB wipe)
             const missingOnServer = prev.filter((a) => !serverAcctsMap.has(a.id));
             if (missingOnServer.length > 0) {
-              missingOnServer.forEach((a) => {
-                fetch(`${getApiBase()}/api/accounts`, {
-                  method: "POST",
-                  headers: { "Content-Type": "application/json", "X-Household-ID": hId, "X-Device-ID": dId },
-                  body: JSON.stringify(a),
-                }).catch(() => {});
-              });
+              fetch(`${getApiBase()}/api/accounts/bulk-upsert`, {
+                method: "POST",
+                headers: { "Content-Type": "application/json", "X-Household-ID": hId, "X-Device-ID": dId },
+                body: JSON.stringify({ accounts: missingOnServer }),
+              }).catch((err) => console.warn("[API] startup account self-heal failed:", err));
             }
 
             const next = serverAccts.map((s) => {
@@ -1797,9 +1795,7 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
 
       if (toCreate.length > 0) {
         setAccounts((prev) => [...prev, ...toCreate]);
-        toCreate.forEach((a) =>
-          bgCall("/api/accounts", "POST", householdIdRef.current, deviceIdRef.current, a)
-        );
+        bgCall("/api/accounts/bulk-upsert", "POST", householdIdRef.current, deviceIdRef.current, { accounts: toCreate });
       }
       if (toMerge.length > 0) {
         setAccounts((prev) =>
@@ -2013,12 +2009,12 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
                 return upd ? { ...a, balance: upd.balance } : a;
               })
             );
-            // Send full account data so the server can upsert (recreate) missing accounts after a DB wipe
-            balanceUpdates.forEach(({ id, balance }) => {
+            // Send all balance updates + full account data in one bulk request
+            const bulkPayload = balanceUpdates.map(({ id, balance }) => {
               const fullAccount = accountsRef.current.find((a) => a.id === id);
-              const payload = fullAccount ? { ...fullAccount, balance } : { balance };
-              bgCall(`/api/accounts/${id}`, "PUT", householdIdRef.current, deviceIdRef.current, payload);
+              return fullAccount ? { ...fullAccount, balance } : { id, balance };
             });
+            bgCall("/api/accounts/bulk-upsert", "POST", householdIdRef.current, deviceIdRef.current, { accounts: bulkPayload });
           }
         }
 

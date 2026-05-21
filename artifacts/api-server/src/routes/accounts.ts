@@ -1,11 +1,63 @@
 import { Router } from "express";
-import { eq, and } from "drizzle-orm";
+import { eq, and, sql } from "drizzle-orm";
 import { db, accountsTable, insertAccountSchema, updateAccountSchema } from "@workspace/db";
 import { validate, requireHouseholdId } from "../middlewares/validate.js";
 
 const router = Router();
 
 router.use(requireHouseholdId);
+
+/** POST /api/accounts/bulk-upsert — upsert multiple accounts in one request */
+router.post("/accounts/bulk-upsert", async (req, res) => {
+  try {
+    const incoming: any[] = Array.isArray((req.body as any)?.accounts)
+      ? (req.body as any).accounts
+      : [];
+    if (incoming.length === 0) { res.json({ upserted: 0 }); return; }
+
+    const values = incoming
+      .filter((a) => a.id && a.name && a.bank && a.type && a.color)
+      .map((a) => ({
+        id: String(a.id),
+        householdId: res.locals.householdId,
+        deviceId: res.locals.deviceId ?? "unknown",
+        name: String(a.name),
+        bank: String(a.bank),
+        type: a.type as "checking" | "savings" | "credit" | "investment",
+        color: String(a.color),
+        balance: typeof a.balance === "number" ? a.balance : 0,
+        lastFour: a.lastFour ?? null,
+        plaidAccountId: a.plaidAccountId ?? null,
+        plaidItemId: a.plaidItemId ?? null,
+        accountHolder: a.accountHolder ?? null,
+      }));
+
+    if (values.length === 0) { res.json({ upserted: 0 }); return; }
+
+    await db
+      .insert(accountsTable)
+      .values(values)
+      .onConflictDoUpdate({
+        target: accountsTable.id,
+        set: {
+          name: sql`excluded.name`,
+          bank: sql`excluded.bank`,
+          type: sql`excluded.type`,
+          color: sql`excluded.color`,
+          balance: sql`excluded.balance`,
+          lastFour: sql`excluded.last_four`,
+          plaidAccountId: sql`excluded.plaid_account_id`,
+          plaidItemId: sql`excluded.plaid_item_id`,
+          updatedAt: new Date(),
+        },
+      });
+
+    res.json({ upserted: values.length });
+  } catch (err) {
+    req.log.error({ err }, "Failed to bulk upsert accounts");
+    res.status(500).json({ error: "Failed to bulk upsert accounts" });
+  }
+});
 
 /** GET /api/accounts — list all accounts for this household */
 router.get("/accounts", async (req, res) => {
