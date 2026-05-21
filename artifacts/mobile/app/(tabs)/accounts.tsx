@@ -725,6 +725,26 @@ export default function AccountsScreen() {
 
   const [activeView, setActiveView] = useState<"Accounts" | "Trends">("Accounts");
   const [period, setPeriod] = useState<Period>("Month");
+
+  const periodStart = useMemo(() => {
+    const d = new Date();
+    if (period === "Week") d.setDate(d.getDate() - 7);
+    else if (period === "Month") d.setMonth(d.getMonth() - 1);
+    else d.setFullYear(d.getFullYear() - 1);
+    return d.toISOString().slice(0, 10);
+  }, [period]);
+
+  const networthAccountIds = useMemo(
+    () => new Set(accounts.filter(isIncludedInNetworth).map((a) => a.id)),
+    [accounts]
+  );
+
+  const periodChange = useMemo(() =>
+    transactions
+      .filter((t) => t.date >= periodStart && networthAccountIds.has(t.accountId))
+      .reduce((s, t) => s + (t.type === "income" ? t.amount : -t.amount), 0),
+    [transactions, periodStart, networthAccountIds]
+  );
   const [showPeriodPicker, setShowPeriodPicker] = useState(false);
   const [showAdd, setShowAdd] = useState(false);
   const [showEmailConnect, setShowEmailConnect] = useState(false);
@@ -811,6 +831,18 @@ export default function AccountsScreen() {
           <Text style={[styles.netWorthAmount, { color: totalBalance < 0 ? colors.expense : colors.foreground }]}>
             {totalBalance < 0 ? "-" : ""}${Math.abs(totalBalance).toLocaleString("en-US", { minimumFractionDigits: 0, maximumFractionDigits: 0 })}
           </Text>
+          {periodChange !== 0 && (
+            <View style={{ flexDirection: "row", alignItems: "center", gap: 4, marginTop: 4 }}>
+              <Feather
+                name={periodChange >= 0 ? "trending-up" : "trending-down"}
+                size={13}
+                color={periodChange >= 0 ? colors.income : colors.expense}
+              />
+              <Text style={{ fontSize: 13, fontWeight: "500", color: periodChange >= 0 ? colors.income : colors.expense }}>
+                {periodChange >= 0 ? "+" : "−"}${Math.abs(periodChange).toLocaleString("en-US", { minimumFractionDigits: 0, maximumFractionDigits: 0 })} this {period.toLowerCase()}
+              </Text>
+            </View>
+          )}
           {(assetsTotal > 0 || liabilitiesTotal > 0) && (
             <View style={{ flexDirection: "row", gap: 16, marginTop: 6 }}>
               <Text style={[styles.netWorthSub, { color: colors.mutedForeground }]}>
