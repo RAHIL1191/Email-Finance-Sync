@@ -468,31 +468,35 @@ function PlaidItemPanel({ item, onRelink }: { item: PlaidItem; onRelink: (item: 
           <Feather name="x-circle" size={14} color={colors.expense} />
         </TouchableOpacity>
       </View>
-      <ConfirmModal
-        visible={showDelinkConfirm}
-        title="Delink Bank"
-        message={`Remove Plaid connection for ${item.bankName}? Your accounts and transactions are kept. You can re-add anytime.`}
-        confirmLabel="Delink"
-        confirmDestructive={false}
-        onCancel={() => setShowDelinkConfirm(false)}
-        onConfirm={() => {
-          setShowDelinkConfirm(false);
-          Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
-          delinkPlaid(item.itemId);
-        }}
-      />
-      <ConfirmModal
-        visible={showRemoveConfirm}
-        title="Remove Bank"
-        message={`Remove ${item.bankName} and delete all its linked accounts and transactions?`}
-        confirmLabel="Remove"
-        confirmDestructive
-        onCancel={() => setShowRemoveConfirm(false)}
-        onConfirm={() => {
-          setShowRemoveConfirm(false);
-          disconnectPlaid(item.itemId);
-        }}
-      />
+      {showDelinkConfirm && (
+        <ConfirmModal
+          visible={showDelinkConfirm}
+          title="Delink Bank"
+          message={`Remove Plaid connection for ${item.bankName}? Your accounts and transactions are kept. You can re-add anytime.`}
+          confirmLabel="Delink"
+          confirmDestructive={false}
+          onCancel={() => setShowDelinkConfirm(false)}
+          onConfirm={() => {
+            setShowDelinkConfirm(false);
+            Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
+            delinkPlaid(item.itemId);
+          }}
+        />
+      )}
+      {showRemoveConfirm && (
+        <ConfirmModal
+          visible={showRemoveConfirm}
+          title="Remove Bank"
+          message={`Remove ${item.bankName} and delete all its linked accounts and transactions?`}
+          confirmLabel="Remove"
+          confirmDestructive
+          onCancel={() => setShowRemoveConfirm(false)}
+          onConfirm={() => {
+            setShowRemoveConfirm(false);
+            disconnectPlaid(item.itemId);
+          }}
+        />
+      )}
     </View>
   );
 }
@@ -690,18 +694,20 @@ function ConnectedInstitutionsModal({
         </ScrollView>
       </View>
 
-      <ConfirmModal
-        visible={showEmailDisconnectConfirm}
-        title="Disconnect Email"
-        message="Remove email sync connection? Your imported transactions will remain."
-        confirmLabel="Disconnect"
-        confirmDestructive
-        onCancel={() => setShowEmailDisconnectConfirm(false)}
-        onConfirm={() => {
-          setShowEmailDisconnectConfirm(false);
-          disconnectEmail();
-        }}
-      />
+      {showEmailDisconnectConfirm && (
+        <ConfirmModal
+          visible={showEmailDisconnectConfirm}
+          title="Disconnect Email"
+          message="Remove email sync connection? Your imported transactions will remain."
+          confirmLabel="Disconnect"
+          confirmDestructive
+          onCancel={() => setShowEmailDisconnectConfirm(false)}
+          onConfirm={() => {
+            setShowEmailDisconnectConfirm(false);
+            disconnectEmail();
+          }}
+        />
+      )}
     </Modal>
   );
 }
