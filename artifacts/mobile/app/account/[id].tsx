@@ -981,6 +981,8 @@ export default function AccountDetailScreen() {
     [investmentTransactions, id, account]
   );
 
+  const [txOpen, setTxOpen] = useState(true);
+  const [invTxOpen, setInvTxOpen] = useState(true);
   const [selectedTx, setSelectedTx] = useState<Transaction | null>(null);
   const [showAllTx, setShowAllTx] = useState(false);
   const [showAddTx, setShowAddTx] = useState(false);
@@ -1152,27 +1154,33 @@ export default function AccountDetailScreen() {
         </View>
 
         {/* ── Recent Transactions ── */}
-        <View style={styles.sectionHeader}>
+        <TouchableOpacity
+          style={styles.sectionHeader}
+          onPress={() => { Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light); setTxOpen((o) => !o); }}
+          activeOpacity={0.7}
+        >
           <Text style={[styles.sectionTitle, { color: colors.primary }]}>
-            Recent Transactions
+            Recent Transactions{accountTxns.length > 0 ? ` (${accountTxns.length})` : ""}
           </Text>
-          {accountTxns.length > 0 && (
-            <TouchableOpacity
-              style={styles.viewAllBtn}
-              onPress={() => {
-                Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
-                setShowAllTx(true);
-              }}
-            >
-              <Text style={[styles.viewAllText, { color: colors.primary }]}>
-                View All
-              </Text>
-              <Feather name="chevron-right" size={15} color={colors.primary} />
-            </TouchableOpacity>
-          )}
-        </View>
+          <View style={{ flexDirection: "row", alignItems: "center", gap: 8 }}>
+            {txOpen && accountTxns.length > 0 && (
+              <TouchableOpacity
+                style={styles.viewAllBtn}
+                onPress={(e) => {
+                  e.stopPropagation();
+                  Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
+                  setShowAllTx(true);
+                }}
+              >
+                <Text style={[styles.viewAllText, { color: colors.primary }]}>View All</Text>
+                <Feather name="chevron-right" size={15} color={colors.primary} />
+              </TouchableOpacity>
+            )}
+            <Feather name={txOpen ? "chevron-up" : "chevron-down"} size={16} color={colors.primary} />
+          </View>
+        </TouchableOpacity>
 
-        {recentTxns.length === 0 ? (
+        {txOpen && (recentTxns.length === 0 ? (
           <View
             style={[
               styles.emptyTx,
@@ -1241,15 +1249,22 @@ export default function AccountDetailScreen() {
               );
             })}
           </View>
-        )}
+        ))}
 
         {/* ── Investment Activity (for investment accounts) ── */}
         {account.type === "investment" && (
           <>
-            <View style={styles.sectionHeader}>
-              <Text style={[styles.sectionTitle, { color: colors.primary }]}>Investment Activity</Text>
-            </View>
-            {accountInvTxns.length === 0 ? (
+            <TouchableOpacity
+              style={styles.sectionHeader}
+              onPress={() => { Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light); setInvTxOpen((o) => !o); }}
+              activeOpacity={0.7}
+            >
+              <Text style={[styles.sectionTitle, { color: colors.primary }]}>
+                Investment Activity{accountInvTxns.length > 0 ? ` (${accountInvTxns.length})` : ""}
+              </Text>
+              <Feather name={invTxOpen ? "chevron-up" : "chevron-down"} size={16} color={colors.primary} />
+            </TouchableOpacity>
+            {invTxOpen && (accountInvTxns.length === 0 ? (
               <View style={[styles.emptyTx, { backgroundColor: colors.card, borderColor: colors.border }]}>
                 <Feather name="inbox" size={32} color={colors.mutedForeground} />
                 <Text style={[styles.emptyTxText, { color: colors.mutedForeground }]}>No investment transactions yet</Text>
@@ -1286,7 +1301,7 @@ export default function AccountDetailScreen() {
                   </View>
                 ))}
               </View>
-            )}
+            ))}
           </>
         )}
 
