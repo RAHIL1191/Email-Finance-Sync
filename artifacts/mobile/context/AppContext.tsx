@@ -2231,14 +2231,23 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
   // ── Auto-sync every 3 hours, and on app foreground ─────────────────────────
   const isAutoSyncingRef = useRef(false);
   const lastAutoSyncRef = useRef<number>(0);
+  const lastBillCheckRef = useRef<number>(0);
   useEffect(() => {
     const THREE_HOURS = 3 * 60 * 60 * 1000;
+    const ONE_HOUR = 60 * 60 * 1000;
+
+    const checkBills = async () => {
+      const now = Date.now();
+      if (now - lastBillCheckRef.current < ONE_HOUR) return;
+      lastBillCheckRef.current = now;
+      try { await setupNotificationsOnInit(billsRef.current); } catch { /* ignore */ }
+    };
+
     const doAutoSync = async () => {
       if (isAutoSyncingRef.current) return;
       const now = Date.now();
       if (now - lastAutoSyncRef.current < THREE_HOURS) return;
       const items = plaidSyncRef.current.items;
-      if (items.length === 0) return;
       isAutoSyncingRef.current = true;
       lastAutoSyncRef.current = now;
       for (const item of items) {
@@ -2246,10 +2255,16 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
       }
       isAutoSyncingRef.current = false;
     };
+
+    const onForeground = () => {
+      checkBills();
+      doAutoSync();
+    };
+
     const sub = AppState.addEventListener("change", (state) => {
-      if (state === "active") doAutoSync();
+      if (state === "active") onForeground();
     });
-    const intervalId = setInterval(doAutoSync, THREE_HOURS);
+    const intervalId = setInterval(() => { checkBills(); doAutoSync(); }, THREE_HOURS);
     return () => { sub.remove(); clearInterval(intervalId); };
   }, []);
 
