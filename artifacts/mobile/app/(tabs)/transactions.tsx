@@ -1708,6 +1708,23 @@ function invTypeColor(type: string, colors: any, subtype?: string | null): strin
   return colors.mutedForeground;
 }
 
+const PERIOD_OPTIONS = ["All", "Month", "3 Months", "Year"] as const;
+type PeriodOpt = typeof PERIOD_OPTIONS[number];
+const TYPE_OPTIONS = ["All", "Buy", "Sell", "Dividend", "Interest", "Cash", "Fee", "Transfer", "Contribution", "Withdrawal"];
+
+function matchesTypeFilter(t: InvestmentTransaction, f: string): boolean {
+  if (f === "All") return true;
+  return invTypeLabel(t.type, t.subtype) === f;
+}
+
+function periodStart(p: PeriodOpt): string | null {
+  const now = new Date();
+  if (p === "Month") return new Date(now.getFullYear(), now.getMonth(), 1).toISOString().slice(0, 10);
+  if (p === "3 Months") { now.setMonth(now.getMonth() - 3); return now.toISOString().slice(0, 10); }
+  if (p === "Year") return new Date(now.getFullYear(), 0, 1).toISOString().slice(0, 10);
+  return null;
+}
+
 function PortfolioTab({ holdings, investmentTransactions, accounts, transactions, colors }: {
   holdings: Holding[];
   investmentTransactions: InvestmentTransaction[];
@@ -1720,24 +1737,35 @@ function PortfolioTab({ holdings, investmentTransactions, accounts, transactions
   const totalGain = totalCost > 0 ? totalValue - totalCost : 0;
   const totalGainPct = totalCost > 0 ? (totalGain / totalCost) * 100 : 0;
 
-  // Group investment transactions by date
-  const sortedTxs = useMemo(
-    () => [...investmentTransactions].sort((a, b) => b.date.localeCompare(a.date)),
-    [investmentTransactions]
-  );
+  const [holdingsOpen, setHoldingsOpen] = useState(true);
+  const [activityOpen, setActivityOpen] = useState(true);
+  const [breakdownOpen, setBreakdownOpen] = useState(false);
+  const [filterType, setFilterType] = useState("All");
+  const [filterAccountId, setFilterAccountId] = useState<string | null>(null);
+  const [filterPeriod, setFilterPeriod] = useState<PeriodOpt>("All");
+
+  const investAccounts = useMemo(() => accounts.filter((a) => a.type === "investment"), [accounts]);
+  const totalAccountBal = useMemo(() => investAccounts.reduce((s, a) => s + computeBalance(a, transactions), 0), [investAccounts, transactions]);
+  const totalCash = totalAccountBal - totalValue;
+
+  const filteredTxs = useMemo(() => {
+    const pStart = periodStart(filterPeriod);
+    return [...investmentTransactions]
+      .filter((t) => matchesTypeFilter(t, filterType))
+      .filter((t) => !filterAccountId || t.accountId === filterAccountId)
+      .filter((t) => !pStart || t.date.slice(0, 10) >= pStart)
+      .sort((a, b) => b.date.localeCompare(a.date));
+  }, [investmentTransactions, filterType, filterAccountId, filterPeriod]);
+
   const grouped = useMemo(() => {
     const map = new Map<string, InvestmentTransaction[]>();
-    for (const t of sortedTxs) {
+    for (const t of filteredTxs) {
       const key = t.date.slice(0, 10);
       if (!map.has(key)) map.set(key, []);
       map.get(key)!.push(t);
     }
     return Array.from(map.entries());
-  }, [sortedTxs]);
-
-  const [holdingsOpen, setHoldingsOpen] = useState(true);
-  const [activityOpen, setActivityOpen] = useState(true);
-  const [breakdownOpen, setBreakdownOpen] = useState(false);
+  }, [filteredTxs]);
 
   const fmtCAD = (n: number) =>
     (n < 0 ? "-" : "") + "$" + Math.abs(n).toLocaleString("en-CA", { minimumFractionDigits: 2, maximumFractionDigits: 2 });
@@ -1747,47 +1775,53 @@ function PortfolioTab({ holdings, investmentTransactions, accounts, transactions
     return dt.toLocaleDateString("en-CA", { month: "short", day: "numeric", year: "numeric" });
   };
 
+  const chip = (label: string, active: boolean, onPress: () => void, activeColor?: string) => (
+    <TouchableOpacity
+      key={label}
+      onPress={() => { Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light); onPress(); }}
+      style={{ paddingHorizontal: 12, paddingVertical: 5, borderRadius: 20, borderWidth: 1,
+        borderColor: active ? (activeColor ?? colors.primary) : colors.border,
+        backgroundColor: active ? (activeColor ?? colors.primary) + "18" : "transparent", marginRight: 6 }}
+      activeOpacity={0.7}
+    >
+      <Text style={{ fontSize: 12, fontFamily: "Inter_500Medium", color: active ? (activeColor ?? colors.primary) : colors.mutedForeground }}>{label}</Text>
+    </TouchableOpacity>
+  );
+
   return (
     <ScrollView style={{ flex: 1 }} contentContainerStyle={{ paddingBottom: 120 }} showsVerticalScrollIndicator={false}>
       {/* Portfolio summary card */}
-      {(() => {
-        const investAccounts = accounts.filter((a) => a.type === "investment");
-        const totalAccountBal = investAccounts.reduce((s, a) => s + computeBalance(a, transactions), 0);
-        const totalCash = totalAccountBal - totalValue;
-        return (
-          <View style={[ptSt.summaryCard, { backgroundColor: colors.card, borderColor: colors.border }]}>
-            <Text style={[ptSt.summaryLabel, { color: colors.mutedForeground }]}>Total Portfolio Value</Text>
-            <Text style={[ptSt.summaryValue, { color: colors.foreground }]}>{fmtCAD(totalValue)}</Text>
-            {totalCost > 0 && (
-              <View style={ptSt.gainRow}>
-                <Text style={[ptSt.gainAmt, { color: totalGain >= 0 ? "#22c55e" : "#ef4444" }]}>
-                  {totalGain >= 0 ? "+" : ""}{fmtCAD(totalGain)}
-                </Text>
-                <Text style={[ptSt.gainPct, { color: totalGain >= 0 ? "#22c55e" : "#ef4444" }]}>
-                  ({totalGainPct >= 0 ? "+" : ""}{totalGainPct.toFixed(2)}%)
-                </Text>
-              </View>
-            )}
-            {totalAccountBal > 0 && (
-              <View style={[ptSt.gainRow, { marginTop: 10, paddingTop: 10, borderTopWidth: 1, borderTopColor: colors.border, gap: 16 }]}>
-                <View style={{ alignItems: "center" }}>
-                  <Text style={[ptSt.summaryLabel, { color: colors.mutedForeground }]}>ACCOUNT TOTAL</Text>
-                  <Text style={[ptSt.holdingValue, { color: colors.foreground }]}>{fmtCAD(totalAccountBal)}</Text>
-                </View>
-                {totalCash > 0.01 && (
-                  <View style={{ alignItems: "center" }}>
-                    <Text style={[ptSt.summaryLabel, { color: colors.mutedForeground }]}>CASH / OTHER</Text>
-                    <Text style={[ptSt.holdingValue, { color: "#f59e0b" }]}>{fmtCAD(totalCash)}</Text>
-                  </View>
-                )}
+      <View style={[ptSt.summaryCard, { backgroundColor: colors.card, borderColor: colors.border }]}>
+        <Text style={[ptSt.summaryLabel, { color: colors.mutedForeground }]}>Total Portfolio Value</Text>
+        <Text style={[ptSt.summaryValue, { color: colors.foreground }]}>{fmtCAD(totalValue)}</Text>
+        {totalCost > 0 && (
+          <View style={ptSt.gainRow}>
+            <Text style={[ptSt.gainAmt, { color: totalGain >= 0 ? "#22c55e" : "#ef4444" }]}>
+              {totalGain >= 0 ? "+" : ""}{fmtCAD(totalGain)}
+            </Text>
+            <Text style={[ptSt.gainPct, { color: totalGain >= 0 ? "#22c55e" : "#ef4444" }]}>
+              ({totalGainPct >= 0 ? "+" : ""}{totalGainPct.toFixed(2)}%)
+            </Text>
+          </View>
+        )}
+        {totalAccountBal > 0 && (
+          <View style={[ptSt.gainRow, { marginTop: 10, paddingTop: 10, borderTopWidth: 1, borderTopColor: colors.border, gap: 16 }]}>
+            <View style={{ alignItems: "center" }}>
+              <Text style={[ptSt.summaryLabel, { color: colors.mutedForeground }]}>ACCOUNT TOTAL</Text>
+              <Text style={[ptSt.holdingValue, { color: colors.foreground }]}>{fmtCAD(totalAccountBal)}</Text>
+            </View>
+            {totalCash > 0.01 && (
+              <View style={{ alignItems: "center" }}>
+                <Text style={[ptSt.summaryLabel, { color: colors.mutedForeground }]}>CASH / OTHER</Text>
+                <Text style={[ptSt.holdingValue, { color: "#f59e0b" }]}>{fmtCAD(totalCash)}</Text>
               </View>
             )}
           </View>
-        );
-      })()}
+        )}
+      </View>
 
       {/* Per-account reconciliation */}
-      {accounts.filter((a) => a.type === "investment").length > 0 && (
+      {investAccounts.length > 0 && (
         <View style={{ paddingHorizontal: 16, marginTop: 12 }}>
           <TouchableOpacity
             style={{ flexDirection: "row", alignItems: "center", justifyContent: "space-between", paddingVertical: 4, marginBottom: 4 }}
@@ -1797,7 +1831,7 @@ function PortfolioTab({ holdings, investmentTransactions, accounts, transactions
             <Text style={[ptSt.sectionTitle, { color: colors.mutedForeground }]}>ACCOUNT BREAKDOWN</Text>
             <Feather name={breakdownOpen ? "chevron-up" : "chevron-down"} size={16} color={colors.mutedForeground} />
           </TouchableOpacity>
-          {breakdownOpen && accounts.filter((a) => a.type === "investment").map((acc) => {
+          {breakdownOpen && investAccounts.map((acc) => {
             const accHoldings = holdings.filter((h) => h.accountId === acc.id || h.plaidAccountId === acc.plaidAccountId);
             const holdingsVal = accHoldings.reduce((s, h) => s + h.value, 0);
             const liveBalance = computeBalance(acc, transactions);
@@ -1810,17 +1844,9 @@ function PortfolioTab({ holdings, investmentTransactions, accounts, transactions
                   <Text style={[ptSt.holdingValue, { color: colors.foreground }]}>{fmtCAD(liveBalance)}</Text>
                 </View>
                 <View style={{ flexDirection: "row", gap: 12 }}>
-                  <Text style={[ptSt.holdingSub, { color: colors.mutedForeground }]}>
-                    Holdings: {fmtCAD(holdingsVal)}
-                  </Text>
-                  {hasCash && (
-                    <Text style={[ptSt.holdingSub, { color: "#f59e0b" }]}>
-                      Cash/Other: {fmtCAD(cash)}
-                    </Text>
-                  )}
-                  {!hasCash && holdingsVal > 0 && (
-                    <Text style={[ptSt.holdingSub, { color: "#22c55e" }]}>✓ Fully invested</Text>
-                  )}
+                  <Text style={[ptSt.holdingSub, { color: colors.mutedForeground }]}>Holdings: {fmtCAD(holdingsVal)}</Text>
+                  {hasCash && <Text style={[ptSt.holdingSub, { color: "#f59e0b" }]}>Cash/Other: {fmtCAD(cash)}</Text>}
+                  {!hasCash && holdingsVal > 0 && <Text style={[ptSt.holdingSub, { color: "#22c55e" }]}>✓ Fully invested</Text>}
                 </View>
               </View>
             );
@@ -1869,38 +1895,72 @@ function PortfolioTab({ holdings, investmentTransactions, accounts, transactions
         </View>
       )}
 
-      {/* Investment transactions */}
-      {grouped.length > 0 && (
-        <View style={{ paddingHorizontal: 16, marginTop: 20 }}>
+      {/* Investment transaction filters + activity */}
+      {investmentTransactions.length > 0 && (
+        <View style={{ marginTop: 20 }}>
           <TouchableOpacity
-            style={{ flexDirection: "row", alignItems: "center", justifyContent: "space-between", paddingVertical: 4, marginBottom: 4 }}
+            style={{ flexDirection: "row", alignItems: "center", justifyContent: "space-between", paddingVertical: 4, marginBottom: 8, paddingHorizontal: 16 }}
             onPress={() => { Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light); setActivityOpen((o) => !o); }}
             activeOpacity={0.7}
           >
-            <Text style={[ptSt.sectionTitle, { color: colors.mutedForeground }]}>ACTIVITY ({investmentTransactions.length})</Text>
+            <Text style={[ptSt.sectionTitle, { color: colors.mutedForeground }]}>ACTIVITY ({filteredTxs.length}/{investmentTransactions.length})</Text>
             <Feather name={activityOpen ? "chevron-up" : "chevron-down"} size={16} color={colors.mutedForeground} />
           </TouchableOpacity>
-          {activityOpen && grouped.map(([date, txs]) => (
-            <View key={date}>
-              <Text style={[ptSt.dateHeader, { color: colors.mutedForeground }]}>{fmtDate(date)}</Text>
-              {txs.map((t) => (
-                <View key={t.id} style={[ptSt.invTxRow, { backgroundColor: colors.card, borderColor: colors.border }]}>
-                  <View style={[ptSt.typeBadge, { backgroundColor: invTypeColor(t.type, colors, t.subtype) + "22" }]}>
-                    <Text style={[ptSt.typeText, { color: invTypeColor(t.type, colors, t.subtype) }]}>{invTypeLabel(t.type, t.subtype)}</Text>
+
+          {activityOpen && (
+            <>
+              {/* Date period chips */}
+              <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={{ paddingHorizontal: 16, marginBottom: 6 }}>
+                {PERIOD_OPTIONS.map((p) => chip(p, filterPeriod === p, () => setFilterPeriod(p)))}
+              </ScrollView>
+
+              {/* Account chips */}
+              {investAccounts.length > 1 && (
+                <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={{ paddingHorizontal: 16, marginBottom: 6 }}>
+                  {chip("All Accounts", filterAccountId === null, () => setFilterAccountId(null))}
+                  {investAccounts.map((a) => chip(a.name, filterAccountId === a.id, () => setFilterAccountId(filterAccountId === a.id ? null : a.id)))}
+                </ScrollView>
+              )}
+
+              {/* Type chips */}
+              <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={{ paddingHorizontal: 16, marginBottom: 10 }}>
+                {TYPE_OPTIONS.map((tp) => {
+                  const color = tp === "All" ? colors.primary : invTypeColor(tp.toLowerCase(), colors, tp.toLowerCase());
+                  return chip(tp, filterType === tp, () => setFilterType(tp), color);
+                })}
+              </ScrollView>
+
+              {/* Grouped transactions */}
+              <View style={{ paddingHorizontal: 16 }}>
+                {grouped.length === 0 && (
+                  <Text style={{ color: colors.mutedForeground, textAlign: "center", paddingVertical: 20, fontSize: 13, fontFamily: "Inter_400Regular" }}>
+                    No transactions match the selected filters.
+                  </Text>
+                )}
+                {grouped.map(([date, txs]) => (
+                  <View key={date}>
+                    <Text style={[ptSt.dateHeader, { color: colors.mutedForeground }]}>{fmtDate(date)}</Text>
+                    {txs.map((t) => (
+                      <View key={t.id} style={[ptSt.invTxRow, { backgroundColor: colors.card, borderColor: colors.border }]}>
+                        <View style={[ptSt.typeBadge, { backgroundColor: invTypeColor(t.type, colors, t.subtype) + "22" }]}>
+                          <Text style={[ptSt.typeText, { color: invTypeColor(t.type, colors, t.subtype) }]}>{invTypeLabel(t.type, t.subtype)}</Text>
+                        </View>
+                        <View style={{ flex: 1 }}>
+                          <Text style={[ptSt.invTxName, { color: colors.foreground }]} numberOfLines={1}>{t.name}</Text>
+                          {t.ticker && (
+                            <Text style={[ptSt.invTxSub, { color: colors.mutedForeground }]}>
+                              {t.ticker}{t.quantity != null ? ` · ${t.quantity.toLocaleString("en-CA", { maximumFractionDigits: 4 })} units` : ""}
+                            </Text>
+                          )}
+                        </View>
+                        <Text style={[ptSt.invTxAmt, { color: colors.foreground }]}>{fmtCAD(t.amount)}</Text>
+                      </View>
+                    ))}
                   </View>
-                  <View style={{ flex: 1 }}>
-                    <Text style={[ptSt.invTxName, { color: colors.foreground }]} numberOfLines={1}>{t.name}</Text>
-                    {t.ticker && (
-                      <Text style={[ptSt.invTxSub, { color: colors.mutedForeground }]}>
-                        {t.ticker}{t.quantity != null ? ` · ${t.quantity.toLocaleString("en-CA", { maximumFractionDigits: 4 })} units` : ""}
-                      </Text>
-                    )}
-                  </View>
-                  <Text style={[ptSt.invTxAmt, { color: colors.foreground }]}>{fmtCAD(t.amount)}</Text>
-                </View>
-              ))}
-            </View>
-          ))}
+                ))}
+              </View>
+            </>
+          )}
         </View>
       )}
 
