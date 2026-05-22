@@ -2151,7 +2151,7 @@ function PortfolioTab({ holdings, investmentTransactions, accounts, transactions
             onPress={() => { Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light); setActivityOpen((o) => !o); }}
             activeOpacity={0.7}
           >
-            <Text style={[ptSt.sectionTitle, { color: colors.mutedForeground }]}>ACTIVITY ({filteredTxs.length}/{investmentTransactions.length})</Text>
+            <Text style={[ptSt.sectionTitle, { color: colors.mutedForeground }]}>ACTIVITY (LAST 6 MONTHS)</Text>
             <Feather name={activityOpen ? "chevron-up" : "chevron-down"} size={16} color={colors.mutedForeground} />
           </TouchableOpacity>
 
