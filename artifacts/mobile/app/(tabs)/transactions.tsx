@@ -1748,6 +1748,11 @@ function PortfolioTab({ holdings, investmentTransactions, accounts, transactions
   const totalAccountBal = useMemo(() => investAccounts.reduce((s, a) => s + computeBalance(a, transactions), 0), [investAccounts, transactions]);
   const totalCash = totalAccountBal - totalValue;
 
+  const filteredHoldings = useMemo(() => {
+    if (!filterAccountId) return holdings;
+    return holdings.filter((h) => h.accountId === filterAccountId || h.plaidAccountId === accounts.find((a) => a.id === filterAccountId)?.plaidAccountId);
+  }, [holdings, filterAccountId, accounts]);
+
   const filteredTxs = useMemo(() => {
     const pStart = periodStart(filterPeriod);
     return [...investmentTransactions]
@@ -1854,18 +1859,46 @@ function PortfolioTab({ holdings, investmentTransactions, accounts, transactions
         </View>
       )}
 
+      {/* Filter bar — always visible when there's any data */}
+      {(holdings.length > 0 || investmentTransactions.length > 0) && (
+        <View style={{ marginTop: 12 }}>
+          {/* Account chips */}
+          {investAccounts.length > 1 && (
+            <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={{ paddingHorizontal: 16, marginBottom: 6 }}>
+              {chip("All", filterAccountId === null, () => setFilterAccountId(null))}
+              {investAccounts.map((a) => chip(a.name, filterAccountId === a.id, () => setFilterAccountId(filterAccountId === a.id ? null : a.id)))}
+            </ScrollView>
+          )}
+          {/* Date period chips (for activity) */}
+          {investmentTransactions.length > 0 && (
+            <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={{ paddingHorizontal: 16, marginBottom: 6 }}>
+              {PERIOD_OPTIONS.map((p) => chip(p, filterPeriod === p, () => setFilterPeriod(p)))}
+            </ScrollView>
+          )}
+          {/* Type chips (for activity) */}
+          {investmentTransactions.length > 0 && (
+            <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={{ paddingHorizontal: 16, marginBottom: 6 }}>
+              {TYPE_OPTIONS.map((tp) => {
+                const color = tp === "All" ? colors.primary : invTypeColor(tp.toLowerCase(), colors, tp.toLowerCase());
+                return chip(tp, filterType === tp, () => setFilterType(tp), color);
+              })}
+            </ScrollView>
+          )}
+        </View>
+      )}
+
       {/* Holdings list */}
       {holdings.length > 0 && (
-        <View style={{ paddingHorizontal: 16, marginTop: 12 }}>
+        <View style={{ paddingHorizontal: 16, marginTop: 8 }}>
           <TouchableOpacity
             style={{ flexDirection: "row", alignItems: "center", justifyContent: "space-between", paddingVertical: 4, marginBottom: 4 }}
             onPress={() => { Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light); setHoldingsOpen((o) => !o); }}
             activeOpacity={0.7}
           >
-            <Text style={[ptSt.sectionTitle, { color: colors.mutedForeground }]}>HOLDINGS ({holdings.length})</Text>
+            <Text style={[ptSt.sectionTitle, { color: colors.mutedForeground }]}>HOLDINGS ({filteredHoldings.length})</Text>
             <Feather name={holdingsOpen ? "chevron-up" : "chevron-down"} size={16} color={colors.mutedForeground} />
           </TouchableOpacity>
-          {holdingsOpen && holdings.map((h) => {
+          {holdingsOpen && filteredHoldings.map((h) => {
             const gain = h.costBasis != null ? h.value - h.costBasis : null;
             const gainPct = h.costBasis != null && h.costBasis > 0 ? ((h.value - h.costBasis) / h.costBasis) * 100 : null;
             return (
@@ -1909,27 +1942,6 @@ function PortfolioTab({ holdings, investmentTransactions, accounts, transactions
 
           {activityOpen && (
             <>
-              {/* Date period chips */}
-              <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={{ paddingHorizontal: 16, marginBottom: 6 }}>
-                {PERIOD_OPTIONS.map((p) => chip(p, filterPeriod === p, () => setFilterPeriod(p)))}
-              </ScrollView>
-
-              {/* Account chips */}
-              {investAccounts.length > 1 && (
-                <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={{ paddingHorizontal: 16, marginBottom: 6 }}>
-                  {chip("All Accounts", filterAccountId === null, () => setFilterAccountId(null))}
-                  {investAccounts.map((a) => chip(a.name, filterAccountId === a.id, () => setFilterAccountId(filterAccountId === a.id ? null : a.id)))}
-                </ScrollView>
-              )}
-
-              {/* Type chips */}
-              <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={{ paddingHorizontal: 16, marginBottom: 10 }}>
-                {TYPE_OPTIONS.map((tp) => {
-                  const color = tp === "All" ? colors.primary : invTypeColor(tp.toLowerCase(), colors, tp.toLowerCase());
-                  return chip(tp, filterType === tp, () => setFilterType(tp), color);
-                })}
-              </ScrollView>
-
               {/* Grouped transactions */}
               <View style={{ paddingHorizontal: 16 }}>
                 {grouped.length === 0 && (
