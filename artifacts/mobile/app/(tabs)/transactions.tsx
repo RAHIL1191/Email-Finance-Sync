@@ -1763,6 +1763,40 @@ function PortfolioTab({ holdings, investmentTransactions, accounts, colors }: {
         )}
       </View>
 
+      {/* Per-account reconciliation */}
+      {accounts.filter((a) => a.type === "investment").length > 0 && (
+        <View style={{ paddingHorizontal: 16, marginTop: 12 }}>
+          <Text style={[ptSt.sectionTitle, { color: colors.mutedForeground, marginBottom: 8 }]}>ACCOUNT BREAKDOWN</Text>
+          {accounts.filter((a) => a.type === "investment").map((acc) => {
+            const accHoldings = holdings.filter((h) => h.accountId === acc.id || h.plaidAccountId === acc.plaidAccountId);
+            const holdingsVal = accHoldings.reduce((s, h) => s + h.value, 0);
+            const cash = acc.balance - holdingsVal;
+            const hasCash = cash > 0.01;
+            return (
+              <View key={acc.id} style={[ptSt.holdingRow, { backgroundColor: colors.card, borderColor: colors.border, flexDirection: "column", gap: 6 }]}>
+                <View style={{ flexDirection: "row", justifyContent: "space-between", alignItems: "center" }}>
+                  <Text style={[ptSt.holdingName, { color: colors.foreground }]} numberOfLines={1}>{acc.name}</Text>
+                  <Text style={[ptSt.holdingValue, { color: colors.foreground }]}>{fmtCAD(acc.balance)}</Text>
+                </View>
+                <View style={{ flexDirection: "row", gap: 12 }}>
+                  <Text style={[ptSt.holdingSub, { color: colors.mutedForeground }]}>
+                    Holdings: {fmtCAD(holdingsVal)}
+                  </Text>
+                  {hasCash && (
+                    <Text style={[ptSt.holdingSub, { color: "#f59e0b" }]}>
+                      Cash/Other: {fmtCAD(cash)}
+                    </Text>
+                  )}
+                  {!hasCash && holdingsVal > 0 && (
+                    <Text style={[ptSt.holdingSub, { color: "#22c55e" }]}>✓ Fully invested</Text>
+                  )}
+                </View>
+              </View>
+            );
+          })}
+        </View>
+      )}
+
       {/* Holdings list */}
       {holdings.length > 0 && (
         <View style={{ paddingHorizontal: 16, marginTop: 12 }}>
