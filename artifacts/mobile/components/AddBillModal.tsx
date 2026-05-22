@@ -92,9 +92,8 @@ export default function AddBillModal({ visible, onClose }: Props) {
   const [showDatePicker, setShowDatePicker] = useState(false);
   const [showCatPicker, setShowCatPicker] = useState(false);
   const [isRecurring, setIsRecurring] = useState(true);
-  const [frequency, setFrequency] = useState<"weekly" | "monthly" | "yearly">(
-    "monthly"
-  );
+  const [frequency, setFrequency] = useState<"weekly" | "monthly" | "yearly">("monthly");
+  const [remindDays, setRemindDays] = useState("3");
 
   const handleSave = () => {
     if (!title.trim()) {
@@ -115,11 +114,13 @@ export default function AddBillModal({ visible, onClose }: Props) {
       isPaid: false,
       isRecurring,
       frequency: isRecurring ? frequency : undefined,
+      remindDays,
     });
     setTitle("");
     setAmount("");
     setCategory("Other");
     setDueDate(new Date());
+    setRemindDays("3");
     onClose();
   };
 
@@ -235,6 +236,29 @@ export default function AddBillModal({ visible, onClose }: Props) {
               </Text>
               <Feather name="chevron-right" size={16} color={colors.mutedForeground} />
             </TouchableOpacity>
+          </View>
+
+          <View style={styles.section}>
+            <Text style={[styles.label, { color: colors.mutedForeground }]}>Remind Me</Text>
+            <View style={styles.freqRow}>
+              {(["1", "2", "3", "5", "7", "14"] as const).map((d) => (
+                <TouchableOpacity
+                  key={d}
+                  style={[
+                    styles.remindBtn,
+                    { backgroundColor: remindDays === d ? colors.primary : colors.muted },
+                  ]}
+                  onPress={() => setRemindDays(d)}
+                >
+                  <Text style={[styles.freqText, { color: remindDays === d ? "#fff" : colors.mutedForeground }]}>
+                    {d}d
+                  </Text>
+                </TouchableOpacity>
+              ))}
+            </View>
+            <Text style={[styles.remindHint, { color: colors.mutedForeground }]}>
+              Notify {remindDays} day{remindDays !== "1" ? "s" : ""} before due date
+            </Text>
           </View>
 
           <View style={styles.section}>
@@ -381,6 +405,18 @@ const styles = StyleSheet.create({
   freqText: {
     fontSize: 13,
     fontFamily: "Inter_500Medium",
+  },
+  remindBtn: {
+    flex: 1,
+    paddingVertical: 10,
+    borderRadius: 10,
+    alignItems: "center",
+  },
+  remindHint: {
+    fontSize: 12,
+    fontFamily: "Inter_400Regular",
+    textAlign: "center",
+    marginTop: 2,
   },
   overlay: { flex: 1, backgroundColor: "rgba(0,0,0,0.4)" },
   bottomSheetWrap: {

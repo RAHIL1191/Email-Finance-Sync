@@ -15,6 +15,7 @@ interface BillLike {
   amount: number;
   dueDate: string;
   isPaid: boolean;
+  remindDays?: string;
 }
 
 // ─── Lazy expo-notifications import + handler init ────────────────────────────
@@ -142,14 +143,15 @@ export async function scheduleBillNotifications(bill: BillLike): Promise<void> {
 
     if (ids[bill.id]) await cancelIds(ids[bill.id]);
 
-    // Upcoming: 3 days before due date
+    // Upcoming: remindDays before due date (default 3)
+    const remindOffset = Math.max(1, parseInt(bill.remindDays ?? "3") || 3);
     if (prefs.bill_upcoming !== false) {
-      const triggerDate = buildTriggerDate(bill.dueDate, -3, hour, minute);
+      const triggerDate = buildTriggerDate(bill.dueDate, -remindOffset, hour, minute);
       if (triggerDate) {
         const id = await N.scheduleNotificationAsync({
           content: {
             title: "📅 Bill Due Soon",
-            body: `${bill.title} — $${bill.amount.toFixed(2)} is due in 3 days.`,
+            body: `${bill.title} — $${bill.amount.toFixed(2)} is due in ${remindOffset} day${remindOffset !== 1 ? "s" : ""}.`,
             sound: true,
             data: { billId: bill.id, type: "upcoming" },
           },
