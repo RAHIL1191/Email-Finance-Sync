@@ -608,19 +608,24 @@ function TaskCard({ task, onToggle, onEdit, onDelete }: {
   onDelete: () => void;
 }) {
   const colors = useColors();
-  const dueDate  = new Date(task.dueDate);
-  const now      = new Date();
-  const daysLeft = Math.ceil((dueDate.getTime() - now.getTime()) / 86400000);
+  const dateStr = task.dueDate.slice(0, 10);
+  const [y, m, d] = dateStr.split("-").map(Number);
+  const localDue = new Date(y, m - 1, d);
+
+  const todayLocal = new Date();
+  const midnightNow = new Date(todayLocal.getFullYear(), todayLocal.getMonth(), todayLocal.getDate());
+
+  const daysLeft = Math.round((localDue.getTime() - midnightNow.getTime()) / 86400000);
   const isOver   = daysLeft < 0 && !task.isCompleted;
   const isSoon   = daysLeft >= 0 && daysLeft <= 3 && !task.isCompleted;
   const pColor   = PRIORITY_COLORS[task.priority];
 
   const dueTxt = task.isCompleted
-    ? dueDate.toLocaleDateString("en-US", { month: "short", day: "numeric" })
+    ? localDue.toLocaleDateString("en-US", { month: "short", day: "numeric" })
     : isOver   ? `${Math.abs(daysLeft)}d overdue`
     : daysLeft === 0 ? "Due today"
     : daysLeft === 1 ? "Due tomorrow"
-    : `Due ${dueDate.toLocaleDateString("en-US", { month: "short", day: "numeric" })}`;
+    : `Due ${localDue.toLocaleDateString("en-US", { month: "short", day: "numeric" })}`;
 
   const dueColor = task.isCompleted ? colors.mutedForeground : isOver ? "#ef4444" : isSoon ? "#f59e0b" : colors.mutedForeground;
 
