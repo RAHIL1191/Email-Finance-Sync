@@ -1806,6 +1806,7 @@ function PortfolioTab({ holdings, investmentTransactions, accounts, transactions
   const [holdingsOpen, setHoldingsOpen] = useState(true);
   const [activityOpen, setActivityOpen] = useState(true);
   const [breakdownOpen, setBreakdownOpen] = useState(false);
+  const [showBreakdown, setShowBreakdown] = useState(false);
 
   const investAccounts = accounts.filter((a) => a.type === "investment");
   const totalAccountBal = investAccounts.reduce((s, a) => s + computeBalance(a, transactions), 0);
@@ -1844,7 +1845,7 @@ function PortfolioTab({ holdings, investmentTransactions, accounts, transactions
       {/* Portfolio summary card */}
       <View style={[ptSt.summaryCard, { backgroundColor: colors.card, borderColor: colors.border }]}>
         <Text style={[ptSt.summaryLabel, { color: colors.mutedForeground }]}>Total Portfolio Value</Text>
-        <Text style={[ptSt.summaryValue, { color: colors.foreground }]}>{fmtCAD(totalValue)}</Text>
+        <Text style={[ptSt.summaryValue, { color: colors.foreground }]}>{fmtCAD(totalAccountBal)}</Text>
         {totalCost > 0 && (
           <View style={ptSt.gainRow}>
             <Text style={[ptSt.gainAmt, { color: totalGain >= 0 ? "#22c55e" : "#ef4444" }]}>
@@ -1855,16 +1856,27 @@ function PortfolioTab({ holdings, investmentTransactions, accounts, transactions
             </Text>
           </View>
         )}
-        {totalAccountBal > 0 && (
-          <View style={[ptSt.gainRow, { marginTop: 10, paddingTop: 10, borderTopWidth: 1, borderTopColor: colors.border, gap: 16 }]}>
-            <View style={{ alignItems: "center" }}>
-              <Text style={[ptSt.summaryLabel, { color: colors.mutedForeground }]}>ACCOUNT TOTAL</Text>
-              <Text style={[ptSt.holdingValue, { color: colors.foreground }]}>{fmtCAD(totalAccountBal)}</Text>
+        {totalAccountBal > 0 && totalCash > 0.01 && (
+          <View style={{ marginTop: 12, paddingTop: 12, borderTopWidth: StyleSheet.hairlineWidth, borderTopColor: colors.border }}>
+            <View style={{ flexDirection: "row", alignItems: "center", justifyContent: "space-between" }}>
+              <Text style={[ptSt.summaryLabel, { color: colors.mutedForeground }]}>Show Breakdown</Text>
+              <Switch
+                value={showBreakdown}
+                onValueChange={setShowBreakdown}
+                trackColor={{ false: colors.muted, true: colors.primary + "66" }}
+                thumbColor={showBreakdown ? colors.primary : colors.mutedForeground}
+              />
             </View>
-            {totalCash > 0.01 && (
-              <View style={{ alignItems: "center" }}>
-                <Text style={[ptSt.summaryLabel, { color: colors.mutedForeground }]}>CASH / OTHER</Text>
-                <Text style={[ptSt.holdingValue, { color: "#f59e0b" }]}>{fmtCAD(totalCash)}</Text>
+            {showBreakdown && (
+              <View style={{ flexDirection: "row", gap: 20, marginTop: 10 }}>
+                <View>
+                  <Text style={[ptSt.summaryLabel, { color: colors.mutedForeground }]}>PLAID HOLDINGS</Text>
+                  <Text style={[ptSt.holdingValue, { color: colors.foreground }]}>{fmtCAD(totalValue)}</Text>
+                </View>
+                <View>
+                  <Text style={[ptSt.summaryLabel, { color: colors.mutedForeground }]}>CASH / OTHER</Text>
+                  <Text style={[ptSt.holdingValue, { color: "#f59e0b" }]}>{fmtCAD(totalCash)}</Text>
+                </View>
               </View>
             )}
           </View>
