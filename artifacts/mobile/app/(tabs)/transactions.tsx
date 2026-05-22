@@ -1749,20 +1749,41 @@ function PortfolioTab({ holdings, investmentTransactions, accounts, transactions
   return (
     <ScrollView style={{ flex: 1 }} contentContainerStyle={{ paddingBottom: 120 }} showsVerticalScrollIndicator={false}>
       {/* Portfolio summary card */}
-      <View style={[ptSt.summaryCard, { backgroundColor: colors.card, borderColor: colors.border }]}>
-        <Text style={[ptSt.summaryLabel, { color: colors.mutedForeground }]}>Total Portfolio Value</Text>
-        <Text style={[ptSt.summaryValue, { color: colors.foreground }]}>{fmtCAD(totalValue)}</Text>
-        {totalCost > 0 && (
-          <View style={ptSt.gainRow}>
-            <Text style={[ptSt.gainAmt, { color: totalGain >= 0 ? "#22c55e" : "#ef4444" }]}>
-              {totalGain >= 0 ? "+" : ""}{fmtCAD(totalGain)}
-            </Text>
-            <Text style={[ptSt.gainPct, { color: totalGain >= 0 ? "#22c55e" : "#ef4444" }]}>
-              ({totalGainPct >= 0 ? "+" : ""}{totalGainPct.toFixed(2)}%)
-            </Text>
+      {(() => {
+        const investAccounts = accounts.filter((a) => a.type === "investment");
+        const totalAccountBal = investAccounts.reduce((s, a) => s + computeBalance(a, transactions), 0);
+        const totalCash = totalAccountBal - totalValue;
+        return (
+          <View style={[ptSt.summaryCard, { backgroundColor: colors.card, borderColor: colors.border }]}>
+            <Text style={[ptSt.summaryLabel, { color: colors.mutedForeground }]}>Total Portfolio Value</Text>
+            <Text style={[ptSt.summaryValue, { color: colors.foreground }]}>{fmtCAD(totalValue)}</Text>
+            {totalCost > 0 && (
+              <View style={ptSt.gainRow}>
+                <Text style={[ptSt.gainAmt, { color: totalGain >= 0 ? "#22c55e" : "#ef4444" }]}>
+                  {totalGain >= 0 ? "+" : ""}{fmtCAD(totalGain)}
+                </Text>
+                <Text style={[ptSt.gainPct, { color: totalGain >= 0 ? "#22c55e" : "#ef4444" }]}>
+                  ({totalGainPct >= 0 ? "+" : ""}{totalGainPct.toFixed(2)}%)
+                </Text>
+              </View>
+            )}
+            {totalAccountBal > 0 && (
+              <View style={[ptSt.gainRow, { marginTop: 10, paddingTop: 10, borderTopWidth: 1, borderTopColor: colors.border, gap: 16 }]}>
+                <View style={{ alignItems: "center" }}>
+                  <Text style={[ptSt.summaryLabel, { color: colors.mutedForeground }]}>ACCOUNT TOTAL</Text>
+                  <Text style={[ptSt.holdingValue, { color: colors.foreground }]}>{fmtCAD(totalAccountBal)}</Text>
+                </View>
+                {totalCash > 0.01 && (
+                  <View style={{ alignItems: "center" }}>
+                    <Text style={[ptSt.summaryLabel, { color: colors.mutedForeground }]}>CASH / OTHER</Text>
+                    <Text style={[ptSt.holdingValue, { color: "#f59e0b" }]}>{fmtCAD(totalCash)}</Text>
+                  </View>
+                )}
+              </View>
+            )}
           </View>
-        )}
-      </View>
+        );
+      })()}
 
       {/* Per-account reconciliation */}
       {accounts.filter((a) => a.type === "investment").length > 0 && (
