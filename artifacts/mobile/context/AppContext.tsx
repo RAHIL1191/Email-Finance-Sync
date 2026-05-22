@@ -2278,10 +2278,15 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
         dirty = true;
         if (match) {
           markBillPaidRef.current(bill.id);
+          const paidDate = new Date(match.date); paidDate.setHours(0, 0, 0, 0);
+          const paidLate = paidDate.getTime() > due.getTime();
+          const daysLate = paidLate ? Math.round((paidDate.getTime() - due.getTime()) / 86400000) : 0;
           fireImmediateNotification(
-            "✅ Bill Paid",
-            `${bill.title} ($${bill.amount.toFixed(2)}) — a matching payment was found.`,
-            { billId: bill.id, type: "auto_paid" }
+            paidLate ? "✅ Bill Paid (Late)" : "✅ Bill Paid",
+            paidLate
+              ? `${bill.title} ($${bill.amount.toFixed(2)}) paid ${daysLate} day${daysLate !== 1 ? "s" : ""} late — you may have been charged interest or late fees.`
+              : `${bill.title} ($${bill.amount.toFixed(2)}) — a matching payment was found.`,
+            { billId: bill.id, type: paidLate ? "auto_paid_late" : "auto_paid" }
           );
         } else if (diffDays <= 0) {
           const ago = diffDays === 0 ? "today" : `${Math.abs(diffDays)} day${Math.abs(diffDays) !== 1 ? "s" : ""} ago`;
