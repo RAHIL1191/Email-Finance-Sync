@@ -144,7 +144,15 @@ export async function scheduleBillNotifications(bill: BillLike): Promise<void> {
     if (ids[bill.id]) await cancelIds(ids[bill.id]);
 
     // Upcoming: remindDays before due date (default 3)
-    const remindOffset = Math.max(1, parseInt(bill.remindDays ?? "3") || 3);
+    // Handles both numeric strings ("3") and text format ("5 days before", "1 week before", "2 weeks before")
+    const parseRemindDays = (val?: string): number => {
+      if (!val) return 3;
+      const weeksMatch = val.match(/(\d+)\s+weeks?/i);
+      if (weeksMatch) return parseInt(weeksMatch[1]) * 7;
+      const daysMatch = val.match(/(\d+)/);
+      return daysMatch ? Math.max(1, parseInt(daysMatch[1])) : 3;
+    };
+    const remindOffset = parseRemindDays(bill.remindDays);
     if (prefs.bill_upcoming !== false) {
       const triggerDate = buildTriggerDate(bill.dueDate, -remindOffset, hour, minute);
       if (triggerDate) {

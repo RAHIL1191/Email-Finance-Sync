@@ -239,29 +239,6 @@ export default function AddBillModal({ visible, onClose }: Props) {
           </View>
 
           <View style={styles.section}>
-            <Text style={[styles.label, { color: colors.mutedForeground }]}>Remind Me</Text>
-            <View style={styles.freqRow}>
-              {(["1", "2", "3", "5", "7", "14"] as const).map((d) => (
-                <TouchableOpacity
-                  key={d}
-                  style={[
-                    styles.remindBtn,
-                    { backgroundColor: remindDays === d ? colors.primary : colors.muted },
-                  ]}
-                  onPress={() => setRemindDays(d)}
-                >
-                  <Text style={[styles.freqText, { color: remindDays === d ? "#fff" : colors.mutedForeground }]}>
-                    {d}d
-                  </Text>
-                </TouchableOpacity>
-              ))}
-            </View>
-            <Text style={[styles.remindHint, { color: colors.mutedForeground }]}>
-              Notify {remindDays} day{remindDays !== "1" ? "s" : ""} before due date
-            </Text>
-          </View>
-
-          <View style={styles.section}>
             <TouchableOpacity
               style={[
                 styles.toggleRow,
@@ -405,18 +382,6 @@ const styles = StyleSheet.create({
   freqText: {
     fontSize: 13,
     fontFamily: "Inter_500Medium",
-  },
-  remindBtn: {
-    flex: 1,
-    paddingVertical: 10,
-    borderRadius: 10,
-    alignItems: "center",
-  },
-  remindHint: {
-    fontSize: 12,
-    fontFamily: "Inter_400Regular",
-    textAlign: "center",
-    marginTop: 2,
   },
   overlay: { flex: 1, backgroundColor: "rgba(0,0,0,0.4)" },
   bottomSheetWrap: {
