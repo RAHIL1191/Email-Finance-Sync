@@ -2272,7 +2272,7 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
           const td = new Date(t.date); td.setHours(0, 0, 0, 0);
           if (Math.abs(td.getTime() - due.getTime()) > WINDOW) return false;
           if (bill.accountId && t.accountId !== bill.accountId) return false;
-          return Math.abs(t.amount - bill.amount) / bill.amount <= 0.10;
+          return t.amount === bill.amount;
         });
         notified[key] = true;
         dirty = true;
