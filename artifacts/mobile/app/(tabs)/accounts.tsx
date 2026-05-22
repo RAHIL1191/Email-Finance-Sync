@@ -425,6 +425,23 @@ function PlaidItemPanel({ item, onRelink }: { item: PlaidItem; onRelink: (item: 
           {item.lastImported !== undefined ? `  ·  ${item.lastImported} imported` : ""}
         </Text>
       )}
+      {item.needsRelogin && (
+        <TouchableOpacity
+          style={[styles.syncResultBox, { backgroundColor: "#f59e0b15", borderColor: "#f59e0b40" }]}
+          onPress={() => { Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium); onRelink(item); }}
+          activeOpacity={0.8}
+        >
+          <Feather name="alert-triangle" size={13} color="#f59e0b" />
+          <Text style={[styles.syncResultText, { color: "#f59e0b", flex: 1 }]}>Login required — tap to re-authenticate</Text>
+          <Feather name="chevron-right" size={13} color="#f59e0b" />
+        </TouchableOpacity>
+      )}
+      {!item.needsRelogin && item.syncError && (
+        <View style={[styles.syncResultBox, { backgroundColor: colors.expense + "12", borderColor: colors.expense + "30" }]}>
+          <Feather name="alert-circle" size={13} color={colors.expense} />
+          <Text style={[styles.syncResultText, { color: colors.expense }]}>{item.syncError}</Text>
+        </View>
+      )}
       {syncResult && (
         <View style={[styles.syncResultBox, { backgroundColor: syncResult.error ? colors.expense + "12" : "#10b98112", borderColor: syncResult.error ? colors.expense + "30" : "#10b98130" }]}>
           <Feather name={syncResult.error ? "alert-circle" : "check"} size={13} color={syncResult.error ? colors.expense : "#10b981"} />

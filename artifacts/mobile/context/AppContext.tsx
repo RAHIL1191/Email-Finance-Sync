@@ -1,4 +1,5 @@
 import AsyncStorage from "@react-native-async-storage/async-storage";
+import { AppState } from "react-native";
 import { useDbSyncPrefs, SyncableType } from "./DbSyncPrefsContext";
 import {
   cancelBillNotifications,
@@ -188,6 +189,10 @@ export interface PlaidItem {
   accountIds: string[];
   /** Maps Plaid account_id → local account id. Persisted so sync works after server round-trips. */
   plaidAccountMap?: Record<string, string>;
+  /** Last sync error message, if any */
+  syncError?: string;
+  /** True when Plaid requires the user to re-authenticate (ITEM_LOGIN_REQUIRED) */
+  needsRelogin?: boolean;
 }
 
 export interface PlaidSync {
@@ -721,6 +726,8 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
   const projectsRef = useRef<Project[]>([]);
   const categoryRulesRef = useRef<CategoryRule[]>([]);
   useEffect(() => { categoryRulesRef.current = categoryRules; }, [categoryRules]);
+  const plaidSyncRef = useRef<PlaidSync>({ items: [] });
+  useEffect(() => { plaidSyncRef.current = plaidSync; }, [plaidSync]);
   useEffect(() => { transactionsRef.current = transactions; }, [transactions]);
   useEffect(() => { billsRef.current = bills; }, [bills]);
   useEffect(() => { budgetsRef.current = budgets; }, [budgets]);
@@ -1960,14 +1967,29 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
 
         if (!res) {
           setIsSyncing(false);
-          return { imported: 0, error: "Network error. Could not reach server." };
+          const netErr = "Network error. Could not reach server.";
+          setPlaidSync((prev) => ({
+            items: prev.items.map((i) =>
+              i.itemId === itemId ? { ...i, syncError: netErr, needsRelogin: false } : i
+            ),
+          }));
+          return { imported: 0, error: netErr };
         }
 
         const data = await res.json();
 
         if (!res.ok) {
           setIsSyncing(false);
-          return { imported: 0, error: data.error ?? "Sync failed" };
+          const errMsg: string = data.error ?? "Sync failed";
+          const loginRequired = /login.required|item.login|ITEM_LOGIN_REQUIRED/i.test(errMsg);
+          setPlaidSync((prev) => ({
+            items: prev.items.map((i) =>
+              i.itemId === itemId
+                ? { ...i, syncError: loginRequired ? undefined : errMsg, needsRelogin: loginRequired }
+                : i
+            ),
+          }));
+          return { imported: 0, error: errMsg };
         }
 
         // Build map of plaidAccountId → local account id.
@@ -2182,7 +2204,7 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
         setPlaidSync((prev) => ({
           items: prev.items.map((i) =>
             i.itemId === itemId
-              ? { ...i, lastSynced: new Date().toISOString(), lastImported: imported }
+              ? { ...i, lastSynced: new Date().toISOString(), lastImported: imported, syncError: undefined, needsRelogin: false }
               : i
           ),
         }));
@@ -2190,11 +2212,46 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
         return { imported };
       } catch {
         setIsSyncing(false);
-        return { imported: 0, error: "Sync failed unexpectedly" };
+        const errMsg = "Sync failed unexpectedly";
+        setPlaidSync((prev) => ({
+          items: prev.items.map((i) =>
+            i.itemId === itemId ? { ...i, syncError: errMsg, needsRelogin: false } : i
+          ),
+        }));
+        return { imported: 0, error: errMsg };
       }
     },
     [plaidSync, accounts]
   );
+
+  // ── Auto-sync ref (always latest version) ─────────────────────────────────
+  const syncPlaidTransactionsRef = useRef(syncPlaidTransactions);
+  useEffect(() => { syncPlaidTransactionsRef.current = syncPlaidTransactions; }, [syncPlaidTransactions]);
+
+  // ── Auto-sync every 3 hours, and on app foreground ─────────────────────────
+  const isAutoSyncingRef = useRef(false);
+  const lastAutoSyncRef = useRef<number>(0);
+  useEffect(() => {
+    const THREE_HOURS = 3 * 60 * 60 * 1000;
+    const doAutoSync = async () => {
+      if (isAutoSyncingRef.current) return;
+      const now = Date.now();
+      if (now - lastAutoSyncRef.current < THREE_HOURS) return;
+      const items = plaidSyncRef.current.items;
+      if (items.length === 0) return;
+      isAutoSyncingRef.current = true;
+      lastAutoSyncRef.current = now;
+      for (const item of items) {
+        try { await syncPlaidTransactionsRef.current(item.itemId); } catch { /* ignore */ }
+      }
+      isAutoSyncingRef.current = false;
+    };
+    const sub = AppState.addEventListener("change", (state) => {
+      if (state === "active") doAutoSync();
+    });
+    const intervalId = setInterval(doAutoSync, THREE_HOURS);
+    return () => { sub.remove(); clearInterval(intervalId); };
+  }, []);
 
   const delinkPlaid = useCallback((itemId: string) => {
     // Remove Plaid token only — keeps accounts and transactions intact, but clears investment data
