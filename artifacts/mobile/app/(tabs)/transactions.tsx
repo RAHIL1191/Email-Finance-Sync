@@ -22,7 +22,7 @@ import TransactionFilterModal, { DEFAULT_TX_FILTER, TxFilterSettings } from "@/c
 import MonthDetailModal from "@/components/MonthDetailModal";
 import TransactionDetailModal from "@/components/TransactionDetailModal";
 import TransactionItem from "@/components/TransactionItem";
-import { Account, Bill, Category, Transaction, InvestmentTransaction, Holding, useApp } from "@/context/AppContext";
+import { Account, Bill, Category, Transaction, InvestmentTransaction, Holding, computeBalance, useApp } from "@/context/AppContext";
 import { useDrawer } from "@/context/DrawerContext";
 import { useColors } from "@/hooks/useColors";
 
@@ -1708,10 +1708,11 @@ function invTypeColor(type: string, colors: any, subtype?: string | null): strin
   return colors.mutedForeground;
 }
 
-function PortfolioTab({ holdings, investmentTransactions, accounts, colors }: {
+function PortfolioTab({ holdings, investmentTransactions, accounts, transactions, colors }: {
   holdings: Holding[];
   investmentTransactions: InvestmentTransaction[];
   accounts: Account[];
+  transactions: Transaction[];
   colors: any;
 }) {
   const totalValue = holdings.reduce((s, h) => s + h.value, 0);
@@ -1770,13 +1771,14 @@ function PortfolioTab({ holdings, investmentTransactions, accounts, colors }: {
           {accounts.filter((a) => a.type === "investment").map((acc) => {
             const accHoldings = holdings.filter((h) => h.accountId === acc.id || h.plaidAccountId === acc.plaidAccountId);
             const holdingsVal = accHoldings.reduce((s, h) => s + h.value, 0);
-            const cash = acc.balance - holdingsVal;
+            const liveBalance = computeBalance(acc, transactions);
+            const cash = liveBalance - holdingsVal;
             const hasCash = cash > 0.01;
             return (
               <View key={acc.id} style={[ptSt.holdingRow, { backgroundColor: colors.card, borderColor: colors.border, flexDirection: "column", gap: 6 }]}>
                 <View style={{ flexDirection: "row", justifyContent: "space-between", alignItems: "center" }}>
                   <Text style={[ptSt.holdingName, { color: colors.foreground }]} numberOfLines={1}>{acc.name}</Text>
-                  <Text style={[ptSt.holdingValue, { color: colors.foreground }]}>{fmtCAD(acc.balance)}</Text>
+                  <Text style={[ptSt.holdingValue, { color: colors.foreground }]}>{fmtCAD(liveBalance)}</Text>
                 </View>
                 <View style={{ flexDirection: "row", gap: 12 }}>
                   <Text style={[ptSt.holdingSub, { color: colors.mutedForeground }]}>
@@ -2076,6 +2078,7 @@ export default function InsightsScreen() {
             holdings={holdings}
             investmentTransactions={investmentTransactions}
             accounts={accounts}
+            transactions={transactions}
             colors={colors}
           />
         )}
