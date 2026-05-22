@@ -1737,6 +1737,7 @@ function PortfolioTab({ holdings, investmentTransactions, accounts, transactions
 
   const [holdingsOpen, setHoldingsOpen] = useState(true);
   const [activityOpen, setActivityOpen] = useState(true);
+  const [breakdownOpen, setBreakdownOpen] = useState(false);
 
   const fmtCAD = (n: number) =>
     (n < 0 ? "-" : "") + "$" + Math.abs(n).toLocaleString("en-CA", { minimumFractionDigits: 2, maximumFractionDigits: 2 });
@@ -1788,8 +1789,15 @@ function PortfolioTab({ holdings, investmentTransactions, accounts, transactions
       {/* Per-account reconciliation */}
       {accounts.filter((a) => a.type === "investment").length > 0 && (
         <View style={{ paddingHorizontal: 16, marginTop: 12 }}>
-          <Text style={[ptSt.sectionTitle, { color: colors.mutedForeground, marginBottom: 8 }]}>ACCOUNT BREAKDOWN</Text>
-          {accounts.filter((a) => a.type === "investment").map((acc) => {
+          <TouchableOpacity
+            style={{ flexDirection: "row", alignItems: "center", justifyContent: "space-between", paddingVertical: 4, marginBottom: 4 }}
+            onPress={() => { Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light); setBreakdownOpen((o) => !o); }}
+            activeOpacity={0.7}
+          >
+            <Text style={[ptSt.sectionTitle, { color: colors.mutedForeground }]}>ACCOUNT BREAKDOWN</Text>
+            <Feather name={breakdownOpen ? "chevron-up" : "chevron-down"} size={16} color={colors.mutedForeground} />
+          </TouchableOpacity>
+          {breakdownOpen && accounts.filter((a) => a.type === "investment").map((acc) => {
             const accHoldings = holdings.filter((h) => h.accountId === acc.id || h.plaidAccountId === acc.plaidAccountId);
             const holdingsVal = accHoldings.reduce((s, h) => s + h.value, 0);
             const liveBalance = computeBalance(acc, transactions);
