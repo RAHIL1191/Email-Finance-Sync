@@ -276,6 +276,20 @@ export async function registerPushTokenWithServer(
   } catch {}
 }
 
+/** Fire a notification immediately (no scheduled trigger). */
+export async function fireImmediateNotification(title: string, body: string, data?: Record<string, unknown>): Promise<void> {
+  const N = await getNotif();
+  if (!N) return;
+  try {
+    const { status } = await N.getPermissionsAsync();
+    if (status !== "granted") return;
+    await N.scheduleNotificationAsync({
+      content: { title, body, sound: true, data: data ?? {} },
+      trigger: null,
+    });
+  } catch {}
+}
+
 /** Called on app init: reschedules only if permission already granted — no dialog at startup. */
 export async function setupNotificationsOnInit(bills: BillLike[]): Promise<void> {
   if (Platform.OS === "web") return;

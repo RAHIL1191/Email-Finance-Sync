@@ -5,6 +5,7 @@ import {
   cancelBillNotifications,
   scheduleBillNotifications,
   setupNotificationsOnInit,
+  fireImmediateNotification,
   registerPushTokenWithServer,
   scheduleTaskReminder,
   cancelTaskReminder,
@@ -689,6 +690,8 @@ export function isIncludedInNetworth(account: Account): boolean {
   if (account.includeInNetworth === false) return false;
   return true;
 }
+
+const BILL_DETECT_KEY = "@fintrack/bill_detect_notified";
 
 // ── Provider ─────────────────────────────────────────────────────────────────
 
@@ -2227,6 +2230,8 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
   // ── Auto-sync ref (always latest version) ─────────────────────────────────
   const syncPlaidTransactionsRef = useRef(syncPlaidTransactions);
   useEffect(() => { syncPlaidTransactionsRef.current = syncPlaidTransactions; }, [syncPlaidTransactions]);
+  const markBillPaidRef = useRef(markBillPaid);
+  useEffect(() => { markBillPaidRef.current = markBillPaid; }, [markBillPaid]);
 
   // ── Auto-sync every 3 hours, and on app foreground ─────────────────────────
   const isAutoSyncingRef = useRef(false);
@@ -2241,6 +2246,55 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
       if (now - lastBillCheckRef.current < ONE_HOUR) return;
       lastBillCheckRef.current = now;
       try { await setupNotificationsOnInit(billsRef.current); } catch { /* ignore */ }
+      await detectBillPayments();
+    };
+
+    const detectBillPayments = async () => {
+      const today = new Date(); today.setHours(0, 0, 0, 0);
+      const bills = billsRef.current;
+      const txs = transactionsRef.current;
+      let notified: Record<string, boolean> = {};
+      try {
+        const raw = await AsyncStorage.getItem(BILL_DETECT_KEY);
+        if (raw) notified = JSON.parse(raw);
+      } catch {}
+      let dirty = false;
+      for (const bill of bills) {
+        if (bill.isPaid) continue;
+        const due = new Date(bill.dueDate); due.setHours(0, 0, 0, 0);
+        const diffDays = Math.round((due.getTime() - today.getTime()) / 86400000);
+        if (diffDays > 3 || diffDays < -3) continue;
+        const key = `${bill.id}|${bill.dueDate.slice(0, 10)}`;
+        if (notified[key]) continue;
+        const WINDOW = 3 * 86400000;
+        const match = txs.find((t) => {
+          if (t.type !== "expense") return false;
+          const td = new Date(t.date); td.setHours(0, 0, 0, 0);
+          if (Math.abs(td.getTime() - due.getTime()) > WINDOW) return false;
+          if (bill.accountId && t.accountId !== bill.accountId) return false;
+          return Math.abs(t.amount - bill.amount) / bill.amount <= 0.10;
+        });
+        notified[key] = true;
+        dirty = true;
+        if (match) {
+          markBillPaidRef.current(bill.id);
+          fireImmediateNotification(
+            "✅ Bill Paid",
+            `${bill.title} ($${bill.amount.toFixed(2)}) — a matching payment was found.`,
+            { billId: bill.id, type: "auto_paid" }
+          );
+        } else if (diffDays <= 0) {
+          const ago = diffDays === 0 ? "today" : `${Math.abs(diffDays)} day${Math.abs(diffDays) !== 1 ? "s" : ""} ago`;
+          fireImmediateNotification(
+            "⚠️ Bill May Be Unpaid",
+            `${bill.title} ($${bill.amount.toFixed(2)}) was due ${ago} — no matching payment found.`,
+            { billId: bill.id, type: "unpaid_warning" }
+          );
+        }
+      }
+      if (dirty) {
+        try { await AsyncStorage.setItem(BILL_DETECT_KEY, JSON.stringify(notified)); } catch {}
+      }
     };
 
     const doAutoSync = async () => {
