@@ -262,6 +262,8 @@ interface AppContextType {
   plaidSync: PlaidSync;
   investmentTransactions: InvestmentTransaction[];
   holdings: Holding[];
+  rrspLimit: number;
+  setRrspLimit: (val: number) => void;
   userName: string;
   setUserName: (name: string) => void;
   reviewedTransactionIds: string[];
@@ -347,6 +349,7 @@ const STORAGE_KEYS = {
   tasks: "@fintrack/tasks",
   investmentTransactions: "@fintrack/investmentTransactions",
   holdings: "@fintrack/holdings",
+  rrspLimit: "@fintrack/rrspLimit",
 };
 
 // ── Helpers ──────────────────────────────────────────────────────────────────
@@ -709,6 +712,7 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
   const [plaidSync, setPlaidSync] = useState<PlaidSync>({ items: [] });
   const [investmentTransactions, setInvestmentTransactions] = useState<InvestmentTransaction[]>([]);
   const [holdings, setHoldings] = useState<Holding[]>([]);
+  const [rrspLimit, setRrspLimitState] = useState<number>(31560);
   const [isSyncing, setIsSyncing] = useState(false);
   const [initialized, setInitialized] = useState(false);
   const [deviceId, setDeviceId] = useState<string>("");
@@ -741,7 +745,7 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
   useEffect(() => {
     (async () => {
       try {
-        const [storedVersion, txRaw, accRaw, billRaw, budgetRaw, goalRaw, projectRaw, catRaw, rulesRaw, emailRaw, plaidRaw, storedDeviceId, storedHouseholdId, storedUserName, storedReviewedIds, taskRaw, invTxRaw, holdRaw] =
+        const [storedVersion, txRaw, accRaw, billRaw, budgetRaw, goalRaw, projectRaw, catRaw, rulesRaw, emailRaw, plaidRaw, storedDeviceId, storedHouseholdId, storedUserName, storedReviewedIds, taskRaw, invTxRaw, holdRaw, rrspLimitRaw] =
           await Promise.all([
             AsyncStorage.getItem(STORAGE_KEYS.version),
             AsyncStorage.getItem(STORAGE_KEYS.transactions),
@@ -761,6 +765,7 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
             AsyncStorage.getItem(STORAGE_KEYS.tasks),
             AsyncStorage.getItem(STORAGE_KEYS.investmentTransactions),
             AsyncStorage.getItem(STORAGE_KEYS.holdings),
+            AsyncStorage.getItem(STORAGE_KEYS.rrspLimit),
           ]);
 
         const dId = storedDeviceId || generateDeviceId();
@@ -782,6 +787,7 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
 
         const localTxs: Transaction[] = versionOk && txRaw ? JSON.parse(txRaw) : [];
         setTransactions(localTxs);
+        if (rrspLimitRaw) setRrspLimitState(Number(rrspLimitRaw));
         setAccounts(accRaw ? JSON.parse(accRaw) : []);
         const parsedBills: Bill[] = billRaw ? JSON.parse(billRaw) : [];
         // Migrate legacy data: recurring bills that got permanently isPaid:true
@@ -940,6 +946,11 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
   useEffect(() => { if (initialized) AsyncStorage.setItem(STORAGE_KEYS.tasks, JSON.stringify(tasks)); }, [tasks, initialized]);
   useEffect(() => { if (initialized) AsyncStorage.setItem(STORAGE_KEYS.investmentTransactions, JSON.stringify(investmentTransactions)); }, [investmentTransactions, initialized]);
   useEffect(() => { if (initialized) AsyncStorage.setItem(STORAGE_KEYS.holdings, JSON.stringify(holdings)); }, [holdings, initialized]);
+  useEffect(() => { if (initialized) AsyncStorage.setItem(STORAGE_KEYS.rrspLimit, String(rrspLimit)); }, [rrspLimit, initialized]);
+
+  const setRrspLimit = useCallback((val: number) => {
+    setRrspLimitState(val);
+  }, []);
 
   const setUserName = useCallback((name: string) => {
     setUserNameState(name.trim());
@@ -2383,7 +2394,7 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
     <AppContext.Provider
       value={{
         transactions, accounts, bills, budgets, goals, projects, categories, categoryRules, emailSync, plaidSync,
-        investmentTransactions, holdings,
+        investmentTransactions, holdings, rrspLimit, setRrspLimit,
         userName, setUserName,
         reviewedTransactionIds, markTransactionReviewed,
         addTransaction, updateTransaction, deleteTransaction,

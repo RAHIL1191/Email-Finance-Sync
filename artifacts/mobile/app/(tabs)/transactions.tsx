@@ -12,6 +12,7 @@ import {
   StyleSheet,
   Switch,
   Text,
+  TextInput,
   TouchableOpacity,
   View,
 } from "react-native";
@@ -1803,6 +1804,38 @@ function PortfolioTab({ holdings, investmentTransactions, accounts, transactions
   const totalGain = totalCost > 0 ? totalValue - totalCost : 0;
   const totalGainPct = totalCost > 0 ? (totalGain / totalCost) * 100 : 0;
 
+  const { rrspLimit, setRrspLimit } = useApp();
+  const [isEditingLimit, setIsEditingLimit] = useState(false);
+  const [limitInput, setLimitInput] = useState(String(rrspLimit));
+  const [rrspListOpen, setRrspListOpen] = useState(false);
+
+  // 1. Identify RRSP Accounts
+  const rrspAccounts = accounts.filter(
+    (a) => a.type === "investment" && (a.name.toLowerCase().includes("rrsp") || a.name.toLowerCase().includes("rsp"))
+  );
+  const rrspAccountIds = rrspAccounts.map((a) => a.id);
+  const rrspPlaidAccountIds = rrspAccounts.filter((a) => a.plaidAccountId).map((a) => a.plaidAccountId);
+
+  // 2. Identify Current Year RRSP Cash Transactions (YTD)
+  const currentYear = new Date().getFullYear();
+  const startOfYear = `${currentYear}-01-01`;
+  const endOfYear = `${currentYear}-12-31`;
+
+  const rrspTxs = investmentTransactions.filter((t) => {
+    const belongs = rrspAccountIds.includes(t.accountId) || (t.plaidAccountId && rrspPlaidAccountIds.includes(t.plaidAccountId));
+    if (!belongs) return false;
+
+    const dateStr = t.date.slice(0, 10);
+    if (dateStr < startOfYear || dateStr > endOfYear) return false;
+
+    // Strict subtype "cash" match
+    return t.subtype?.toLowerCase() === "cash";
+  });
+
+  const rrspUsed = rrspTxs.reduce((sum, t) => sum + t.amount, 0);
+  const rrspRemaining = Math.max(0, rrspLimit - rrspUsed);
+  const rrspProgress = rrspLimit > 0 ? rrspUsed / rrspLimit : 0;
+
   const [holdingsOpen, setHoldingsOpen] = useState(true);
   const [activityOpen, setActivityOpen] = useState(true);
   const [breakdownOpen, setBreakdownOpen] = useState(false);
@@ -1882,6 +1915,133 @@ function PortfolioTab({ holdings, investmentTransactions, accounts, transactions
           </View>
         )}
       </View>
+
+      {/* RRSP Contribution Limits Tracker */}
+      {rrspAccounts.length > 0 && (
+        <View style={[ptSt.summaryCard, { backgroundColor: colors.card, borderColor: colors.border, marginTop: 0 }]}>
+          <View style={{ flexDirection: "row", justifyContent: "space-between", alignItems: "center", marginBottom: 12 }}>
+            <View style={{ flexDirection: "row", alignItems: "center", gap: 8 }}>
+              <Text style={{ fontSize: 16, fontFamily: "Inter_700Bold", color: colors.foreground }}>🇨🇦 RRSP Limit Tracker</Text>
+            </View>
+            <TouchableOpacity 
+              onPress={() => {
+                Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
+                setLimitInput(String(rrspLimit));
+                setIsEditingLimit(true);
+              }}
+              style={{ flexDirection: "row", alignItems: "center", gap: 4, backgroundColor: colors.border + "aa", paddingHorizontal: 10, paddingVertical: 6, borderRadius: 8 }}
+            >
+              <Feather name="edit-2" size={12} color={colors.primary} />
+              <Text style={{ fontSize: 12, fontFamily: "Inter_600SemiBold", color: colors.primary }}>Edit Limit</Text>
+            </TouchableOpacity>
+          </View>
+
+          {isEditingLimit ? (
+            <View style={{ flexDirection: "row", gap: 8, alignItems: "center", marginBottom: 12 }}>
+              <TextInput
+                style={{ flex: 1, height: 40, borderWidth: 1, borderColor: colors.border, borderRadius: 8, paddingHorizontal: 10, color: colors.foreground, fontSize: 15, fontFamily: "Inter_500Medium" }}
+                keyboardType="numeric"
+                value={limitInput}
+                onChangeText={setLimitInput}
+                placeholder="Enter limit"
+                autoFocus
+              />
+              <TouchableOpacity
+                onPress={() => {
+                  Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
+                  const parsed = parseFloat(limitInput.replace(/[^0-9.]/g, ""));
+                  if (!isNaN(parsed) && parsed >= 0) {
+                    setRrspLimit(parsed);
+                  }
+                  setIsEditingLimit(false);
+                }}
+                style={{ backgroundColor: colors.primary, paddingHorizontal: 12, height: 40, borderRadius: 8, justifyContent: "center", alignItems: "center" }}
+              >
+                <Text style={{ color: "#fff", fontFamily: "Inter_600SemiBold" }}>Save</Text>
+              </TouchableOpacity>
+              <TouchableOpacity
+                onPress={() => {
+                  Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
+                  setIsEditingLimit(false);
+                }}
+                style={{ backgroundColor: colors.border, paddingHorizontal: 12, height: 40, borderRadius: 8, justifyContent: "center", alignItems: "center" }}
+              >
+                <Text style={{ color: colors.foreground, fontFamily: "Inter_600SemiBold" }}>Cancel</Text>
+              </TouchableOpacity>
+            </View>
+          ) : (
+            <View style={{ flexDirection: "row", justifyContent: "space-between", alignItems: "baseline", marginBottom: 8 }}>
+              <View>
+                <Text style={[ptSt.summaryLabel, { color: colors.mutedForeground }]}>CONTRIBUTIONS USED (YTD)</Text>
+                <Text style={{ fontSize: 24, fontFamily: "Inter_700Bold", color: colors.foreground }}>{fmtCAD(rrspUsed)}</Text>
+              </View>
+              <View style={{ alignItems: "flex-end" }}>
+                <Text style={[ptSt.summaryLabel, { color: colors.mutedForeground }]}>YTD LIMIT</Text>
+                <Text style={{ fontSize: 16, fontFamily: "Inter_600SemiBold", color: colors.foreground }}>{fmtCAD(rrspLimit)}</Text>
+              </View>
+            </View>
+          )}
+
+          {/* Progress Bar */}
+          <View style={{ height: 10, backgroundColor: colors.border + "88", borderRadius: 5, overflow: "hidden", marginBottom: 12 }}>
+            <View 
+              style={{ 
+                height: "100%", 
+                width: `${Math.min(100, rrspProgress * 100)}%`, 
+                backgroundColor: rrspProgress > 1 ? "#ef4444" : rrspProgress > 0.85 ? "#f59e0b" : "#22c55e",
+                borderRadius: 5
+              }} 
+            />
+          </View>
+
+          <View style={{ flexDirection: "row", justifyContent: "space-between", alignItems: "center" }}>
+            <Text style={{ fontSize: 13, fontFamily: "Inter_500Medium", color: colors.mutedForeground }}>
+              {rrspProgress > 1 
+                ? `⚠️ Exceeded by ${fmtCAD(rrspUsed - rrspLimit)}` 
+                : `${(rrspProgress * 100).toFixed(1)}% used • ${fmtCAD(rrspRemaining)} remaining`
+              }
+            </Text>
+            {rrspTxs.length > 0 && (
+              <TouchableOpacity 
+                onPress={() => {
+                  Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
+                  setRrspListOpen((o) => !o);
+                }}
+                style={{ flexDirection: "row", alignItems: "center", gap: 2 }}
+              >
+                <Text style={{ fontSize: 13, fontFamily: "Inter_600SemiBold", color: colors.primary }}>
+                  {rrspListOpen ? "Hide Details" : `Show ${rrspTxs.length} Deposits`}
+                </Text>
+                <Feather name={rrspListOpen ? "chevron-up" : "chevron-down"} size={14} color={colors.primary} />
+              </TouchableOpacity>
+            )}
+          </View>
+
+          {/* Collapsible list of transactions */}
+          {rrspListOpen && rrspTxs.length > 0 && (
+            <View style={{ marginTop: 12, paddingTop: 12, borderTopWidth: StyleSheet.hairlineWidth, borderTopColor: colors.border }}>
+              <Text style={{ fontSize: 11, fontFamily: "Inter_700Bold", color: colors.mutedForeground, letterSpacing: 0.5, marginBottom: 8 }}>
+                RRSP CASH DEPOSITS FOR {currentYear}
+              </Text>
+              {rrspTxs.map((t) => (
+                <View key={t.id || t.plaidTxId} style={{ flexDirection: "row", justifyContent: "space-between", alignItems: "center", paddingVertical: 6 }}>
+                  <View style={{ flex: 1, marginRight: 10 }}>
+                    <Text style={{ fontSize: 13, fontFamily: "Inter_500Medium", color: colors.foreground }} numberOfLines={1}>
+                      {t.name}
+                    </Text>
+                    <Text style={{ fontSize: 11, fontFamily: "Inter_400Regular", color: colors.mutedForeground }}>
+                      {fmtDate(t.date)} • {accounts.find((a) => a.id === t.accountId || a.plaidAccountId === t.plaidAccountId)?.name || "RRSP"}
+                    </Text>
+                  </View>
+                  <Text style={{ fontSize: 13, fontFamily: "Inter_600SemiBold", color: "#22c55e" }}>
+                    +{fmtCAD(t.amount)}
+                  </Text>
+                </View>
+              ))}
+            </View>
+          )}
+        </View>
+      )}
 
       {/* Per-account reconciliation */}
       {investAccounts.length > 0 && (
