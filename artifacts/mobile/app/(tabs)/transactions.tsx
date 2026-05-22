@@ -1809,10 +1809,12 @@ function PortfolioTab({ holdings, investmentTransactions, accounts, transactions
   const [limitInput, setLimitInput] = useState(String(rrspLimit));
   const [rrspListOpen, setRrspListOpen] = useState(false);
 
-  // 1. Identify RRSP Accounts
-  const rrspAccounts = accounts.filter(
-    (a) => a.type === "investment" && (a.name.toLowerCase().includes("rrsp") || a.name.toLowerCase().includes("rsp"))
-  );
+  // 1. Identify RRSP Accounts (including Spousal RRSP, SRRSP, RSP, etc.)
+  const rrspAccounts = accounts.filter((a) => {
+    if (a.type !== "investment") return false;
+    const name = a.name.toLowerCase();
+    return name.includes("rrsp") || name.includes("rsp") || name.includes("spousal") || name.includes("srrsp");
+  });
   const rrspAccountIds = rrspAccounts.map((a) => a.id);
   const rrspPlaidAccountIds = rrspAccounts.filter((a) => a.plaidAccountId).map((a) => a.plaidAccountId);
 
