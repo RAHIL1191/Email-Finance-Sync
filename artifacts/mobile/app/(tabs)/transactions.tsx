@@ -1725,11 +1725,77 @@ function periodStart(p: PeriodOpt): string | null {
   return null;
 }
 
-function PortfolioTab({ holdings, investmentTransactions, accounts, transactions, colors }: {
+function PortfolioFilterSheet({ visible, onClose, accounts, filterType, setFilterType, filterAccountId, setFilterAccountId, filterPeriod, setFilterPeriod, colors }: {
+  visible: boolean; onClose: () => void;
+  accounts: Account[];
+  filterType: string; setFilterType: (v: string) => void;
+  filterAccountId: string | null; setFilterAccountId: (v: string | null) => void;
+  filterPeriod: PeriodOpt; setFilterPeriod: (v: PeriodOpt) => void;
+  colors: any;
+}) {
+  const investAccounts = accounts.filter((a) => a.type === "investment");
+  const chip = (label: string, active: boolean, onPress: () => void, activeColor?: string) => (
+    <TouchableOpacity
+      key={label}
+      onPress={() => { Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light); onPress(); }}
+      style={{ paddingHorizontal: 12, paddingVertical: 6, borderRadius: 20, borderWidth: 1,
+        borderColor: active ? (activeColor ?? colors.primary) : colors.border,
+        backgroundColor: active ? (activeColor ?? colors.primary) + "18" : "transparent", marginRight: 8, marginBottom: 8 }}
+      activeOpacity={0.7}
+    >
+      <Text style={{ fontSize: 13, fontFamily: "Inter_500Medium", color: active ? (activeColor ?? colors.primary) : colors.mutedForeground }}>{label}</Text>
+    </TouchableOpacity>
+  );
+  const hasFilters = filterType !== "All" || filterAccountId !== null || filterPeriod !== "All";
+  return (
+    <Modal visible={visible} transparent animationType="slide" onRequestClose={onClose}>
+      <TouchableOpacity style={{ flex: 1, backgroundColor: "#00000055" }} activeOpacity={1} onPress={onClose} />
+      <View style={{ backgroundColor: colors.card, borderTopLeftRadius: 20, borderTopRightRadius: 20, padding: 20, paddingBottom: 40 }}>
+        <View style={{ flexDirection: "row", alignItems: "center", justifyContent: "space-between", marginBottom: 20 }}>
+          <Text style={{ fontSize: 17, fontFamily: "Inter_700Bold", color: colors.foreground }}>Portfolio Filters</Text>
+          <TouchableOpacity onPress={onClose}><Feather name="x" size={20} color={colors.mutedForeground} /></TouchableOpacity>
+        </View>
+        {investAccounts.length > 1 && (
+          <>
+            <Text style={{ fontSize: 12, fontFamily: "Inter_600SemiBold", color: colors.mutedForeground, marginBottom: 8, letterSpacing: 0.8 }}>ACCOUNT</Text>
+            <View style={{ flexDirection: "row", flexWrap: "wrap", marginBottom: 12 }}>
+              {chip("All Accounts", filterAccountId === null, () => setFilterAccountId(null))}
+              {investAccounts.map((a) => chip(a.name, filterAccountId === a.id, () => setFilterAccountId(filterAccountId === a.id ? null : a.id)))}
+            </View>
+          </>
+        )}
+        <Text style={{ fontSize: 12, fontFamily: "Inter_600SemiBold", color: colors.mutedForeground, marginBottom: 8, letterSpacing: 0.8 }}>DATE PERIOD</Text>
+        <View style={{ flexDirection: "row", flexWrap: "wrap", marginBottom: 12 }}>
+          {PERIOD_OPTIONS.map((p) => chip(p, filterPeriod === p, () => setFilterPeriod(p)))}
+        </View>
+        <Text style={{ fontSize: 12, fontFamily: "Inter_600SemiBold", color: colors.mutedForeground, marginBottom: 8, letterSpacing: 0.8 }}>TRANSACTION TYPE</Text>
+        <View style={{ flexDirection: "row", flexWrap: "wrap", marginBottom: 16 }}>
+          {TYPE_OPTIONS.map((tp) => {
+            const color = tp === "All" ? colors.primary : invTypeColor(tp.toLowerCase(), colors, tp.toLowerCase());
+            return chip(tp, filterType === tp, () => setFilterType(tp), color);
+          })}
+        </View>
+        {hasFilters && (
+          <TouchableOpacity
+            onPress={() => { setFilterType("All"); setFilterAccountId(null); setFilterPeriod("All"); }}
+            style={{ alignItems: "center", paddingVertical: 10 }}
+          >
+            <Text style={{ color: colors.expense, fontFamily: "Inter_500Medium", fontSize: 14 }}>Clear All Filters</Text>
+          </TouchableOpacity>
+        )}
+      </View>
+    </Modal>
+  );
+}
+
+function PortfolioTab({ holdings, investmentTransactions, accounts, transactions, filterType, filterAccountId, filterPeriod, colors }: {
   holdings: Holding[];
   investmentTransactions: InvestmentTransaction[];
   accounts: Account[];
   transactions: Transaction[];
+  filterType: string;
+  filterAccountId: string | null;
+  filterPeriod: PeriodOpt;
   colors: any;
 }) {
   const totalValue = holdings.reduce((s, h) => s + h.value, 0);
@@ -1740,37 +1806,30 @@ function PortfolioTab({ holdings, investmentTransactions, accounts, transactions
   const [holdingsOpen, setHoldingsOpen] = useState(true);
   const [activityOpen, setActivityOpen] = useState(true);
   const [breakdownOpen, setBreakdownOpen] = useState(false);
-  const [filterType, setFilterType] = useState("All");
-  const [filterAccountId, setFilterAccountId] = useState<string | null>(null);
-  const [filterPeriod, setFilterPeriod] = useState<PeriodOpt>("All");
 
-  const investAccounts = useMemo(() => accounts.filter((a) => a.type === "investment"), [accounts]);
-  const totalAccountBal = useMemo(() => investAccounts.reduce((s, a) => s + computeBalance(a, transactions), 0), [investAccounts, transactions]);
+  const investAccounts = accounts.filter((a) => a.type === "investment");
+  const totalAccountBal = investAccounts.reduce((s, a) => s + computeBalance(a, transactions), 0);
   const totalCash = totalAccountBal - totalValue;
 
-  const filteredHoldings = useMemo(() => {
-    if (!filterAccountId) return holdings;
-    return holdings.filter((h) => h.accountId === filterAccountId || h.plaidAccountId === accounts.find((a) => a.id === filterAccountId)?.plaidAccountId);
-  }, [holdings, filterAccountId, accounts]);
+  const targetPlaidId = filterAccountId ? accounts.find((a) => a.id === filterAccountId)?.plaidAccountId : null;
+  const filteredHoldings = filterAccountId
+    ? holdings.filter((h) => h.accountId === filterAccountId || (targetPlaidId && h.plaidAccountId === targetPlaidId))
+    : holdings;
 
-  const filteredTxs = useMemo(() => {
-    const pStart = periodStart(filterPeriod);
-    return [...investmentTransactions]
-      .filter((t) => matchesTypeFilter(t, filterType))
-      .filter((t) => !filterAccountId || t.accountId === filterAccountId)
-      .filter((t) => !pStart || t.date.slice(0, 10) >= pStart)
-      .sort((a, b) => b.date.localeCompare(a.date));
-  }, [investmentTransactions, filterType, filterAccountId, filterPeriod]);
+  const pStart = periodStart(filterPeriod);
+  const filteredTxs = investmentTransactions
+    .filter((t) => filterType === "All" || invTypeLabel(t.type, t.subtype) === filterType)
+    .filter((t) => !filterAccountId || t.accountId === filterAccountId)
+    .filter((t) => !pStart || t.date.slice(0, 10) >= pStart)
+    .sort((a, b) => b.date.localeCompare(a.date));
 
-  const grouped = useMemo(() => {
-    const map = new Map<string, InvestmentTransaction[]>();
-    for (const t of filteredTxs) {
-      const key = t.date.slice(0, 10);
-      if (!map.has(key)) map.set(key, []);
-      map.get(key)!.push(t);
-    }
-    return Array.from(map.entries());
-  }, [filteredTxs]);
+  const grouped: [string, InvestmentTransaction[]][] = [];
+  for (const t of filteredTxs) {
+    const key = t.date.slice(0, 10);
+    const last = grouped[grouped.length - 1];
+    if (last && last[0] === key) last[1].push(t);
+    else grouped.push([key, [t]]);
+  }
 
   const fmtCAD = (n: number) =>
     (n < 0 ? "-" : "") + "$" + Math.abs(n).toLocaleString("en-CA", { minimumFractionDigits: 2, maximumFractionDigits: 2 });
@@ -1779,19 +1838,6 @@ function PortfolioTab({ holdings, investmentTransactions, accounts, transactions
     const dt = new Date(d + "T00:00:00");
     return dt.toLocaleDateString("en-CA", { month: "short", day: "numeric", year: "numeric" });
   };
-
-  const chip = (label: string, active: boolean, onPress: () => void, activeColor?: string) => (
-    <TouchableOpacity
-      key={label}
-      onPress={() => { Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light); onPress(); }}
-      style={{ paddingHorizontal: 12, paddingVertical: 5, borderRadius: 20, borderWidth: 1,
-        borderColor: active ? (activeColor ?? colors.primary) : colors.border,
-        backgroundColor: active ? (activeColor ?? colors.primary) + "18" : "transparent", marginRight: 6 }}
-      activeOpacity={0.7}
-    >
-      <Text style={{ fontSize: 12, fontFamily: "Inter_500Medium", color: active ? (activeColor ?? colors.primary) : colors.mutedForeground }}>{label}</Text>
-    </TouchableOpacity>
-  );
 
   return (
     <ScrollView style={{ flex: 1 }} contentContainerStyle={{ paddingBottom: 120 }} showsVerticalScrollIndicator={false}>
@@ -1859,37 +1905,9 @@ function PortfolioTab({ holdings, investmentTransactions, accounts, transactions
         </View>
       )}
 
-      {/* Filter bar — always visible when there's any data */}
-      {(holdings.length > 0 || investmentTransactions.length > 0) && (
-        <View style={{ marginTop: 12 }}>
-          {/* Account chips */}
-          {investAccounts.length > 1 && (
-            <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={{ paddingHorizontal: 16, marginBottom: 6 }}>
-              {chip("All", filterAccountId === null, () => setFilterAccountId(null))}
-              {investAccounts.map((a) => chip(a.name, filterAccountId === a.id, () => setFilterAccountId(filterAccountId === a.id ? null : a.id)))}
-            </ScrollView>
-          )}
-          {/* Date period chips (for activity) */}
-          {investmentTransactions.length > 0 && (
-            <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={{ paddingHorizontal: 16, marginBottom: 6 }}>
-              {PERIOD_OPTIONS.map((p) => chip(p, filterPeriod === p, () => setFilterPeriod(p)))}
-            </ScrollView>
-          )}
-          {/* Type chips (for activity) */}
-          {investmentTransactions.length > 0 && (
-            <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={{ paddingHorizontal: 16, marginBottom: 6 }}>
-              {TYPE_OPTIONS.map((tp) => {
-                const color = tp === "All" ? colors.primary : invTypeColor(tp.toLowerCase(), colors, tp.toLowerCase());
-                return chip(tp, filterType === tp, () => setFilterType(tp), color);
-              })}
-            </ScrollView>
-          )}
-        </View>
-      )}
-
       {/* Holdings list */}
       {holdings.length > 0 && (
-        <View style={{ paddingHorizontal: 16, marginTop: 8 }}>
+        <View style={{ paddingHorizontal: 16, marginTop: 12 }}>
           <TouchableOpacity
             style={{ flexDirection: "row", alignItems: "center", justifyContent: "space-between", paddingVertical: 4, marginBottom: 4 }}
             onPress={() => { Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light); setHoldingsOpen((o) => !o); }}
@@ -1928,7 +1946,7 @@ function PortfolioTab({ holdings, investmentTransactions, accounts, transactions
         </View>
       )}
 
-      {/* Investment transaction filters + activity */}
+      {/* Investment activity */}
       {investmentTransactions.length > 0 && (
         <View style={{ marginTop: 20 }}>
           <TouchableOpacity
@@ -1942,7 +1960,6 @@ function PortfolioTab({ holdings, investmentTransactions, accounts, transactions
 
           {activityOpen && (
             <>
-              {/* Grouped transactions */}
               <View style={{ paddingHorizontal: 16 }}>
                 {grouped.length === 0 && (
                   <Text style={{ color: colors.mutedForeground, textAlign: "center", paddingVertical: 20, fontSize: 13, fontFamily: "Inter_400Regular" }}>
@@ -2078,6 +2095,11 @@ export default function InsightsScreen() {
       (f.notes.trim() ? 1 : 0)
     );
   }, [txFilterSettings]);
+  const [showPortfolioFilter, setShowPortfolioFilter] = useState(false);
+  const [pfType, setPfType] = useState("All");
+  const [pfAccountId, setPfAccountId] = useState<string | null>(null);
+  const [pfPeriod, setPfPeriod] = useState<PeriodOpt>("All");
+  const pfFilterCount = (pfType !== "All" ? 1 : 0) + (pfAccountId !== null ? 1 : 0) + (pfPeriod !== "All" ? 1 : 0);
   const [showPeriodSettings, setShowPeriodSettings] = useState(false);
   const [periodSettings, setPeriodSettings] = useState<PeriodSettings>(DEFAULT_PERIOD_SETTINGS);
   const currentMonthIdx = new Date().getMonth();
@@ -2103,6 +2125,7 @@ export default function InsightsScreen() {
             onPress={() => {
               Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
               if (activeTab === "TRANSACTIONS") setShowFilter(true);
+              else if (activeTab === "PORTFOLIO") setShowPortfolioFilter(true);
               else setShowPeriodSettings(true);
             }}
           >
@@ -2111,6 +2134,11 @@ export default function InsightsScreen() {
               {activeTab === "TRANSACTIONS" && txFilterCount > 0 && (
                 <View style={[styles.filterBadge, { backgroundColor: colors.expense }]}>
                   <Text style={styles.filterBadgeText}>{txFilterCount}</Text>
+                </View>
+              )}
+              {activeTab === "PORTFOLIO" && pfFilterCount > 0 && (
+                <View style={[styles.filterBadge, { backgroundColor: colors.primary }]}>
+                  <Text style={styles.filterBadgeText}>{pfFilterCount}</Text>
                 </View>
               )}
             </View>
@@ -2180,10 +2208,23 @@ export default function InsightsScreen() {
             investmentTransactions={investmentTransactions}
             accounts={accounts}
             transactions={transactions}
+            filterType={pfType}
+            filterAccountId={pfAccountId}
+            filterPeriod={pfPeriod}
             colors={colors}
           />
         )}
       </View>
+
+      <PortfolioFilterSheet
+        visible={showPortfolioFilter}
+        onClose={() => setShowPortfolioFilter(false)}
+        accounts={accounts}
+        filterType={pfType} setFilterType={setPfType}
+        filterAccountId={pfAccountId} setFilterAccountId={setPfAccountId}
+        filterPeriod={pfPeriod} setFilterPeriod={setPfPeriod}
+        colors={colors}
+      />
 
       {/* FAB */}
       <TouchableOpacity
