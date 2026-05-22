@@ -1811,27 +1811,43 @@ function PortfolioTab({ holdings, investmentTransactions, accounts, transactions
 
   // 1. Identify RRSP Accounts (including Spousal RRSP, SRRSP, RSP, etc.)
   const rrspAccounts = accounts.filter((a) => {
-    if (a.type !== "investment") return false;
     const name = a.name.toLowerCase();
     return name.includes("rrsp") || name.includes("rsp") || name.includes("spousal") || name.includes("srrsp");
   });
   const rrspAccountIds = rrspAccounts.map((a) => a.id);
   const rrspPlaidAccountIds = rrspAccounts.filter((a) => a.plaidAccountId).map((a) => a.plaidAccountId);
 
-  // 2. Identify Current Year RRSP Cash Transactions (YTD)
-  const currentYear = new Date().getFullYear();
-  const startOfYear = `${currentYear}-01-01`;
-  const endOfYear = `${currentYear}-12-31`;
+  // 2. Identify RRSP Cash Transactions for the current contribution period (April 1st to March 31st)
+  const now = new Date();
+  const currentYear = now.getFullYear();
+  // If today is before April 1st, the RRSP year started on April 1st of the previous year.
+  // If today is on/after April 1st, the RRSP year started on April 1st of the current year.
+  const rrspStartYear = now.getMonth() < 3 ? currentYear - 1 : currentYear;
+  const startOfRrspYear = `${rrspStartYear}-04-01`;
+  const endOfRrspYear = `${rrspStartYear + 1}-03-31`;
 
   const rrspTxs = investmentTransactions.filter((t) => {
     const belongs = rrspAccountIds.includes(t.accountId) || (t.plaidAccountId && rrspPlaidAccountIds.includes(t.plaidAccountId));
     if (!belongs) return false;
 
     const dateStr = t.date.slice(0, 10);
-    if (dateStr < startOfYear || dateStr > endOfYear) return false;
+    if (dateStr < startOfRrspYear || dateStr > endOfRrspYear) return false;
 
-    // Strict subtype "cash" match
-    return t.subtype?.toLowerCase() === "cash";
+    // Match if subtype is "cash", type is "cash", or invTypeLabel resolves to "Cash"
+    const isCashSubtype = t.subtype?.toLowerCase() === "cash";
+    const isCashType = t.type?.toLowerCase() === "cash";
+    const isCashLabel = invTypeLabel(t.type, t.subtype) === "Cash";
+    if (!(isCashSubtype || isCashType || isCashLabel)) return false;
+
+    // Only count entries representing actual manual contributions/deposits
+    const nameLower = t.name.toLowerCase();
+    const isActualDeposit = nameLower.includes("deposit") || 
+                            nameLower.includes("electronic transfer") || 
+                            nameLower.includes("electronic deposit") ||
+                            nameLower.includes("contribution") || 
+                            nameLower.includes("eft") || 
+                            nameLower.includes("transfer");
+    return isActualDeposit;
   });
 
   const rrspUsed = rrspTxs.reduce((sum, t) => sum + t.amount, 0);
@@ -1852,11 +1868,18 @@ function PortfolioTab({ holdings, investmentTransactions, accounts, transactions
     ? holdings.filter((h) => h.accountId === filterAccountId || (targetPlaidId && h.plaidAccountId === targetPlaidId))
     : holdings;
 
+  const sixMonthsAgo = new Date();
+  sixMonthsAgo.setMonth(sixMonthsAgo.getMonth() - 6);
+  const sixMonthsAgoStr = sixMonthsAgo.toISOString().slice(0, 10);
+
   const pStart = periodStart(filterPeriod);
+  // Cap displayed activity to last 6 months for UI rendering performance, or narrower if filtered
+  const effectiveStart = pStart && pStart > sixMonthsAgoStr ? pStart : sixMonthsAgoStr;
+
   const filteredTxs = investmentTransactions
     .filter((t) => filterType === "All" || invTypeLabel(t.type, t.subtype) === filterType)
     .filter((t) => !filterAccountId || t.accountId === filterAccountId)
-    .filter((t) => !pStart || t.date.slice(0, 10) >= pStart)
+    .filter((t) => t.date.slice(0, 10) >= effectiveStart)
     .sort((a, b) => b.date.localeCompare(a.date));
 
   const grouped: [string, InvestmentTransaction[]][] = [];
@@ -1997,7 +2020,7 @@ function PortfolioTab({ holdings, investmentTransactions, accounts, transactions
           </View>
 
           <View style={{ flexDirection: "row", justifyContent: "space-between", alignItems: "center" }}>
-            <Text style={{ fontSize: 13, fontFamily: "Inter_500Medium", color: colors.mutedForeground }}>
+            <Text style={{ flex: 1, marginRight: 12, fontSize: 13, fontFamily: "Inter_500Medium", color: colors.mutedForeground }}>
               {rrspProgress > 1 
                 ? `⚠️ Exceeded by ${fmtCAD(rrspUsed - rrspLimit)}` 
                 : `${(rrspProgress * 100).toFixed(1)}% used • ${fmtCAD(rrspRemaining)} remaining`
@@ -2009,10 +2032,10 @@ function PortfolioTab({ holdings, investmentTransactions, accounts, transactions
                   Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
                   setRrspListOpen((o) => !o);
                 }}
-                style={{ flexDirection: "row", alignItems: "center", gap: 2 }}
+                style={{ flexDirection: "row", alignItems: "center", gap: 2, flexShrink: 0 }}
               >
                 <Text style={{ fontSize: 13, fontFamily: "Inter_600SemiBold", color: colors.primary }}>
-                  {rrspListOpen ? "Hide Details" : `Show ${rrspTxs.length} Deposits`}
+                  {rrspListOpen ? "Hide" : `Show ${rrspTxs.length} Deposits`}
                 </Text>
                 <Feather name={rrspListOpen ? "chevron-up" : "chevron-down"} size={14} color={colors.primary} />
               </TouchableOpacity>
@@ -2023,7 +2046,7 @@ function PortfolioTab({ holdings, investmentTransactions, accounts, transactions
           {rrspListOpen && rrspTxs.length > 0 && (
             <View style={{ marginTop: 12, paddingTop: 12, borderTopWidth: StyleSheet.hairlineWidth, borderTopColor: colors.border }}>
               <Text style={{ fontSize: 11, fontFamily: "Inter_700Bold", color: colors.mutedForeground, letterSpacing: 0.5, marginBottom: 8 }}>
-                RRSP CASH DEPOSITS FOR {currentYear}
+                RRSP CASH DEPOSITS (APR 1, {rrspStartYear} - MAR 31, {rrspStartYear + 1})
               </Text>
               {rrspTxs.map((t) => (
                 <View key={t.id || t.plaidTxId} style={{ flexDirection: "row", justifyContent: "space-between", alignItems: "center", paddingVertical: 6 }}>
