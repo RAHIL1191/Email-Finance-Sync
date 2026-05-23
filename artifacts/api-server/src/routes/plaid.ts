@@ -228,6 +228,15 @@ router.post("/plaid/exchange-token", async (req, res) => {
       transactions = Array.from(txMap.values());
     } catch {}
 
+    // Filter out standard transactions that belong to investment accounts.
+    // Investment accounts sync holdings + investment transactions separately.
+    const investmentAccountIds = new Set(
+      plaidAccounts
+        .filter((a) => mapAccountType(a.type as string, a.subtype as string | null) === "investment")
+        .map((a) => a.account_id)
+    );
+    transactions = transactions.filter((t) => !investmentAccountIds.has(t.account_id));
+
     // 4. Fetch investment holdings + transactions (best-effort)
     let holdings: ReturnType<typeof mapHolding>[] = [];
     let investmentTransactions: ReturnType<typeof mapInvestmentTransaction>[] = [];
@@ -383,6 +392,15 @@ router.post("/plaid/sync/:itemId", async (req, res) => {
       getTxs.forEach((t) => txMap.set(t.transaction_id, t));
       transactions = Array.from(txMap.values());
     } catch {}
+
+    // Filter out standard transactions that belong to investment accounts.
+    // Investment accounts sync holdings + investment transactions separately.
+    const investmentAccountIds = new Set(
+      plaidAccounts
+        .filter((a) => mapAccountType(a.type as string, a.subtype as string | null) === "investment")
+        .map((a) => a.account_id)
+    );
+    transactions = transactions.filter((t) => !investmentAccountIds.has(t.account_id));
 
     // Backfill plaid_item_id + plaid_account_id on DB accounts that are missing them.
     // This self-heals accounts created before these columns existed.
@@ -576,7 +594,7 @@ function mapAccountType(
   type: string,
   subtype: string | null
 ): "checking" | "savings" | "credit" | "investment" {
-  if (type === "credit") return "credit";
+  if (type === "credit" || type === "loan") return "credit";
   if (type === "investment" || type === "brokerage") return "investment";
   if (subtype === "savings" || subtype === "money market" || subtype === "cd") return "savings";
   return "checking";

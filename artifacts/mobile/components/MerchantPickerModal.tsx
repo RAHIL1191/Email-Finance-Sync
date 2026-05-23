@@ -32,7 +32,7 @@ export default function MerchantPickerModal({ visible, onClose, onSelect, select
   const merchants = useMemo(() => {
     const seen = new Map<string, number>();
     for (const t of transactions) {
-      if (t.category === "Transfer") continue;
+      if (t.category === "Transfer" || t.category?.toLowerCase() === "transfer") continue;
       const name = (t.merchant || t.title || "").trim();
       if (!name) continue;
       seen.set(name, (seen.get(name) ?? 0) + 1);

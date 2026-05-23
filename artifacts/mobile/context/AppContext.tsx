@@ -5,10 +5,14 @@ import {
   cancelBillNotifications,
   scheduleBillNotifications,
   setupNotificationsOnInit,
+  setupTaskNotificationsOnInit,
   fireImmediateNotification,
   registerPushTokenWithServer,
   scheduleTaskReminder,
   cancelTaskReminder,
+  scheduleTaskDueNotification,
+  cancelTaskDueNotification,
+  checkBudgetAndNotify,
 } from "@/services/notificationService";
 import React, {
   createContext,
@@ -96,6 +100,7 @@ export interface Budget {
   period: "weekly" | "monthly" | "yearly";
   includeInOverall: boolean;
   color?: string;
+  alertPct?: number;
   createdAt: string;
   updatedAt: string;
 }
@@ -137,12 +142,47 @@ export interface Task {
   updatedAt: string;
 }
 
+export interface ChecklistGroupItem {
+  id: string;
+  text: string;
+  completed: boolean;
+}
+
+export interface InnerChecklist {
+  id: string;
+  type: "checklist";
+  title: string;
+  completed: boolean;
+  collapsed: boolean;
+  items: ChecklistGroupItem[];
+}
+
+export interface InnerNote {
+  id: string;
+  type: "note";
+  text: string;
+  collapsed?: boolean;
+}
+
+export type InnerItem = InnerNote | InnerChecklist;
+
+export interface ChecklistGroup {
+  id: string;
+  title: string;
+  collapsed: boolean;
+  place?: string;
+  items: InnerItem[];
+}
+
 export interface Project {
   id: string;
   name: string;
   description?: string;
   color: string;
   createdAt: string;
+  checklistGroups?: ChecklistGroup[];
+  place?: string;
+  note?: string;
 }
 
 export interface Category {
@@ -237,7 +277,7 @@ export interface CategoryRule {
   id: string;
   householdId: string;
   merchantPattern: string;
-  merchantExact?: string;
+  merchantExact?: string | null;
   /** Source category to remap FROM. Null/undefined = any category (merchant-only rule). */
   fromCategory?: string | null;
   category: string;
@@ -298,7 +338,7 @@ interface AppContextType {
   seedCategories: () => Promise<void>;
   learnCategoryRule: (merchantTitle: string, category: string) => void;
   autoCategorize: (title: string) => string | null;
-  addCategoryMappingRule: (rule: { merchantPattern?: string; merchantExact?: string; fromCategory?: string | null; category: string; applyScope: "future" | "past_and_future" }) => void;
+  addCategoryMappingRule: (rule: { id?: string; merchantPattern?: string; merchantExact?: string; fromCategory?: string | null; category: string; applyScope: "future" | "past_and_future"; source?: "manual" | "learned" }) => void;
   deleteCategoryRule: (id: string) => void;
   connectEmail: (email: string, appPassword: string) => Promise<{ success: boolean; error?: string }>;
   disconnectEmail: () => void;
@@ -600,20 +640,261 @@ function resolveAccountId(
 }
 
 /**
+ * Evaluates if a transaction matches a rich rule.
+ */
+function matchesRichRule(tx: Transaction, payload: any): boolean {
+  if (!payload || !payload.conditions) return false;
+  const conds = payload.conditions;
+
+  // 1. Original Statement
+  if (conds.originalStatementEnabled) {
+    const val = (conds.originalStatementValue || "").trim().toLowerCase();
+    const title = (tx.title || "").toLowerCase();
+    if (conds.originalStatementOperator === "exactly") {
+      if (title !== val) return false;
+    } else { // contains
+      if (!title.includes(val)) return false;
+    }
+  }
+
+  // 2. Merchant Name
+  if (conds.merchantEnabled) {
+    const val = (conds.merchantValue || "").trim().toLowerCase();
+    const merchant = (tx.merchant || "").toLowerCase();
+    if (conds.merchantOperator === "exactly") {
+      if (merchant !== val) return false;
+    } else { // contains
+      if (!merchant.includes(val)) return false;
+    }
+  }
+
+  // 3. Amount
+  if (conds.amountEnabled) {
+    const amt = tx.amount;
+    const type = conds.amountType; // "debit" | "credit" | "any"
+    
+    // debit = expense, credit = income
+    if (type === "debit" && tx.type !== "expense") return false;
+    if (type === "credit" && tx.type !== "income") return false;
+
+    const op = conds.amountOperator;
+    const val = Number(conds.amountValue);
+    
+    if (op === "equals") {
+      if (Math.abs(amt - val) >= 0.01) return false;
+    } else if (op === "greater_than") {
+      if (amt <= val) return false;
+    } else if (op === "less_than") {
+      if (amt >= val) return false;
+    } else if (op === "between") {
+      const valTo = Number(conds.amountValueTo);
+      if (amt < val || amt > valTo) return false;
+    }
+  }
+
+  // 4. Categories
+  if (conds.categoriesEnabled && Array.isArray(conds.categoriesList) && conds.categoriesList.length > 0) {
+    if (!tx.category || !conds.categoriesList.includes(tx.category)) return false;
+  }
+
+  // 5. Accounts
+  if (conds.accountsEnabled && Array.isArray(conds.accountsList) && conds.accountsList.length > 0) {
+    if (!tx.accountId || !conds.accountsList.includes(tx.accountId)) return false;
+  }
+
+  return true;
+}
+
+/**
+ * Applies actions of a matching rich rule to a transaction.
+ * Returns an array of transactions (supports splits!).
+ */
+function applyRichRuleActions(tx: Transaction, payload: any): Transaction[] {
+  if (!payload || !payload.actions) return [tx];
+  const acts = payload.actions;
+
+  // Exclusive OR option: Split transaction
+  if (acts.splitTransactionEnabled && Array.isArray(acts.splitTransactionList) && acts.splitTransactionList.length > 0) {
+    const splits = acts.splitTransactionList;
+    const groupId = `split_${Date.now()}_${Math.random().toString(36).slice(2)}`;
+    let remainingAmount = tx.amount;
+    const results: Transaction[] = [];
+
+    splits.forEach((split: any, index: number) => {
+      let splitAmt = 0;
+      if (split.percentage !== undefined && split.percentage !== null && !isNaN(Number(split.percentage))) {
+        splitAmt = tx.amount * (Number(split.percentage) / 100);
+      } else {
+        splitAmt = tx.amount / splits.length;
+      }
+
+      splitAmt = Math.round(splitAmt * 100) / 100;
+
+      if (index === splits.length - 1) {
+        splitAmt = Math.round(remainingAmount * 100) / 100;
+      } else {
+        remainingAmount -= splitAmt;
+      }
+
+      // Notes and tags
+      let builtNote = tx.note || "";
+      if (acts.addTagsEnabled && acts.addTagsValue && acts.addTagsValue.trim()) {
+        builtNote = [builtNote.trim(), `Tag: ${acts.addTagsValue.trim()}`].filter(Boolean).join(" · ");
+      }
+
+      const subTx: Transaction = {
+        ...tx,
+        id: tx.id + `_split_${index}`,
+        amount: splitAmt,
+        category: split.category || tx.category || "Others",
+        splitGroupId: groupId,
+        note: builtNote || undefined,
+      };
+
+      if (acts.renameMerchantEnabled && acts.renameMerchantValue && acts.renameMerchantValue.trim()) {
+        subTx.merchant = acts.renameMerchantValue.trim();
+        subTx.title = acts.renameMerchantValue.trim();
+      }
+
+      results.push(subTx);
+    });
+
+    return results;
+  }
+
+  // Regular actions
+  let updatedTx = { ...tx };
+
+  if (acts.renameMerchantEnabled && acts.renameMerchantValue && acts.renameMerchantValue.trim()) {
+    updatedTx.merchant = acts.renameMerchantValue.trim();
+    updatedTx.title = acts.renameMerchantValue.trim();
+  }
+
+  if (acts.updateCategoryEnabled && acts.updateCategoryValue && acts.updateCategoryValue.trim()) {
+    updatedTx.category = acts.updateCategoryValue.trim();
+  }
+
+  if (acts.addTagsEnabled && acts.addTagsValue && acts.addTagsValue.trim()) {
+    updatedTx.note = [updatedTx.note || "", `Tag: ${acts.addTagsValue.trim()}`].filter(Boolean).join(" · ");
+  }
+
+  if (acts.hideTransaction) {
+    updatedTx.category = "Transfer";
+  }
+
+  // Handle Needs Review/Reviewed in notes
+  if (acts.reviewStatusEnabled) {
+    if (acts.reviewStatusValue === "needs_review") {
+      updatedTx.fromEmail = true;
+      updatedTx.note = [updatedTx.note || "", "needs_review"].filter(Boolean).join(" · ");
+    } else if (acts.reviewStatusValue === "reviewed") {
+      updatedTx.note = [updatedTx.note || "", "mark_reviewed"].filter(Boolean).join(" · ");
+    }
+  }
+
+  return [updatedTx];
+}
+
+/**
  * Normalize an imported transaction: resolve accountId, apply category rules,
  * attach plaidItemId + plaidAccountId. Used by both email and Plaid paths.
+ * Supports splitting rules by returning an array of transactions.
  */
-function normalizeImportedTx(
+function getLevenshteinDistance(a: string, b: string): number {
+  const tmp: number[][] = [];
+  for (let i = 0; i <= a.length; i++) {
+    tmp[i] = [i];
+  }
+  for (let j = 0; j <= b.length; j++) {
+    tmp[0][j] = j;
+  }
+  for (let i = 1; i <= a.length; i++) {
+    for (let j = 1; j <= b.length; j++) {
+      tmp[i][j] = Math.min(
+        tmp[i - 1][j] + 1,
+        tmp[i][j - 1] + 1,
+        tmp[i - 1][j - 1] + (a[i - 1] === b[j - 1] ? 0 : 1)
+      );
+    }
+  }
+  return tmp[a.length][b.length];
+}
+
+function findClosestCategory(target: string, categories: Category[]): string {
+  if (!target || categories.length === 0) return target || "Others";
+
+  const cleanTarget = target.trim().toLowerCase();
+
+  const subcats = categories.filter((c) => c.parentId !== null && c.parentId !== undefined);
+  const parentCats = categories.filter((c) => c.parentId === null || c.parentId === undefined);
+
+  // 1. Subcategory exact case-insensitive match
+  const subExact = subcats.find((c) => c.name.trim().toLowerCase() === cleanTarget);
+  if (subExact) return subExact.name;
+
+  // 2. Subcategory substring/inclusion match
+  const subSub = subcats.find((c) => {
+    const name = c.name.trim().toLowerCase();
+    return name.includes(cleanTarget) || cleanTarget.includes(name);
+  });
+  if (subSub) return subSub.name;
+
+  // 3. Parent category exact case-insensitive match
+  const parentExact = parentCats.find((c) => c.name.trim().toLowerCase() === cleanTarget);
+  if (parentExact) return parentExact.name;
+
+  // 4. Parent category substring/inclusion match
+  const parentSub = parentCats.find((c) => {
+    const name = c.name.trim().toLowerCase();
+    return name.includes(cleanTarget) || cleanTarget.includes(name);
+  });
+  if (parentSub) return parentSub.name;
+
+  // 5. Fuzzy distance in subcategories
+  if (subcats.length > 0) {
+    let closestSubName = subcats[0].name;
+    let minSubDist = Infinity;
+    for (const c of subcats) {
+      const dist = getLevenshteinDistance(cleanTarget, c.name.trim().toLowerCase());
+      if (dist < minSubDist) {
+        minSubDist = dist;
+        closestSubName = c.name.trim();
+      }
+    }
+    if (minSubDist <= 4) {
+      return closestSubName;
+    }
+  }
+
+  // 6. Fuzzy distance in parent categories
+  if (parentCats.length > 0) {
+    let closestParentName = parentCats[0].name;
+    let minParentDist = Infinity;
+    for (const c of parentCats) {
+      const dist = getLevenshteinDistance(cleanTarget, c.name.trim().toLowerCase());
+      if (dist < minParentDist) {
+        minParentDist = dist;
+        closestParentName = c.name.trim();
+      }
+    }
+    return closestParentName;
+  }
+
+  return target || "Others";
+}
+
+function normalizeImportedTxs(
   raw: Omit<Transaction, "id" | "accountId"> & { id?: string; accountId?: string },
   source: "plaid" | "email",
   accounts: Account[],
   categoryRules: CategoryRule[],
+  categories: Category[],
   opts: {
     plaidAccMap?: Record<string, string>;
     plaidItemId?: string;
     fallbackAccountId?: string;
   } = {}
-): Transaction {
+): Transaction[] {
   const id = raw.id ?? (Date.now().toString(36) + Math.random().toString(36).slice(2, 9));
 
   // 1. Resolve accountId
@@ -625,31 +906,68 @@ function normalizeImportedTx(
       opts.plaidAccMap
     ) || opts.fallbackAccountId || raw.accountId || "";
 
+  const tx: Transaction = {
+    ...raw,
+    id,
+    accountId: resolvedAccountId,
+    category: raw.category || "Others",
+    source,
+    plaidItemId: opts.plaidItemId ?? raw.plaidItemId,
+    plaidAccountId: raw.plaidAccountId,
+  };
+
   // 2. Apply category rules (user-defined rules override source category)
+  // Check rich rules first
+  const richRules = categoryRules.filter(r => r.merchantPattern === "__rich_rule__");
+  for (const rule of richRules) {
+    try {
+      const payload = JSON.parse(rule.merchantExact || "{}");
+      if (matchesRichRule(tx, payload)) {
+        return applyRichRuleActions(tx, payload);
+      }
+    } catch (e) {
+      console.warn("Failed to parse rich rule payload", e);
+    }
+  }
+
+  // Fallback to standard category rules
   const needle = (raw.merchant || raw.title || "").toLowerCase().replace(/[^a-z0-9\s]/g, "").replace(/\s+/g, " ").trim();
-  let category = raw.category || "Others";
+  let category = tx.category;
   if (needle) {
-    const rules = categoryRules;
-    const exact = rules.find((r) => r.merchantPattern === needle);
+    const stdRules = categoryRules.filter(r => r.merchantPattern !== "__rich_rule__");
+    const exact = stdRules.find((r) => r.merchantPattern === needle);
     if (exact) {
       category = exact.category;
     } else {
-      const partial = rules
+      const partial = stdRules
         .filter((r) => needle.includes(r.merchantPattern) || r.merchantPattern.includes(needle))
         .sort((a, b) => b.hitCount - a.hitCount)[0];
       if (partial) category = partial.category;
     }
   }
 
-  return {
-    ...raw,
-    id,
-    accountId: resolvedAccountId,
-    category,
-    source,
-    plaidItemId: opts.plaidItemId ?? raw.plaidItemId,
-    plaidAccountId: raw.plaidAccountId,
-  };
+  // Redesign: map the final category name to the closest existing category/subcategory name prioritizing subcategories
+  category = findClosestCategory(category, categories);
+
+  return [{ ...tx, category }];
+}
+
+/**
+ * Backward compatibility wrapper returning a single transaction.
+ */
+function normalizeImportedTx(
+  raw: Omit<Transaction, "id" | "accountId"> & { id?: string; accountId?: string },
+  source: "plaid" | "email",
+  accounts: Account[],
+  categoryRules: CategoryRule[],
+  categories: Category[],
+  opts: {
+    plaidAccMap?: Record<string, string>;
+    plaidItemId?: string;
+    fallbackAccountId?: string;
+  } = {}
+): Transaction {
+  return normalizeImportedTxs(raw, source, accounts, categoryRules, categories, opts)[0];
 }
 
 /**
@@ -731,8 +1049,12 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
   const goalsRef = useRef<Goal[]>([]);
   const tasksRef = useRef<Task[]>([]);
   const projectsRef = useRef<Project[]>([]);
+  const holdingsRef = useRef<Holding[]>([]);
+  const investmentTransactionsRef = useRef<InvestmentTransaction[]>([]);
   const categoryRulesRef = useRef<CategoryRule[]>([]);
   useEffect(() => { categoryRulesRef.current = categoryRules; }, [categoryRules]);
+  const categoriesRef = useRef<Category[]>([]);
+  useEffect(() => { categoriesRef.current = categories; }, [categories]);
   const plaidSyncRef = useRef<PlaidSync>({ items: [] });
   useEffect(() => { plaidSyncRef.current = plaidSync; }, [plaidSync]);
   useEffect(() => { transactionsRef.current = transactions; }, [transactions]);
@@ -741,6 +1063,8 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
   useEffect(() => { goalsRef.current = goals; }, [goals]);
   useEffect(() => { tasksRef.current = tasks; }, [tasks]);
   useEffect(() => { projectsRef.current = projects; }, [projects]);
+  useEffect(() => { holdingsRef.current = holdings; }, [holdings]);
+  useEffect(() => { investmentTransactionsRef.current = investmentTransactions; }, [investmentTransactions]);
 
   useEffect(() => {
     (async () => {
@@ -785,10 +1109,19 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
           await AsyncStorage.removeItem(STORAGE_KEYS.transactions);
         }
 
+        const localAccts: Account[] = accRaw ? JSON.parse(accRaw) : [];
+        setAccounts(localAccts);
+
         const localTxs: Transaction[] = versionOk && txRaw ? JSON.parse(txRaw) : [];
-        setTransactions(localTxs);
+        // Filter out any standard transactions that belong to investment accounts.
+        // This breaks the sync loop where the client re-uploads old duplicates.
+        const investmentAcctIds = new Set(
+          localAccts.filter((a) => a.type === "investment").map((a) => a.id)
+        );
+        const cleanedLocalTxs = localTxs.filter((t) => !investmentAcctIds.has(t.accountId));
+        setTransactions(cleanedLocalTxs);
+
         if (rrspLimitRaw) setRrspLimitState(Number(rrspLimitRaw));
-        setAccounts(accRaw ? JSON.parse(accRaw) : []);
         const parsedBills: Bill[] = billRaw ? JSON.parse(billRaw) : [];
         // Migrate legacy data: recurring bills that got permanently isPaid:true
         // should be reset to the next future occurrence
@@ -818,7 +1151,9 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
         registerPushTokenWithServer(getApiBase(), hId, dId);
         setBudgets(budgetRaw ? JSON.parse(budgetRaw) : []);
         setGoals(goalRaw ? JSON.parse(goalRaw) : []);
-        setTasks(taskRaw ? JSON.parse(taskRaw) : []);
+        const parsedTasks = taskRaw ? JSON.parse(taskRaw) : [];
+        setTasks(parsedTasks);
+        setupTaskNotificationsOnInit(parsedTasks);
         setProjects(projectRaw ? JSON.parse(projectRaw) : []);
         setCategoryRules(rulesRaw ? JSON.parse(rulesRaw) : []);
         if (emailRaw) setEmailSync(JSON.parse(emailRaw));
@@ -868,11 +1203,11 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
         } catch {}
 
         // ── Background: push local transactions to server ─────────────────────
-        if (localTxs.length > 0) {
+        if (cleanedLocalTxs.length > 0) {
           fetch(`${getApiBase()}/api/transactions/bulk`, {
             method: "POST",
             headers: { "Content-Type": "application/json", "X-Household-ID": hId, "X-Device-ID": dId },
-            body: JSON.stringify({ transactions: localTxs }),
+            body: JSON.stringify({ transactions: cleanedLocalTxs }),
           }).catch(() => {});
         }
 
@@ -960,6 +1295,31 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
     setReviewedTransactionIds((prev) => prev.includes(id) ? prev : [...prev, id]);
   }, []);
 
+  const processReviewStatusForTransactions = useCallback((txs: Transaction[]) => {
+    let changed = false;
+    setReviewedTransactionIds((prev) => {
+      let next = [...prev];
+      txs.forEach((tx) => {
+        if (tx.note?.includes("needs_review")) {
+          if (next.includes(tx.id)) {
+            next = next.filter((id) => id !== tx.id);
+            changed = true;
+          }
+        } else if (tx.note?.includes("mark_reviewed")) {
+          if (!next.includes(tx.id)) {
+            next.push(tx.id);
+            changed = true;
+          }
+        }
+      });
+      if (changed) {
+        AsyncStorage.setItem(STORAGE_KEYS.reviewedTransactionIds, JSON.stringify(next)).catch(() => {});
+        return next;
+      }
+      return prev;
+    });
+  }, []);
+
   const changeHouseholdId = useCallback(async (code: string) => {
     const normalized = code.trim().toUpperCase();
     householdIdRef.current = normalized;
@@ -1011,6 +1371,7 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
   const addTransaction = useCallback((t: Omit<Transaction, "id">) => {
     const newT: Transaction = { ...t, id: genId() };
     setTransactions((prev) => upsertTransactions(prev, [newT]));
+    checkBudgetAndNotify([...transactionsRef.current, newT], budgetsRef.current);
     apiCall("/api/transactions", "POST", householdIdRef.current, deviceIdRef.current, newT);
   }, []);
 
@@ -1059,6 +1420,10 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
       return next;
     });
     if (mergedTx) {
+      checkBudgetAndNotify(
+        transactionsRef.current.map((t) => (t.id === id ? mergedTx! : t)),
+        budgetsRef.current
+      );
       apiCall("/api/transactions/bulk", "POST", householdIdRef.current, deviceIdRef.current, { transactions: [mergedTx] });
     } else {
       apiCall(`/api/transactions/${id}`, "PUT", householdIdRef.current, deviceIdRef.current, updates);
@@ -1067,6 +1432,7 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
 
   const deleteTransaction = useCallback((id: string) => {
     setTransactions((prev) => prev.filter((t) => t.id !== id));
+    checkBudgetAndNotify(transactionsRef.current.filter((t) => t.id !== id), budgetsRef.current);
     apiCall(`/api/transactions/${id}`, "DELETE", householdIdRef.current, deviceIdRef.current);
   }, []);
 
@@ -1112,12 +1478,15 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
     const now = new Date().toISOString();
     const newB: Budget = { ...b, id: genId(), createdAt: now, updatedAt: now };
     setBudgets((prev) => [...prev, newB]);
+    checkBudgetAndNotify(transactionsRef.current, [...budgetsRef.current, newB]);
     if (syncPrefsRef.current.budgets)
       apiCall("/api/budgets", "POST", householdIdRef.current, deviceIdRef.current, { ...newB, householdId: householdIdRef.current, deviceId: deviceIdRef.current });
   }, []);
 
   const updateBudget = useCallback((id: string, updates: Partial<Budget>) => {
+    const updatedBudgets = budgetsRef.current.map((b) => (b.id === id ? { ...b, ...updates } : b));
     setBudgets((prev) => prev.map((b) => (b.id === id ? { ...b, ...updates, updatedAt: new Date().toISOString() } : b)));
+    checkBudgetAndNotify(transactionsRef.current, updatedBudgets);
     if (syncPrefsRef.current.budgets)
       apiCall(`/api/budgets/${id}`, "PUT", householdIdRef.current, deviceIdRef.current, updates);
   }, []);
@@ -1156,6 +1525,7 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
     setTasks((prev) => [...prev, newT]);
     if (newT.reminderEnabled && newT.reminderDate)
       scheduleTaskReminder({ id: newT.id, title: newT.title, reminderDate: newT.reminderDate, notes: newT.notes });
+    scheduleTaskDueNotification({ id: newT.id, title: newT.title, dueDate: newT.dueDate, notes: newT.notes });
     if (syncPrefsRef.current.tasks)
       apiCall("/api/tasks", "POST", householdIdRef.current, deviceIdRef.current, { ...newT, householdId: householdIdRef.current, deviceId: deviceIdRef.current });
   }, []);
@@ -1167,6 +1537,7 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
       if (updated.reminderEnabled && updated.reminderDate)
         scheduleTaskReminder({ id: updated.id, title: updated.title, reminderDate: updated.reminderDate, notes: updated.notes });
       else cancelTaskReminder(id);
+      scheduleTaskDueNotification({ id: updated.id, title: updated.title, dueDate: updated.dueDate, notes: updated.notes });
       return updated;
     }));
     if (syncPrefsRef.current.tasks)
@@ -1176,6 +1547,7 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
   const deleteTask = useCallback((id: string) => {
     setTasks((prev) => prev.filter((t) => t.id !== id));
     cancelTaskReminder(id);
+    cancelTaskDueNotification(id);
     if (syncPrefsRef.current.tasks)
       apiCall(`/api/tasks/${id}`, "DELETE", householdIdRef.current, deviceIdRef.current);
   }, []);
@@ -1185,20 +1557,23 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
     const now = new Date().toISOString();
     const newB: Bill = { ...b, id: genId(), createdAt: now, updatedAt: now };
     setBills((prev) => [...prev, newB]);
-    apiCall("/api/bills", "POST", householdIdRef.current, deviceIdRef.current, newB);
+    if (syncPrefsRef.current.bills)
+      apiCall("/api/bills", "POST", householdIdRef.current, deviceIdRef.current, newB);
     scheduleBillNotifications(newB);
   }, []);
 
   const updateBill = useCallback((id: string, updates: Partial<Bill>) => {
     setBills((prev) => prev.map((b) => (b.id === id ? { ...b, ...updates, updatedAt: new Date().toISOString() } : b)));
-    apiCall(`/api/bills/${id}`, "PUT", householdIdRef.current, deviceIdRef.current, updates);
+    if (syncPrefsRef.current.bills)
+      apiCall(`/api/bills/${id}`, "PUT", householdIdRef.current, deviceIdRef.current, updates);
     const existing = billsRef.current.find((b) => b.id === id);
     if (existing) scheduleBillNotifications({ ...existing, ...updates });
   }, []);
 
   const deleteBill = useCallback((id: string) => {
     setBills((prev) => prev.filter((b) => b.id !== id));
-    apiCall(`/api/bills/${id}`, "DELETE", householdIdRef.current, deviceIdRef.current);
+    if (syncPrefsRef.current.bills)
+      apiCall(`/api/bills/${id}`, "DELETE", householdIdRef.current, deviceIdRef.current);
     cancelBillNotifications(id);
   }, []);
 
@@ -1266,43 +1641,120 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
       .trim();
   }
 
-  // ── Add a user-defined category mapping rule ────────────────────────────
+  // ── Add or edit a user-defined category mapping rule ────────────────────
   const addCategoryMappingRule = useCallback((
-    rule: { merchantPattern?: string; merchantExact?: string; fromCategory?: string | null; category: string; applyScope: "future" | "past_and_future" }
+    rule: { id?: string; merchantPattern?: string; merchantExact?: string; fromCategory?: string | null; category: string; applyScope: "future" | "past_and_future"; source?: "manual" | "learned" }
   ) => {
     const now = new Date().toISOString();
+    const isUpdate = !!rule.id;
+    const ruleId = rule.id ?? genId();
+    
+    // Find existing rule if updating to preserve createdAt
+    const existingRule = isUpdate ? categoryRulesRef.current.find(r => r.id === ruleId) : null;
+
     const newRule: CategoryRule = {
-      id: genId(),
+      id: ruleId,
       householdId: householdIdRef.current,
       merchantPattern: rule.merchantPattern ?? "",
-      merchantExact: rule.merchantExact,
+      merchantExact: rule.merchantExact ?? null,
       fromCategory: rule.fromCategory ?? null,
       category: rule.category,
-      hitCount: 1,
-      source: "manual",
+      hitCount: existingRule ? existingRule.hitCount : 1,
+      source: rule.source ?? "manual",
       applyScope: rule.applyScope,
-      createdAt: now,
+      createdAt: existingRule ? existingRule.createdAt : now,
       updatedAt: now,
     };
+
     setCategoryRules((prev) => {
-      const next = [...prev, newRule];
+      const next = isUpdate 
+        ? prev.map(r => r.id === ruleId ? newRule : r)
+        : [...prev, newRule];
       AsyncStorage.setItem(STORAGE_KEYS.categoryRules, JSON.stringify(next)).catch(() => {});
       return next;
     });
-    bgCall("/api/category-rules", "POST", householdIdRef.current, deviceIdRef.current, newRule);
+
+    if (isUpdate) {
+      bgCall(`/api/category-rules/${ruleId}`, "PUT", householdIdRef.current, deviceIdRef.current, {
+        merchantPattern: newRule.merchantPattern,
+        merchantExact: newRule.merchantExact,
+        fromCategory: newRule.fromCategory,
+        category: newRule.category,
+        hitCount: newRule.hitCount,
+        source: newRule.source,
+        applyScope: newRule.applyScope,
+      });
+    } else {
+      bgCall("/api/category-rules", "POST", householdIdRef.current, deviceIdRef.current, newRule);
+    }
 
     if (rule.applyScope === "past_and_future") {
-      const pattern = rule.merchantPattern ?? "";
       setTransactions((prev) => {
-        const next = prev.map((tx) => {
-          if (newRule.fromCategory && tx.category !== newRule.fromCategory) return tx;
-          if (pattern) {
-            const needle = (tx.merchant || tx.title || "").toLowerCase().replace(/[^a-z0-9\s]/g, "").replace(/\s+/g, " ").trim();
-            if (!needle.includes(pattern) && !pattern.includes(needle)) return tx;
+        const next: Transaction[] = [];
+        const toDelete: string[] = [];
+        const toAdd: Transaction[] = [];
+
+        prev.forEach((tx) => {
+          if (rule.merchantPattern === "__rich_rule__") {
+            try {
+              const payload = JSON.parse(rule.merchantExact || "{}");
+              if (matchesRichRule(tx, payload)) {
+                const results = applyRichRuleActions(tx, payload);
+                results.forEach((res) => {
+                  next.push(res);
+                  if (res.id !== tx.id) {
+                    toAdd.push(res);
+                  }
+                });
+                if (results.length > 1 || results[0].id !== tx.id) {
+                  toDelete.push(tx.id);
+                }
+              } else {
+                next.push(tx);
+              }
+            } catch (e) {
+              next.push(tx);
+            }
+          } else {
+            // Standard category rules
+            const pattern = rule.merchantPattern ?? "";
+            if (rule.fromCategory && tx.category !== rule.fromCategory) {
+              next.push(tx);
+              return;
+            }
+            if (pattern) {
+              const needle = (tx.merchant || tx.title || "").toLowerCase().replace(/[^a-z0-9\s]/g, "").replace(/\s+/g, " ").trim();
+              if (!needle.includes(pattern) && !pattern.includes(needle)) {
+                next.push(tx);
+                return;
+              }
+            }
+            next.push({ ...tx, category: rule.category });
           }
-          return { ...tx, category: rule.category };
         });
+
+        // Sync local storage
         AsyncStorage.setItem(STORAGE_KEYS.transactions, JSON.stringify(next)).catch(() => {});
+
+        // Sync splits/updates to server database
+        if (toDelete.length > 0) {
+          toDelete.forEach((id) => bgCall(`/api/transactions/${id}`, "DELETE", householdIdRef.current, deviceIdRef.current));
+        }
+        if (toAdd.length > 0) {
+          toAdd.forEach((t) => bgCall("/api/transactions", "POST", householdIdRef.current, deviceIdRef.current, t));
+        }
+        if (rule.merchantPattern === "__rich_rule__") {
+          next.forEach((tx) => {
+            const original = prev.find((o) => o.id === tx.id);
+            if (original && JSON.stringify(original) !== JSON.stringify(tx) && !toDelete.includes(tx.id)) {
+              bgCall(`/api/transactions/${tx.id}`, "PUT", householdIdRef.current, deviceIdRef.current, tx);
+            }
+          });
+        }
+
+        // Handle review status side effects for retroactive application!
+        processReviewStatusForTransactions(next);
+
         return next;
       });
     }
@@ -1376,16 +1828,29 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
     if (!uploadExisting) return { uploaded: 0 };
     const hId = householdIdRef.current;
     const dId = deviceIdRef.current;
+    const endpointMap: Record<SyncableType, string> = {
+      budgets: "/api/budgets",
+      goals: "/api/goals",
+      tasks: "/api/tasks",
+      projects: "/api/projects",
+      bills: "/api/bills",
+      holdings: "/api/holdings",
+      investmentTransactions: "/api/investment-transactions",
+    };
     const recordsMap: Record<SyncableType, any[]> = {
       budgets: budgetsRef.current.map((b) => ({ ...b, householdId: hId, deviceId: dId })),
       goals: goalsRef.current.map((g) => ({ ...g, householdId: hId, deviceId: dId })),
       tasks: tasksRef.current.map((t) => ({ ...t, householdId: hId, deviceId: dId })),
       projects: projectsRef.current.map((p) => ({ ...p, householdId: hId, deviceId: dId })),
+      bills: billsRef.current.map((b) => ({ ...b, householdId: hId, deviceId: dId })),
+      holdings: holdingsRef.current.map((h) => ({ ...h, householdId: hId, deviceId: dId })),
+      investmentTransactions: investmentTransactionsRef.current.map((t) => ({ ...t, householdId: hId, deviceId: dId })),
     };
     const records = recordsMap[type];
+    const endpoint = endpointMap[type];
     let uploaded = 0;
     for (const record of records) {
-      const res = await apiCall(`/api/${type}`, "POST", hId, dId, record);
+      const res = await apiCall(endpoint, "POST", hId, dId, record);
       if (res?.ok) uploaded++;
     }
     return { uploaded };
@@ -1394,7 +1859,17 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
   const pullFromDb = useCallback(async (type: SyncableType, since?: string): Promise<{ pulled: number; error?: string }> => {
     const hId = householdIdRef.current;
     const dId = deviceIdRef.current;
-    const url = `/api/${type}${since ? `?since=${encodeURIComponent(since)}` : ""}`;
+    const endpointMap: Record<SyncableType, string> = {
+      budgets: "/api/budgets",
+      goals: "/api/goals",
+      tasks: "/api/tasks",
+      projects: "/api/projects",
+      bills: "/api/bills",
+      holdings: "/api/holdings",
+      investmentTransactions: "/api/investment-transactions",
+    };
+    const endpoint = endpointMap[type];
+    const url = `${endpoint}${since ? `?since=${encodeURIComponent(since)}` : ""}`;
     const res = await apiCall(url, "GET", hId, dId);
     if (!res?.ok) return { pulled: 0, error: "Fetch failed" };
     const data: any[] = await res.json();
@@ -1410,6 +1885,9 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
     else if (type === "goals") merge(setGoals, data as Goal[]);
     else if (type === "tasks") merge(setTasks, data as Task[]);
     else if (type === "projects") merge(setProjects, data as Project[]);
+    else if (type === "bills") merge(setBills, data as Bill[]);
+    else if (type === "holdings") merge(setHoldings, data as Holding[]);
+    else if (type === "investmentTransactions") merge(setInvestmentTransactions, data as InvestmentTransaction[]);
     return { pulled: data.length };
   }, []);
 
@@ -1611,9 +2089,9 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
 
           if (matchesDate && matchesAccount) {
             if (set.has("transactions")) return false;
-            if (set.has("expenses") && t.type === "expense") return false;
-            if (set.has("income") && t.type === "income") return false;
-            if (set.has("transfers") && t.category === "Transfer") return false;
+            if (set.has("expenses") && t.type === "expense" && t.category !== "Transfer" && t.category?.toLowerCase() !== "transfer") return false;
+            if (set.has("income") && t.type === "income" && t.category !== "Transfer" && t.category?.toLowerCase() !== "transfer") return false;
+            if (set.has("transfers") && (t.category === "Transfer" || t.category?.toLowerCase() === "transfer")) return false;
           }
           return true;
         });
@@ -1730,12 +2208,13 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
       // ── Resolve accountIds and categories at import time ───────────────────────
       const rules = categoryRulesRef.current;
       const importedTransactions: Transaction[] = Array.isArray(data.transactions)
-        ? data.transactions.map((t: any) =>
-            normalizeImportedTx(
+        ? data.transactions.flatMap((t: any) =>
+            normalizeImportedTxs(
               { ...t, id: t.id || genId(), fromEmail: true },
               "email",
               currentAccts,
-              rules
+              rules,
+              categoriesRef.current
             )
           )
         : [];
@@ -1746,6 +2225,7 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
         const prevKeys = new Set(transactionsRef.current.map(dedupKey));
         actuallyNew = importedTransactions.filter((t) => !prevKeys.has(dedupKey(t))).length;
         setTransactions((prev) => upsertTransactions(prev, importedTransactions));
+        processReviewStatusForTransactions(importedTransactions);
         // Push to server outside the state updater to avoid side effects
         bgCall(
           "/api/transactions/bulk",
@@ -1853,22 +2333,22 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
       // Fallback: first account in THIS item's plaidAccMap, never a random unrelated account
       const fallbackId = Object.values(plaidAccMap)[0] ?? "";
       const rules = categoryRulesRef.current;
-      const txsToAdd: Transaction[] = initialTransactions.map((t) =>
-        normalizeImportedTx(
-          { ...t, id: genId() },
+      const txsToAdd: Transaction[] = initialTransactions.flatMap((t) =>
+        normalizeImportedTxs(
+          { ...t, id: (t as any).plaidTransactionId || genId() },
           "plaid",
           current,
           rules,
+          categoriesRef.current,
           { plaidAccMap, plaidItemId: item.itemId, fallbackAccountId: fallbackId }
         )
       );
 
-      setTransactions((prev) => {
-        const existingKeys = new Set(prev.map(dedupKey));
-        const fresh = txsToAdd.filter((t) => !existingKeys.has(dedupKey(t)));
-        imported = fresh.length;
-        return upsertTransactions(prev, fresh);
-      });
+      const existingKeys = new Set(transactionsRef.current.map(dedupKey));
+      const freshToAdd = txsToAdd.filter((t) => !existingKeys.has(dedupKey(t)));
+      imported = freshToAdd.length;
+      setTransactions((prev) => upsertTransactions(prev, freshToAdd));
+      processReviewStatusForTransactions(freshToAdd);
 
       // Register item with accountIds and the Plaid→local account ID map.
       // Use ALL values from plaidAccMap (includes accounts already existing via plaidAccountId match).
@@ -2092,6 +2572,31 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
         const rules = categoryRulesRef.current;
         let imported = 0;
 
+        // Pre-compute fresh transactions BEFORE setTransactions so `imported` is set
+        // synchronously — React 18 updater callbacks run asynchronously so any value
+        // set inside the updater is still 0 when `return { imported }` executes.
+        let precomputedFresh: Transaction[] = [];
+        if (Array.isArray(data.transactions) && data.transactions.length > 0) {
+          const fallbackId = Object.values(plaidAccMap)[0] ?? "";
+          const candidates = (data.transactions as any[]).flatMap((t) =>
+            normalizeImportedTxs(
+              { ...t, id: t.plaidTransactionId || genId() },
+              "plaid",
+              plaidAccounts,
+              rules,
+              categoriesRef.current,
+              { plaidAccMap, plaidItemId: itemId, fallbackAccountId: fallbackId }
+            )
+          );
+          const currentKeys = new Set(transactionsRef.current.map(dedupKey));
+          precomputedFresh = candidates.filter((t) => !currentKeys.has(dedupKey(t)));
+          imported = precomputedFresh.length;
+          if (precomputedFresh.length > 0) {
+            bgCall("/api/transactions/bulk", "POST", householdIdRef.current, deviceIdRef.current, { transactions: precomputedFresh });
+            processReviewStatusForTransactions(precomputedFresh);
+          }
+        }
+
         setTransactions((prev) => {
           const validLocalIds = new Set(Object.values(plaidAccMap));
           const fixed: Transaction[] = [];
@@ -2137,32 +2642,9 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
             bgCall("/api/transactions/bulk", "POST", householdIdRef.current, deviceIdRef.current, { transactions: fixed });
           }
 
-          // 2. Import new transactions ───────────────────────────────────────────
-          let fresh: Transaction[] = [];
-          if (Array.isArray(data.transactions) && data.transactions.length > 0) {
-            const fallbackId = Object.values(plaidAccMap)[0] ?? "";
-            const candidates = (data.transactions as any[]).map((t) =>
-              normalizeImportedTx(
-                { ...t, id: genId() },
-                "plaid",
-                plaidAccounts,
-                rules,
-                { plaidAccMap, plaidItemId: itemId, fallbackAccountId: fallbackId }
-              )
-            );
-            const existingKeys = new Set(remapped.map(dedupKey));
-            fresh = candidates.filter((t) => !existingKeys.has(dedupKey(t)));
-            imported = fresh.length;
-            if (fresh.length > 0) {
-              bgCall(
-                "/api/transactions/bulk",
-                "POST",
-                householdIdRef.current,
-                deviceIdRef.current,
-                { transactions: fresh }
-              );
-            }
-          }
+          // 2. Merge precomputed fresh transactions (re-filter against remapped for accuracy)
+          const remappedKeys = new Set(remapped.map(dedupKey));
+          const fresh = precomputedFresh.filter((t) => !remappedKeys.has(dedupKey(t)));
 
           return upsertTransactions(remapped, fresh);
         });
@@ -2378,16 +2860,18 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
   const now = new Date();
   const monthStart = new Date(now.getFullYear(), now.getMonth(), 1).toISOString();
   const thisMonthTx = transactions.filter((t) => t.date >= monthStart);
-  const monthlyIncome = thisMonthTx.filter((t) => t.type === "income").reduce((s, t) => s + t.amount, 0);
-  const monthlyExpense = thisMonthTx.filter((t) => t.type === "expense").reduce((s, t) => s + t.amount, 0);
-  const LIABILITY_TYPES = ["credit", "mortgage", "loan"];
+  const monthlyIncome = thisMonthTx.filter((t) => t.type === "income" && t.category !== "Transfer" && t.category?.toLowerCase() !== "transfer").reduce((s, t) => s + t.amount, 0);
+  const monthlyExpense = thisMonthTx.filter((t) => t.type === "expense" && t.category !== "Transfer" && t.category?.toLowerCase() !== "transfer").reduce((s, t) => s + t.amount, 0);
+  const isLiabilityAccount = (a: Account) => {
+    if (["credit", "mortgage", "loan"].includes(a.type ?? "")) return true;
+    const text = `${a.name} ${a.bank}`.toLowerCase();
+    return text.includes("mortgage") || text.includes("loan") || text.includes("lending") || text.includes("borrow");
+  };
   const totalBalance = accounts
     .filter(isIncludedInNetworth)
     .reduce((s, a) => {
       const bal = computeBalance(a, transactions);
-      return LIABILITY_TYPES.includes(a.type ?? "")
-        ? s - Math.abs(bal)
-        : s + bal;
+      return isLiabilityAccount(a) ? s - Math.abs(bal) : s + bal;
     }, 0);
 
   return (

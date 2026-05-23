@@ -300,7 +300,7 @@ export default function AIReviewScreen() {
               <Text style={[styles.summaryText, { color: colors.foreground }]}>{result.summary}</Text>
               {!!result.topTip && (
                 <View style={[styles.tipRow, { backgroundColor: "#f59e0b" + "12", borderColor: "#f59e0b" + "30" }]}>
-                  <Feather name="lightbulb" size={14} color="#f59e0b" />
+                  <Feather name="zap" size={14} color="#f59e0b" />
                   <Text style={[styles.tipText, { color: colors.foreground }]}>{result.topTip}</Text>
                 </View>
               )}

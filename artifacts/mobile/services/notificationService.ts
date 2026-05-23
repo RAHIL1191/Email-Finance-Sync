@@ -6,6 +6,9 @@ import { Platform } from "react-native";
 const NOTIF_IDS_KEY = "@fintrack/bill_notif_ids";
 const NOTIF_PREFS_KEY = "notification_prefs";
 const REMINDER_TIME_KEY = "@fintrack/reminder_time";
+const TASK_DUE_IDS_KEY = "@fintrack/task_due_notif_ids";
+const TASK_REMINDER_TIME_KEY = "@fintrack/task_reminder_time";
+const BUDGET_NOTIF_FIRED_KEY = "@fintrack/budget_notif_fired";
 
 // ─── Local Bill type (mirrors AppContext.Bill — avoids circular import) ────────
 
@@ -39,6 +42,14 @@ async function getNotif() {
             shouldShowList: true,
           }),
         });
+        if (Platform.OS === "android") {
+          _notifModule.setNotificationChannelAsync("default", {
+            name: "default",
+            importance: _notifModule.AndroidImportance.MAX,
+            vibrationPattern: [0, 250, 250, 250],
+            lightColor: "#FF231F7C",
+          });
+        }
       }
     } catch {
       _notifModule = null;
@@ -52,6 +63,26 @@ async function getNotif() {
 interface BillNotifIds {
   upcoming?: string;
   overdue?: string;
+}
+
+interface TaskDueLike { id: string; title: string; dueDate: string; notes?: string; }
+
+interface BudgetLike {
+  id: string;
+  name: string;
+  amount: number;
+  category?: string;
+  type: "expense" | "income";
+  period: "weekly" | "monthly" | "yearly";
+  alertPct?: number;
+}
+
+interface TxLike {
+  id: string;
+  type: "income" | "expense";
+  amount: number;
+  category: string;
+  date: string;
 }
 
 // ─── Permissions ──────────────────────────────────────────────────────────────
@@ -81,6 +112,21 @@ export async function getReminderTime(): Promise<{ hour: number; minute: number 
 
 export async function saveReminderTime(hour: number, minute: number): Promise<void> {
   await AsyncStorage.setItem(REMINDER_TIME_KEY, JSON.stringify({ hour, minute }));
+}
+
+export async function getTaskReminderTime(): Promise<{ hour: number; minute: number }> {
+  try {
+    const raw = await AsyncStorage.getItem(TASK_REMINDER_TIME_KEY);
+    if (raw) {
+      const { hour, minute } = JSON.parse(raw);
+      if (typeof hour === "number" && typeof minute === "number") return { hour, minute };
+    }
+  } catch {}
+  return { hour: 8, minute: 0 };
+}
+
+export async function saveTaskReminderTime(hour: number, minute: number): Promise<void> {
+  await AsyncStorage.setItem(TASK_REMINDER_TIME_KEY, JSON.stringify({ hour, minute }));
 }
 
 // ─── Internal helpers ─────────────────────────────────────────────────────────
@@ -127,6 +173,52 @@ async function cancelIds(ids: BillNotifIds): Promise<void> {
   if (ids.overdue)  await N.cancelScheduledNotificationAsync(ids.overdue).catch(() => {});
 }
 
+async function getTaskDueIds(): Promise<Record<string, string>> {
+  try {
+    const raw = await AsyncStorage.getItem(TASK_DUE_IDS_KEY);
+    return raw ? JSON.parse(raw) : {};
+  } catch { return {}; }
+}
+
+async function saveTaskDueIds(ids: Record<string, string>): Promise<void> {
+  await AsyncStorage.setItem(TASK_DUE_IDS_KEY, JSON.stringify(ids));
+}
+
+async function getBudgetFiredMap(): Promise<Record<string, string>> {
+  try {
+    const raw = await AsyncStorage.getItem(BUDGET_NOTIF_FIRED_KEY);
+    return raw ? JSON.parse(raw) : {};
+  } catch { return {}; }
+}
+
+async function saveBudgetFiredMap(m: Record<string, string>): Promise<void> {
+  await AsyncStorage.setItem(BUDGET_NOTIF_FIRED_KEY, JSON.stringify(m));
+}
+
+function getPeriodKey(period: string): string {
+  const now = new Date();
+  if (period === "monthly") return `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, "0")}`;
+  if (period === "weekly") {
+    const d = new Date(now);
+    d.setHours(0, 0, 0, 0);
+    d.setDate(d.getDate() - d.getDay());
+    return `${d.getFullYear()}-W${d.toISOString().slice(0, 10)}`;
+  }
+  return `${now.getFullYear()}`;
+}
+
+function getPeriodStart(period: string): Date {
+  const now = new Date();
+  if (period === "monthly") return new Date(now.getFullYear(), now.getMonth(), 1);
+  if (period === "weekly") {
+    const d = new Date(now);
+    d.setHours(0, 0, 0, 0);
+    d.setDate(d.getDate() - d.getDay());
+    return d;
+  }
+  return new Date(now.getFullYear(), 0, 1);
+}
+
 // ─── Public API ───────────────────────────────────────────────────────────────
 
 /** Schedule upcoming (3 days before) and/or overdue (1 day after) notifications for a bill. */
@@ -161,9 +253,14 @@ export async function scheduleBillNotifications(bill: BillLike): Promise<void> {
             title: "📅 Bill Due Soon",
             body: `${bill.title} — $${bill.amount.toFixed(2)} is due in ${remindOffset} day${remindOffset !== 1 ? "s" : ""}.`,
             sound: true,
+            channelId: "default",
             data: { billId: bill.id, type: "upcoming" },
           },
-          trigger: { date: triggerDate } as any,
+          trigger: {
+            type: "date",
+            date: triggerDate,
+            repeats: false,
+          } as any,
         });
         billIds.upcoming = id;
       }
@@ -178,9 +275,14 @@ export async function scheduleBillNotifications(bill: BillLike): Promise<void> {
             title: "⚠️ Bill Overdue",
             body: `${bill.title} — $${bill.amount.toFixed(2)} was due yesterday. Please pay now.`,
             sound: true,
+            channelId: "default",
             data: { billId: bill.id, type: "overdue" },
           },
-          trigger: { date: triggerDate } as any,
+          trigger: {
+            type: "date",
+            date: triggerDate,
+            repeats: false,
+          } as any,
         });
         billIds.overdue = id;
       }
@@ -188,7 +290,9 @@ export async function scheduleBillNotifications(bill: BillLike): Promise<void> {
 
     ids[bill.id] = billIds;
     await saveStoredIds(ids);
-  } catch {}
+  } catch (err) {
+    console.error("[NotificationService] Error scheduling bill notifications:", err);
+  }
 }
 
 /** Cancel all scheduled notifications for a specific bill. */
@@ -222,23 +326,52 @@ interface TaskLike { id: string; title: string; reminderDate: string; notes?: st
 
 /** Schedule a one-time reminder notification for a task. */
 export async function scheduleTaskReminder(task: TaskLike): Promise<void> {
+  console.log("[NotificationService] scheduleTaskReminder CALLED for task:", task.title);
   const N = await getNotif();
-  if (!N) return;
+  if (!N) {
+    console.log("[NotificationService] scheduleTaskReminder FAILED: getNotif() returned null (Web platform or module load failure).");
+    return;
+  }
   try {
+    const prefs = await getPrefs();
+    console.log("[NotificationService] Current notification preferences:", prefs);
+    if (prefs.task_reminders === false) {
+      console.log("[NotificationService] scheduleTaskReminder SKIPPED: task_reminders pref is explicitly false.");
+      await N.cancelScheduledNotificationAsync(`task-${task.id}`).catch(() => {});
+      return;
+    }
     const triggerDate = new Date(task.reminderDate);
-    if (triggerDate.getTime() <= Date.now()) return;
+    console.log("[NotificationService] Trigger Date parsed:", triggerDate.toISOString(), "timestamp:", triggerDate.getTime());
+    console.log("[NotificationService] Current Time:", new Date().toISOString(), "timestamp:", Date.now());
+    
+    if (triggerDate.getTime() <= Date.now()) {
+      console.log("[NotificationService] scheduleTaskReminder SKIPPED: triggerDate is in the PAST or NOW.");
+      return;
+    }
+    
+    console.log("[NotificationService] Canceling existing reminder for task:", task.id);
     await N.cancelScheduledNotificationAsync(`task-${task.id}`).catch(() => {});
-    await N.scheduleNotificationAsync({
+    
+    console.log("[NotificationService] Scheduling notification via Expo...");
+    const scheduledId = await N.scheduleNotificationAsync({
       identifier: `task-${task.id}`,
       content: {
         title: `⏰ Task Reminder: ${task.title}`,
         body: task.notes || "Don't forget your upcoming task!",
         sound: true,
+        channelId: "default",
         data: { taskId: task.id, type: "task" },
       },
-      trigger: { date: triggerDate } as any,
+      trigger: {
+        type: "date",
+        date: triggerDate,
+        repeats: false,
+      } as any,
     });
-  } catch {}
+    console.log("[NotificationService] scheduleTaskReminder SUCCESS! Scheduled ID:", scheduledId);
+  } catch (err) {
+    console.error("[NotificationService] Error scheduling task reminder:", err);
+  }
 }
 
 /** Cancel a scheduled task reminder. */
@@ -247,6 +380,106 @@ export async function cancelTaskReminder(taskId: string): Promise<void> {
   const N = await getNotif();
   if (!N) return;
   try { await N.cancelScheduledNotificationAsync(`task-${taskId}`).catch(() => {}); } catch {}
+}
+
+/** Schedule a notification on the task's due date (fires at 8:00 AM on the due day). */
+export async function scheduleTaskDueNotification(task: TaskDueLike): Promise<void> {
+  const N = await getNotif();
+  if (!N) return;
+  try {
+    const prefs = await getPrefs();
+    const ids = await getTaskDueIds();
+    if (prefs.task_due === false) {
+      if (ids[task.id]) {
+        await N.cancelScheduledNotificationAsync(ids[task.id]).catch(() => {});
+        delete ids[task.id];
+        await saveTaskDueIds(ids);
+      }
+      return;
+    }
+    if (ids[task.id]) await N.cancelScheduledNotificationAsync(ids[task.id]).catch(() => {});
+    const { hour, minute } = await getTaskReminderTime();
+    const triggerDate = new Date(task.dueDate);
+    triggerDate.setHours(hour, minute, 0, 0);
+    if (triggerDate.getTime() <= Date.now()) return;
+    const id = await N.scheduleNotificationAsync({
+      content: {
+        title: `📋 Task Due Today: ${task.title}`,
+        body: task.notes || "This task is due today.",
+        sound: true,
+        channelId: "default",
+        data: { taskId: task.id, type: "task_due" },
+      },
+      trigger: {
+        type: "date",
+        date: triggerDate,
+        repeats: false,
+      } as any,
+    });
+    ids[task.id] = id;
+    await saveTaskDueIds(ids);
+  } catch (err) {
+    console.error("[NotificationService] Error scheduling task due notification:", err);
+  }
+}
+
+/** Cancel a scheduled task due-date notification. */
+export async function cancelTaskDueNotification(taskId: string): Promise<void> {
+  if (Platform.OS === "web") return;
+  const N = await getNotif();
+  if (!N) return;
+  try {
+    const ids = await getTaskDueIds();
+    if (!ids[taskId]) return;
+    await N.cancelScheduledNotificationAsync(ids[taskId]).catch(() => {});
+    delete ids[taskId];
+    await saveTaskDueIds(ids);
+  } catch {}
+}
+
+/** Reschedule all task notifications — requests permission if not yet granted (use from Notifications screen). */
+export async function rescheduleAllTaskNotifications(
+  tasks: Array<{ id: string; title: string; dueDate: string; reminderEnabled: boolean; reminderDate?: string; notes?: string; isCompleted: boolean }>
+): Promise<void> {
+  if (Platform.OS === "web") return;
+  try {
+    const granted = await requestNotificationPermissions();
+    if (!granted) return;
+    for (const task of tasks) {
+      if (task.isCompleted) {
+        await cancelTaskReminder(task.id);
+        await cancelTaskDueNotification(task.id);
+      } else {
+        if (task.reminderEnabled && task.reminderDate) {
+          await scheduleTaskReminder({ id: task.id, title: task.title, reminderDate: task.reminderDate, notes: task.notes });
+        } else {
+          await cancelTaskReminder(task.id);
+        }
+        await scheduleTaskDueNotification({ id: task.id, title: task.title, dueDate: task.dueDate, notes: task.notes });
+      }
+    }
+  } catch {}
+}
+
+/** Called on app init: reschedule task notifications only if permission already granted. */
+export async function setupTaskNotificationsOnInit(
+  tasks: Array<{ id: string; title: string; dueDate: string; reminderEnabled: boolean; reminderDate?: string; notes?: string; isCompleted: boolean }>
+): Promise<void> {
+  if (Platform.OS === "web") return;
+  try {
+    const N = await getNotif();
+    if (!N) return;
+    const { status } = await N.getPermissionsAsync();
+    if (status !== "granted") return;
+    for (const task of tasks) {
+      if (!task.isCompleted) {
+        if (task.reminderEnabled && task.reminderDate) {
+          await scheduleTaskReminder({ id: task.id, title: task.title, reminderDate: task.reminderDate, notes: task.notes });
+        }
+        await scheduleTaskDueNotification({ id: task.id, title: task.title, dueDate: task.dueDate, notes: task.notes });
+      }
+    }
+  } catch {}
 }
 
 /** Register this device's Expo push token with the api-server for server-initiated notifications. */
@@ -284,9 +517,73 @@ export async function fireImmediateNotification(title: string, body: string, dat
     const { status } = await N.getPermissionsAsync();
     if (status !== "granted") return;
     await N.scheduleNotificationAsync({
-      content: { title, body, sound: true, data: data ?? {} },
+      content: { title, body, sound: true, channelId: "default", data: data ?? {} },
       trigger: null,
     });
+  } catch {}
+}
+
+/** Check if a new expense transaction pushes any budget over its limit and fire an immediate notification. */
+export async function checkBudgetAndNotify(
+  allTxs: TxLike[],
+  budgets: BudgetLike[]
+): Promise<void> {
+  if (Platform.OS === "web") return;
+  try {
+    const prefs = await getPrefs();
+    if (prefs.budget_over === false && prefs.budget_pct === false) return;
+    const firedMap = await getBudgetFiredMap();
+    let mapChanged = false;
+    for (const budget of budgets) {
+      if (budget.type !== "expense") continue;
+      const periodStart = getPeriodStart(budget.period);
+      const periodKey = getPeriodKey(budget.period);
+      const overKey = `${budget.id}_${periodKey}_over`;
+      const pctKey = `${budget.id}_${periodKey}_pct`;
+      const catMatch = (txCat: string) => {
+        if (!budget.category) return true;
+        const a = txCat.toLowerCase(), b = budget.category.toLowerCase();
+        return a.includes(b) || b.includes(a);
+      };
+      const spent = allTxs
+        .filter((t) => {
+          if (t.type !== "expense") return false;
+          if (new Date(t.date).getTime() < periodStart.getTime()) return false;
+          return catMatch(t.category);
+        })
+        .reduce((sum, t) => sum + Math.abs(t.amount), 0);
+      const pct = budget.amount > 0 ? spent / budget.amount : 0;
+      const threshold = (budget.alertPct ?? 80) / 100;
+      if (prefs.budget_over !== false) {
+        if (pct >= 1 && !firedMap[overKey]) {
+          const over = (spent - budget.amount).toFixed(2);
+          await fireImmediateNotification(
+            "\uD83D\uDEA8 Budget Exceeded",
+            `Your "${budget.name}" budget is over by $${over}.`
+          );
+          firedMap[overKey] = "fired";
+          mapChanged = true;
+        } else if (pct < 1 && firedMap[overKey]) {
+          delete firedMap[overKey];
+          mapChanged = true;
+        }
+      }
+      if (prefs.budget_pct !== false) {
+        if (pct >= threshold && pct < 1 && !firedMap[pctKey]) {
+          const pctUsed = Math.round(pct * 100);
+          await fireImmediateNotification(
+            "\u26A0\uFE0F Budget Alert",
+            `You've used ${pctUsed}% of your "${budget.name}" budget.`
+          );
+          firedMap[pctKey] = "fired";
+          mapChanged = true;
+        } else if (pct < threshold && firedMap[pctKey]) {
+          delete firedMap[pctKey];
+          mapChanged = true;
+        }
+      }
+    }
+    if (mapChanged) await saveBudgetFiredMap(firedMap);
   } catch {}
 }
 

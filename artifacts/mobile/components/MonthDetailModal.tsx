@@ -141,7 +141,12 @@ export default function MonthDetailModal({
     totalIncome,
     totalExpense,
   } = useMemo(() => {
-    const inMonth = transactions.filter((t) => t.date.startsWith(monthPrefix));
+    const inMonth = transactions.filter(
+      (t) =>
+        t.date.startsWith(monthPrefix) &&
+        t.category !== "Transfer" &&
+        t.category?.toLowerCase() !== "transfer"
+    );
 
     const incomeUntilToday = inMonth.filter(
       (t) => t.type === "income" && t.date.slice(0, 10) <= todayStr
@@ -285,7 +290,7 @@ export default function MonthDetailModal({
                       Total Income
                     </Text>
                     <Text style={[styles.sectionAmt, { color: "#10b981" }]}>
-                      + {fmt(totalIncome)}
+                      {fmt(totalIncome)}
                     </Text>
                   </View>
 
@@ -305,7 +310,7 @@ export default function MonthDetailModal({
                       Until today
                     </Text>
                     <Text style={[styles.subAmt, { color: colors.foreground }]}>
-                      + {fmt(totalIncomeUntilToday)}
+                      {fmt(totalIncomeUntilToday)}
                     </Text>
                     <Feather name="chevron-right" size={14} color={colors.mutedForeground} />
                   </TouchableOpacity>
@@ -326,7 +331,7 @@ export default function MonthDetailModal({
                       Upcoming
                     </Text>
                     <Text style={[styles.subAmt, { color: colors.foreground }]}>
-                      + {fmt(totalIncomeUpcoming)}
+                      {fmt(totalIncomeUpcoming)}
                     </Text>
                     <Feather name="chevron-right" size={14} color={colors.mutedForeground} />
                   </TouchableOpacity>
@@ -405,7 +410,6 @@ export default function MonthDetailModal({
                         { color: balanceOverall >= 0 ? "#10b981" : "#ef4444" },
                       ]}
                     >
-                      {balanceOverall >= 0 ? "+ " : "- "}
                       {fmt(Math.abs(balanceOverall))}
                     </Text>
                   </View>
@@ -419,7 +423,6 @@ export default function MonthDetailModal({
                         { color: balanceUntilToday >= 0 ? "#10b981" : "#ef4444" },
                       ]}
                     >
-                      {balanceUntilToday >= 0 ? "+ " : "- "}
                       {fmt(Math.abs(balanceUntilToday))}
                     </Text>
                   </View>
@@ -533,7 +536,7 @@ export default function MonthDetailModal({
                             { color: isIncome ? "#10b981" : colors.foreground },
                           ]}
                         >
-                          {isIncome ? "+" : ""}${item.amount.toFixed(2)}
+                          ${item.amount.toFixed(2)}
                         </Text>
                       </TouchableOpacity>
                     );

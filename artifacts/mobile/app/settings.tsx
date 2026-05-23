@@ -19,6 +19,7 @@ import AsyncStorage from "@react-native-async-storage/async-storage";
 
 import { useColors } from "@/hooks/useColors";
 import { useApp } from "@/context/AppContext";
+import { useTheme } from "@/context/ThemeContext";
 
 // ─── Constants ────────────────────────────────────────────────────────────────
 
@@ -73,6 +74,7 @@ type SettingsRow =
 
 export default function SettingsScreen() {
   const colors = useColors();
+  const { setTheme } = useTheme();
   const [settings, setSettings] = useState<SettingsState>(DEFAULT_SETTINGS);
   const [picker, setPicker] = useState<PickerMode>(null);
 
@@ -103,9 +105,12 @@ export default function SettingsScreen() {
         AsyncStorage.setItem(SETTINGS_KEY, JSON.stringify(next));
         return next;
       });
+      if (updates.theme) {
+        setTheme(updates.theme as "Light" | "Dark" | "System");
+      }
       setPicker(null);
     },
-    []
+    [setTheme]
   );
 
   const handleReset = useCallback(() => {
@@ -177,10 +182,10 @@ export default function SettingsScreen() {
         },
         {
           kind: "nav",
-          label: "Category Mapping Rule",
-          sub: "Remap merchant or category → category",
-          icon: "tag",
-          color: "#ec4899",
+          label: "Rules",
+          sub: "Create classification & split rules",
+          icon: "zap",
+          color: "#8b5cf6",
           onPress: () => {
             Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
             router.push("/category-mapping" as any);

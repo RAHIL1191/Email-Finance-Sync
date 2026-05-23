@@ -26,7 +26,7 @@ const ALWAYS_SYNCED = [
   { key: "accounts",     label: "Accounts",     icon: "credit-card", color: "#10b981", desc: "Bank & credit card accounts" },
   { key: "bills",        label: "Bills",         icon: "file-text",   color: "#6366f1", desc: "Recurring bills & due dates" },
   { key: "categories",   label: "Categories",    icon: "tag",         color: "#f59e0b", desc: "Spending & income categories" },
-  { key: "categoryRules", label: "Auto-categorize Rules", icon: "zap", color: "#8b5cf6", desc: "Merchant → category mappings" },
+  { key: "categoryRules", label: "Rules", icon: "zap", color: "#8b5cf6", desc: "Classification & split rules" },
 ] as const;
 
 const OPTIONAL_SYNC: Array<{
@@ -143,7 +143,7 @@ const modalStyles = StyleSheet.create({
 export default function DataStorageScreen() {
   const colors = useColors();
   const insets = useSafeAreaInsets();
-  const { budgets, goals, tasks, projects, uploadToDb, pullFromDb } = useApp();
+  const { budgets, goals, tasks, projects, bills, holdings, investmentTransactions, uploadToDb, pullFromDb } = useApp();
   const { prefs, toggleDbSync, setLastSync } = useDbSyncPrefs();
   const [loading, setLoading] = useState<Record<string, boolean>>({});
   const [confirm, setConfirm] = useState<ConfirmConfig>(null);
@@ -153,6 +153,9 @@ export default function DataStorageScreen() {
     goals: goals.length,
     tasks: tasks.length,
     projects: projects.length,
+    bills: bills.length,
+    holdings: holdings.length,
+    investmentTransactions: investmentTransactions.length,
   };
 
   const setItemLoading = (key: string, val: boolean) =>

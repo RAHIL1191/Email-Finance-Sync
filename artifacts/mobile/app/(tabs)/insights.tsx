@@ -406,7 +406,7 @@ export default function InsightsScreen() {
   const categorySpend = useMemo(() => {
     const now = new Date();
     const monthStart = new Date(now.getFullYear(), now.getMonth(), 1).toISOString();
-    const thisMonth = transactions.filter((t) => t.date >= monthStart && t.type === "expense");
+    const thisMonth = transactions.filter((t) => t.date >= monthStart && t.type === "expense" && t.category !== "Transfer" && t.category?.toLowerCase() !== "transfer");
     const totals: Record<string, number> = {};
     thisMonth.forEach((t) => { totals[t.category] = (totals[t.category] || 0) + t.amount; });
     return Object.entries(totals).sort((a, b) => b[1] - a[1]).slice(0, 6);

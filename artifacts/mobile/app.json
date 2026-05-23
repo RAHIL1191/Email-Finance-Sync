@@ -22,7 +22,10 @@
       }
     },
     "android": {
-      "package": "com.rahil1191.mobile"
+      "package": "com.rahil1191.mobile",
+      "permissions": [
+        "SCHEDULE_EXACT_ALARM"
+      ]
     },
     "web": {
       "favicon": "./assets/images/icon.png"

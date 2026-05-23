@@ -18,6 +18,8 @@ import budgetsRouter from "./budgets.js";
 import goalsRouter from "./goals.js";
 import tasksRouter from "./tasks.js";
 import projectsRouter from "./projects.js";
+import holdingsRouter from "./holdings.js";
+import investmentTransactionsRouter from "./investmentTransactions.js";
 
 const router: IRouter = Router();
 
@@ -41,6 +43,8 @@ router.use(budgetsRouter);
 router.use(goalsRouter);
 router.use(tasksRouter);
 router.use(projectsRouter);
+router.use(holdingsRouter);
+router.use(investmentTransactionsRouter);
 
 // AI features (rate-limited)
 router.use(strictRateLimit, aiReviewRouter);

@@ -19,7 +19,10 @@ import { useApp } from "@/context/AppContext";
 import {
   getReminderTime,
   rescheduleAllBillNotifications,
+  rescheduleAllTaskNotifications,
   saveReminderTime,
+  getTaskReminderTime,
+  saveTaskReminderTime,
 } from "@/services/notificationService";
 import { useColors } from "@/hooks/useColors";
 
@@ -29,7 +32,7 @@ interface NotifItem {
   key: string;
   title: string;
   sub: string;
-  type: "toggle" | "time";
+  type: "toggle" | "time" | "task_time";
 }
 
 interface NotifSection {
@@ -57,6 +60,22 @@ const SECTIONS: NotifSection[] = [
       { key: "budget_over",    title: "Budget Overspending Alert", sub: "Get notified when your spending exceeds your budget.",              type: "toggle" },
       { key: "budget_pct",     title: "Budget Spending Alert",     sub: "Get alerts when your spending crosses your chosen percentage.",     type: "toggle" },
       { key: "spending_insight",title: "Spending Insights",        sub: "Receive insight to about your spending patterns.",                 type: "toggle" },
+    ],
+  },
+  {
+    title: "Task Reminders",
+    color: "#3b82f6",
+    items: [
+      { key: "task_reminders", title: "Task Reminder Notifications", sub: "Get notified when a task reminder date arrives.",         type: "toggle"    },
+      { key: "task_due",       title: "Task Due Date Alerts",         sub: "Get an alert on the day a task is due.",                 type: "toggle"    },
+      { key: "task_due_time",  title: "Due Alert Time",               sub: "08:00 AM",                                              type: "task_time" },
+    ],
+  },
+  {
+    title: "Projects",
+    color: "#3b82f6",
+    items: [
+      { key: "project_activity", title: "Project Activity Notifications", sub: "Get updates about project changes and activity. (Coming soon)", type: "toggle" },
     ],
   },
   {
@@ -118,6 +137,8 @@ const STORAGE_KEY = "notification_prefs";
 const DEFAULT_PREFS: Record<string, boolean> = {
   bill_upcoming: true, bill_overdue: true,
   budget_over: true, budget_pct: true, spending_insight: true,
+  task_reminders: true, task_due: true,
+  project_activity: true,
   projections: true,
   sync_unusual: true, sync_tx: true, sync_bill_gen: true,
   group_notifs: true,
@@ -131,12 +152,16 @@ const DEFAULT_PREFS: Record<string, boolean> = {
 
 export default function NotificationsScreen() {
   const colors = useColors();
-  const { bills } = useApp();
+  const { bills, tasks } = useApp();
   const [prefs, setPrefs] = useState<Record<string, boolean>>(DEFAULT_PREFS);
   const [reminderDate, setReminderDate] = useState(() => {
     const d = new Date(); d.setHours(8, 11, 0, 0); return d;
   });
   const [showTimePicker, setShowTimePicker] = useState(false);
+  const [taskReminderDate, setTaskReminderDate] = useState(() => {
+    const d = new Date(); d.setHours(8, 0, 0, 0); return d;
+  });
+  const [showTaskTimePicker, setShowTaskTimePicker] = useState(false);
 
   // Load persisted prefs + reminder time
   useEffect(() => {
@@ -149,18 +174,28 @@ export default function NotificationsScreen() {
       const d = new Date(); d.setHours(hour, minute, 0, 0);
       setReminderDate(d);
     });
+    getTaskReminderTime().then(({ hour, minute }) => {
+      const d = new Date(); d.setHours(hour, minute, 0, 0);
+      setTaskReminderDate(d);
+    });
   }, []);
+
+  const TASK_KEYS = new Set(["task_reminders", "task_due"]);
 
   const toggle = useCallback((key: string) => {
     Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
     setPrefs((prev) => {
       const next = { ...prev, [key]: !prev[key] };
       AsyncStorage.setItem(STORAGE_KEY, JSON.stringify(next)).then(() => {
-        rescheduleAllBillNotifications(bills);
+        if (TASK_KEYS.has(key)) {
+          rescheduleAllTaskNotifications(tasks);
+        } else {
+          rescheduleAllBillNotifications(bills);
+        }
       });
       return next;
     });
-  }, [bills]);
+  }, [bills, tasks]);
 
   const handleTimeChange = useCallback((_: any, selected: Date | undefined) => {
     if (!selected) return;
@@ -169,6 +204,14 @@ export default function NotificationsScreen() {
       rescheduleAllBillNotifications(bills);
     });
   }, [bills]);
+
+  const handleTaskTimeChange = useCallback((_: any, selected: Date | undefined) => {
+    if (!selected) return;
+    setTaskReminderDate(selected);
+    saveTaskReminderTime(selected.getHours(), selected.getMinutes()).then(() => {
+      rescheduleAllTaskNotifications(tasks);
+    });
+  }, [tasks]);
 
   const formatTime = (d: Date) =>
     d.toLocaleTimeString("en-US", { hour: "numeric", minute: "2-digit", hour12: true });
@@ -198,19 +241,20 @@ export default function NotificationsScreen() {
               {section.items.map((item, idx) => {
                 const isLast = idx === section.items.length - 1;
 
-                if (item.type === "time") {
+                if (item.type === "time" || item.type === "task_time") {
+                  const isTask = item.type === "task_time";
                   return (
                     <View key={item.key}>
                       {idx > 0 && <View style={[s.divider, { backgroundColor: colors.border }]} />}
                       <TouchableOpacity
                         style={s.row}
-                        onPress={() => setShowTimePicker(true)}
+                        onPress={() => isTask ? setShowTaskTimePicker(true) : setShowTimePicker(true)}
                         activeOpacity={0.7}
                       >
                         <View style={s.rowText}>
                           <Text style={[s.rowTitle, { color: colors.foreground }]}>{item.title}</Text>
                           <Text style={[s.rowSub, { color: colors.primary, fontFamily: "Inter_500Medium" }]}>
-                            {formatTime(reminderDate)}
+                            {formatTime(isTask ? taskReminderDate : reminderDate)}
                           </Text>
                         </View>
                         <Feather name="clock" size={18} color={colors.mutedForeground} />
@@ -247,7 +291,7 @@ export default function NotificationsScreen() {
         ))}
       </ScrollView>
 
-      {/* Time picker */}
+      {/* Bill time picker */}
       {showTimePicker && (
         <View style={[s.timePickerOverlay, { backgroundColor: "rgba(0,0,0,0.4)" }]}>
           <View style={[s.timePickerSheet, { backgroundColor: colors.card }]}>
@@ -262,6 +306,27 @@ export default function NotificationsScreen() {
               mode="time"
               display={Platform.OS === "ios" ? "spinner" : "default"}
               onChange={handleTimeChange}
+              style={{ alignSelf: "center" }}
+            />
+          </View>
+        </View>
+      )}
+
+      {/* Task due alert time picker */}
+      {showTaskTimePicker && (
+        <View style={[s.timePickerOverlay, { backgroundColor: "rgba(0,0,0,0.4)" }]}>
+          <View style={[s.timePickerSheet, { backgroundColor: colors.card }]}>
+            <View style={s.timePickerHeader}>
+              <Text style={[s.timePickerTitle, { color: colors.foreground }]}>Set Task Due Alert Time</Text>
+              <TouchableOpacity onPress={() => setShowTaskTimePicker(false)}>
+                <Text style={[s.timePickerDone, { color: colors.primary }]}>Done</Text>
+              </TouchableOpacity>
+            </View>
+            <DateTimePicker
+              value={taskReminderDate}
+              mode="time"
+              display={Platform.OS === "ios" ? "spinner" : "default"}
+              onChange={handleTaskTimeChange}
               style={{ alignSelf: "center" }}
             />
           </View>

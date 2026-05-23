@@ -22,6 +22,7 @@ import { AIProviderProvider } from "@/context/AIProviderContext";
 import { DrawerProvider } from "@/context/DrawerContext";
 import { FeatureFlagsProvider } from "@/context/FeatureFlagsContext";
 import { DbSyncPrefsProvider } from "@/context/DbSyncPrefsContext";
+import { ThemeProvider } from "@/context/ThemeContext";
 
 // expo-keep-awake (used by Expo dev tools) lacks a .catch() on activateKeepAwakeAsync.
 // On fast-refresh with the new architecture the activity is briefly absent, causing an
@@ -77,6 +78,7 @@ export default function RootLayout() {
   }
 
   return (
+    <ThemeProvider>
     <SafeAreaProvider>
       <ErrorBoundary>
         <QueryClientProvider client={queryClient}>
@@ -101,5 +103,6 @@ export default function RootLayout() {
         </QueryClientProvider>
       </ErrorBoundary>
     </SafeAreaProvider>
+    </ThemeProvider>
   );
 }

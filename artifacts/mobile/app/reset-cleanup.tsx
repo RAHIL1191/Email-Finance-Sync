@@ -82,9 +82,9 @@ export default function ResetCleanupScreen() {
   // Dynamically calculate filtered counts
   const filteredCounts: Record<CategoryId, number> = {
     bills: (bills && fromDate && toDate) ? bills.filter((b: any) => selectedAccounts.length === 0 || (b.accountId && selectedAccounts.includes(b.accountId))).length : 0,
-    expenses: transactions ? transactions.filter((t: any) => t.type === "expense" && t.category !== "Transfer" && isFiltered(t)).length : 0,
-    income: transactions ? transactions.filter((t: any) => t.type === "income" && t.category !== "Transfer" && isFiltered(t)).length : 0,
-    transfers: transactions ? transactions.filter((t: any) => t.category === "Transfer" && isFiltered(t)).length : 0,
+    expenses: transactions ? transactions.filter((t: any) => t.type === "expense" && t.category !== "Transfer" && t.category?.toLowerCase() !== "transfer" && isFiltered(t)).length : 0,
+    income: transactions ? transactions.filter((t: any) => t.type === "income" && t.category !== "Transfer" && t.category?.toLowerCase() !== "transfer" && isFiltered(t)).length : 0,
+    transfers: transactions ? transactions.filter((t: any) => (t.category === "Transfer" || t.category?.toLowerCase() === "transfer") && isFiltered(t)).length : 0,
     portfolio: (holdings?.length ?? 0) + (investmentTransactions?.length ?? 0),
   };
 

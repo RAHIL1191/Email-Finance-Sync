@@ -312,7 +312,7 @@ export default function HomeScreen() {
     return budgets.map(b => {
       const since = b.period === "monthly" ? mStart : b.period === "weekly" ? wStart : yStart;
       const spent = transactions
-        .filter(t => t.type === "expense" && t.date >= since && (!b.category || t.category === b.category))
+        .filter(t => t.type === "expense" && t.category !== "Transfer" && t.category?.toLowerCase() !== "transfer" && t.date >= since && (!b.category || t.category === b.category))
         .reduce((s, t) => s + t.amount, 0);
       const pct = b.amount > 0 ? Math.min((spent / b.amount) * 100, 100) : 0;
       const overBudget = spent > b.amount;
@@ -333,7 +333,7 @@ export default function HomeScreen() {
     const monthStart = new Date(now.getFullYear(), now.getMonth(), 1).toISOString();
     const map: Record<string, number> = {};
     transactions
-      .filter((t) => t.type === "expense" && t.date >= monthStart)
+      .filter((t) => t.type === "expense" && t.category !== "Transfer" && t.category?.toLowerCase() !== "transfer" && t.date >= monthStart)
       .forEach((t) => { map[t.category] = (map[t.category] || 0) + t.amount; });
     return Object.entries(map)
       .sort((a, b) => b[1] - a[1])
@@ -346,7 +346,7 @@ export default function HomeScreen() {
     const lmStart = new Date(now.getFullYear(), now.getMonth() - 1, 1).toISOString();
     const lmEnd   = new Date(now.getFullYear(), now.getMonth(), 1).toISOString();
     return transactions
-      .filter(t => t.type === "expense" && t.date >= lmStart && t.date < lmEnd)
+      .filter(t => t.type === "expense" && t.category !== "Transfer" && t.category?.toLowerCase() !== "transfer" && t.date >= lmStart && t.date < lmEnd)
       .reduce((s, t) => s + t.amount, 0);
   }, [transactions]);
 
@@ -667,7 +667,7 @@ export default function HomeScreen() {
             <Text style={[styles.flowPeriod, { color: colors.foreground }]}>{monthName}</Text>
             <ChangeBadge pct={flowPct} />
             <Text style={[styles.flowAmt, { color: netFlow >= 0 ? colors.success : colors.expense }]}>
-              {netFlow >= 0 ? "+" : "-"}${Math.abs(netFlow).toLocaleString("en-US", { minimumFractionDigits: 0 })}
+              ${Math.abs(netFlow).toLocaleString("en-US", { minimumFractionDigits: 0 })}
             </Text>
           </View>
           <View style={[styles.flowDivider, { backgroundColor: colors.border }]} />
@@ -676,14 +676,14 @@ export default function HomeScreen() {
               <View style={[styles.flowSubDot, { backgroundColor: colors.success }]} />
               <Text style={[styles.flowSubLabel, { color: colors.mutedForeground }]}>Income</Text>
               <Text style={[styles.flowSubAmt, { color: colors.success }]}>
-                +${monthlyIncome.toLocaleString("en-US", { minimumFractionDigits: 0 })}
+                ${monthlyIncome.toLocaleString("en-US", { minimumFractionDigits: 0 })}
               </Text>
             </View>
             <View style={styles.flowSubItem}>
               <View style={[styles.flowSubDot, { backgroundColor: colors.expense }]} />
               <Text style={[styles.flowSubLabel, { color: colors.mutedForeground }]}>Spent</Text>
               <Text style={[styles.flowSubAmt, { color: colors.expense }]}>
-                -${monthlyExpense.toLocaleString("en-US", { minimumFractionDigits: 0 })}
+                ${monthlyExpense.toLocaleString("en-US", { minimumFractionDigits: 0 })}
               </Text>
             </View>
           </View>
@@ -691,7 +691,7 @@ export default function HomeScreen() {
             <Text style={[styles.flowProjectedText, { color: colors.mutedForeground }]}>
               Projected Balance  
               <Text style={{ color: netFlow >= 0 ? colors.success : colors.expense, fontFamily: "Inter_600SemiBold" }}>
-                {"  "}{netFlow >= 0 ? "+" : "-"}${Math.abs(netFlow).toLocaleString("en-US", { minimumFractionDigits: 0 })}
+                {"  "}${Math.abs(netFlow).toLocaleString("en-US", { minimumFractionDigits: 0 })}
               </Text>
             </Text>
           </View>

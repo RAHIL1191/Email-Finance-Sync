@@ -158,7 +158,7 @@ function BudgetFormSheet({
       setSelectedAccountIds([]);
       setPeriod(initial?.period ?? "monthly");
       setRollover(false);
-      setAlertPct(70);
+      setAlertPct(initial?.alertPct ?? 70);
       setIncludeInOverall(initial?.includeInOverall ?? true);
       setColor(initial?.color ?? BUDGET_COLORS[0]);
     }
@@ -175,7 +175,7 @@ function BudgetFormSheet({
     const parsed = parseFloat(amount);
     if (isNaN(parsed) || parsed <= 0) { Alert.alert("Invalid Amount", "Please enter a valid amount."); return; }
     Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
-    onSave({ name: name.trim(), amount: parsed, category: category || undefined, type, period, includeInOverall, color });
+    onSave({ name: name.trim(), amount: parsed, category: category || undefined, type, period, includeInOverall, color, alertPct });
     onClose();
   };
 

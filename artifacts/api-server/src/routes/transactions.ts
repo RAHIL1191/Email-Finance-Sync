@@ -1,11 +1,95 @@
 import { Router } from "express";
 import { eq, and, desc, gte, lte, inArray } from "drizzle-orm";
-import { db, transactionsTable, insertTransactionSchema, updateTransactionSchema } from "@workspace/db";
+import { db, transactionsTable, insertTransactionSchema, updateTransactionSchema, categoriesTable } from "@workspace/db";
 import { validate, requireHouseholdId } from "../middlewares/validate.js";
 
 const router = Router();
 
 router.use(requireHouseholdId);
+
+function getLevenshteinDistance(a: string, b: string): number {
+  const tmp: number[][] = [];
+  for (let i = 0; i <= a.length; i++) {
+    tmp[i] = [i];
+  }
+  for (let j = 0; j <= b.length; j++) {
+    tmp[0][j] = j;
+  }
+  for (let i = 1; i <= a.length; i++) {
+    for (let j = 1; j <= b.length; j++) {
+      tmp[i][j] = Math.min(
+        tmp[i - 1][j] + 1,
+        tmp[i][j - 1] + 1,
+        tmp[i - 1][j - 1] + (a[i - 1] === b[j - 1] ? 0 : 1)
+      );
+    }
+  }
+  return tmp[a.length][b.length];
+}
+
+function findClosestCategory(target: string, categories: Array<{ id: string; name: string; parentId: string | null }>): string {
+  if (!target || categories.length === 0) return target || "Others";
+
+  const cleanTarget = target.trim().toLowerCase();
+
+  const subcats = categories.filter((c) => c.parentId !== null && c.parentId !== undefined);
+  const parentCats = categories.filter((c) => c.parentId === null || c.parentId === undefined);
+
+  // 1. Subcategory exact case-insensitive match
+  const subExact = subcats.find((c) => c.name.trim().toLowerCase() === cleanTarget);
+  if (subExact) return subExact.name;
+
+  // 2. Subcategory substring/inclusion match
+  const subSub = subcats.find((c) => {
+    const name = c.name.trim().toLowerCase();
+    return name.includes(cleanTarget) || cleanTarget.includes(name);
+  });
+  if (subSub) return subSub.name;
+
+  // 3. Parent category exact case-insensitive match
+  const parentExact = parentCats.find((c) => c.name.trim().toLowerCase() === cleanTarget);
+  if (parentExact) return parentExact.name;
+
+  // 4. Parent category substring/inclusion match
+  const parentSub = parentCats.find((c) => {
+    const name = c.name.trim().toLowerCase();
+    return name.includes(cleanTarget) || cleanTarget.includes(name);
+  });
+  if (parentSub) return parentSub.name;
+
+  // 5. Fuzzy distance in subcategories
+  if (subcats.length > 0) {
+    let closestSubName = subcats[0].name;
+    let minSubDist = Infinity;
+    for (const c of subcats) {
+      const dist = getLevenshteinDistance(cleanTarget, c.name.trim().toLowerCase());
+      if (dist < minSubDist) {
+        minSubDist = dist;
+        closestSubName = c.name.trim();
+      }
+    }
+    // Accept fuzzy subcategory if it is relatively close (e.g. distance <= 4)
+    if (minSubDist <= 4) {
+      return closestSubName;
+    }
+  }
+
+  // 6. Fuzzy distance in parent categories
+  if (parentCats.length > 0) {
+    let closestParentName = parentCats[0].name;
+    let minParentDist = Infinity;
+    for (const c of parentCats) {
+      const dist = getLevenshteinDistance(cleanTarget, c.name.trim().toLowerCase());
+      if (dist < minParentDist) {
+        minParentDist = dist;
+        closestParentName = c.name.trim();
+      }
+    }
+    return closestParentName;
+  }
+
+  return target || "Others";
+}
 
 /** GET /api/transactions — list all transactions for this household */
 router.get("/transactions", async (req, res) => {
@@ -25,8 +109,17 @@ router.get("/transactions", async (req, res) => {
 /** POST /api/transactions — create a new transaction */
 router.post("/transactions", validate(insertTransactionSchema), async (req, res) => {
   try {
+    const householdId = res.locals.householdId;
+    const categories = await db
+      .select({ id: categoriesTable.id, name: categoriesTable.name, parentId: categoriesTable.parentId })
+      .from(categoriesTable)
+      .where(eq(categoriesTable.householdId, householdId));
+
+    const mappedCategory = findClosestCategory(req.body.category || "Others", categories);
+
     const payload = {
       ...req.body,
+      category: mappedCategory,
       householdId: res.locals.householdId,
       deviceId: res.locals.deviceId,
     };
@@ -46,6 +139,12 @@ router.post("/transactions/bulk", async (req, res) => {
       res.status(400).json({ error: "transactions array is required" });
       return;
     }
+    const householdId = res.locals.householdId;
+    const categories = await db
+      .select({ id: categoriesTable.id, name: categoriesTable.name, parentId: categoriesTable.parentId })
+      .from(categoriesTable)
+      .where(eq(categoriesTable.householdId, householdId));
+
     const now = new Date();
     const payload = transactions.map((t) => {
       // Strip client-supplied timestamp fields — Drizzle expects Date objects for
@@ -53,8 +152,10 @@ router.post("/transactions/bulk", async (req, res) => {
       // "value.toISOString is not a function". Let the DB defaults handle createdAt
       // and supply a fresh Date for updatedAt.
       const { createdAt: _c, updatedAt: _u, ...rest } = t as any;
+      const mappedCategory = findClosestCategory(t.category || "Others", categories);
       return {
         ...rest,
+        category: mappedCategory,
         householdId: res.locals.householdId,
         deviceId: res.locals.deviceId,
         updatedAt: now,

@@ -98,7 +98,7 @@ export default function ProjectsScreen() {
           renderItem={({ item }) => {
             const txs = transactions.filter((t) => t.projectId === item.id);
             const totalSpent = txs
-              .filter((t) => t.type === "expense")
+              .filter((t) => t.type === "expense" && t.category !== "Transfer" && t.category?.toLowerCase() !== "transfer")
               .reduce((s, t) => s + t.amount, 0);
             return (
               <TouchableOpacity

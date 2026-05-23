@@ -1,22 +1,31 @@
 import AsyncStorage from "@react-native-async-storage/async-storage";
 import React, { createContext, useContext, useEffect, useRef, useState } from "react";
 
-export type SyncableType = "budgets" | "goals" | "tasks" | "projects";
+export type SyncableType = "budgets" | "goals" | "tasks" | "projects" | "bills" | "holdings" | "investmentTransactions";
 
 export interface DbSyncPrefs {
   budgets: boolean;
   goals: boolean;
   tasks: boolean;
   projects: boolean;
+  bills: boolean;
+  holdings: boolean;
+  investmentTransactions: boolean;
   budgets_lastSync?: string;
   goals_lastSync?: string;
   tasks_lastSync?: string;
   projects_lastSync?: string;
+  bills_lastSync?: string;
+  holdings_lastSync?: string;
+  investmentTransactions_lastSync?: string;
   /** Timestamp recorded when sync was turned OFF — used to pull delta on resume */
   budgets_stoppedAt?: string;
   goals_stoppedAt?: string;
   tasks_stoppedAt?: string;
   projects_stoppedAt?: string;
+  bills_stoppedAt?: string;
+  holdings_stoppedAt?: string;
+  investmentTransactions_stoppedAt?: string;
 }
 
 const DEFAULT_PREFS: DbSyncPrefs = {
@@ -24,6 +33,9 @@ const DEFAULT_PREFS: DbSyncPrefs = {
   goals: false,
   tasks: false,
   projects: false,
+  bills: false,
+  holdings: false,
+  investmentTransactions: false,
 };
 
 const STORAGE_KEY = "@fintrack/dbSyncPrefs";

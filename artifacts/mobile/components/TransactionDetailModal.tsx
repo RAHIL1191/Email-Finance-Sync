@@ -116,7 +116,7 @@ const EDIT_TYPES: EditType[] = ["EXPENSE", "INCOME", "TRANSFER", "BILLS"];
 
 function typeToEditType(type: "income" | "expense", category: string): EditType {
   if (type === "income") return "INCOME";
-  if (category === "Transfer") return "TRANSFER";
+  if (category === "Transfer" || category?.toLowerCase() === "transfer") return "TRANSFER";
   if (category === "Bills") return "BILLS";
   return "EXPENSE";
 }
@@ -354,7 +354,7 @@ export default function TransactionDetailModal({ visible, onClose, transaction }
                       if (et === "TRANSFER") setCategory("Transfer");
                       else if (et === "BILLS") setCategory("Bills");
                       else if (et === "INCOME") setCategory("Income");
-                      else if (category === "Transfer" || category === "Bills" || category === "Income") setCategory("Other");
+                      else if (category === "Transfer" || category?.toLowerCase() === "transfer" || category === "Bills" || category === "Income") setCategory("Other");
                     }}
                   >
                     <Text style={[s.typeTabText, { color: editType === et ? colors.primary : colors.mutedForeground }]}>
@@ -714,7 +714,7 @@ export default function TransactionDetailModal({ visible, onClose, transaction }
 
               {/* Mark as transfer / Revert from transfer */}
               <View style={[s.actionCard, { backgroundColor: colors.card, borderColor: colors.border }]}>
-                {transaction.category === "Transfer" ? (
+                {transaction.category === "Transfer" || transaction.category?.toLowerCase() === "transfer" ? (
                   <>
                     <TouchableOpacity
                       style={[s.actionPill, { backgroundColor: colors.primary + "20" }]}

@@ -313,27 +313,45 @@ const MONTHS = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "
 const FULL_MONTHS = ["January", "February", "March", "April", "May", "June", "July", "August", "September", "October", "November", "December"];
 const DAY_HEADERS = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"];
 
-function getMonthData(transactions: Transaction[], year: number) {
+function getMonthData(transactions: Transaction[], year: number, bills?: Bill[]) {
   return MONTHS.map((label, idx) => {
     const monthStart = new Date(year, idx, 1).toISOString().slice(0, 7);
     const income = transactions
-      .filter((t) => t.type === "income" && t.date.startsWith(monthStart))
+      .filter((t) => t.type === "income" && t.category !== "Transfer" && t.category?.toLowerCase() !== "transfer" && t.date.startsWith(monthStart))
       .reduce((s, t) => s + t.amount, 0);
-    const expense = transactions
-      .filter((t) => t.type === "expense" && t.date.startsWith(monthStart))
+    let expense = transactions
+      .filter((t) => t.type === "expense" && t.category !== "Transfer" && t.category?.toLowerCase() !== "transfer" && t.date.startsWith(monthStart))
       .reduce((s, t) => s + t.amount, 0);
+
+    if (bills) {
+      const todayStr = new Date().toISOString().slice(0, 10);
+      const upcomingBillsTotal = bills
+        .filter((b) => b.dueDate.startsWith(monthStart) && !b.isPaid && b.dueDate.slice(0, 10) > todayStr)
+        .reduce((s, b) => s + b.amount, 0);
+      expense += upcomingBillsTotal;
+    }
+
     return { label, income, expense };
   });
 }
 
-function getMonthDataForYearMonth(transactions: Transaction[], year: number, month: number) {
+function getMonthDataForYearMonth(transactions: Transaction[], year: number, month: number, bills?: Bill[]) {
   const monthStart = new Date(year, month, 1).toISOString().slice(0, 7);
   const income = transactions
-    .filter((t) => t.type === "income" && t.date.startsWith(monthStart))
+    .filter((t) => t.type === "income" && t.category !== "Transfer" && t.category?.toLowerCase() !== "transfer" && t.date.startsWith(monthStart))
     .reduce((s, t) => s + t.amount, 0);
-  const expense = transactions
-    .filter((t) => t.type === "expense" && t.date.startsWith(monthStart))
+  let expense = transactions
+    .filter((t) => t.type === "expense" && t.category !== "Transfer" && t.category?.toLowerCase() !== "transfer" && t.date.startsWith(monthStart))
     .reduce((s, t) => s + t.amount, 0);
+
+  if (bills) {
+    const todayStr = new Date().toISOString().slice(0, 10);
+    const upcomingBillsTotal = bills
+      .filter((b) => b.dueDate.startsWith(monthStart) && !b.isPaid && b.dueDate.slice(0, 10) > todayStr)
+      .reduce((s, b) => s + b.amount, 0);
+    expense += upcomingBillsTotal;
+  }
+
   return { income, expense };
 }
 
@@ -354,30 +372,35 @@ function ProjectedSection({
 }) {
   const projected = income - expense;
   const expensePct = income > 0 ? Math.min((expense / income) * 100, 100) : expense > 0 ? 100 : 0;
-  const balancePctChange = prevExpense > 0 ? Math.abs(((expense - prevExpense) / prevExpense) * 100) : 0;
-  const balanceUp = expense >= prevExpense;
 
   return (
     <TouchableOpacity activeOpacity={0.8} onPress={onPress} disabled={!onPress} style={[styles.projectedCard, { backgroundColor: colors.card }]}>
       <View style={styles.projectedHeader}>
-        <Text style={[styles.projectedTitle, { color: colors.foreground }]}>Projected</Text>
+        <Text style={[styles.projectedTitle, { color: colors.foreground }]}>Projected ({monthLabel})</Text>
         <TouchableOpacity style={styles.moreBtn} onPress={onPress}>
           <Text style={[styles.moreText, { color: colors.primary }]}>More</Text>
           <Feather name="chevron-right" size={14} color={colors.primary} />
         </TouchableOpacity>
       </View>
 
+      {/* Income Row */}
       <View style={styles.projectedRow}>
-        <Text style={[styles.projectedMonth, { color: colors.foreground }]}>{monthLabel}</Text>
-        <View style={styles.projectedRight}>
-          <Text style={[styles.projectedPct, { color: colors.mutedForeground }]}>0.0%</Text>
-          <Text style={[styles.projectedAmount, { color: "#4caf50" }]}>
-            + ${projected >= 0 ? projected.toFixed(0) : "0"}
-          </Text>
-        </View>
+        <Text style={[styles.projectedMonth, { color: colors.mutedForeground, fontFamily: "Inter_500Medium" }]}>Total Income</Text>
+        <Text style={[styles.projectedAmount, { color: "#4caf50", fontFamily: "Inter_600SemiBold" }]}>
+          ${income.toFixed(0)}
+        </Text>
       </View>
 
-      <View style={[styles.progressTrack, { backgroundColor: colors.muted }]}>
+      {/* Expense Row */}
+      <View style={styles.projectedRow}>
+        <Text style={[styles.projectedMonth, { color: colors.mutedForeground, fontFamily: "Inter_500Medium" }]}>Total Expense</Text>
+        <Text style={[styles.projectedAmount, { color: "#f97316", fontFamily: "Inter_600SemiBold" }]}>
+          ${expense.toFixed(0)}
+        </Text>
+      </View>
+
+      {/* Progress Track */}
+      <View style={[styles.progressTrack, { backgroundColor: colors.muted, marginVertical: 4 }]}>
         <View
           style={[
             styles.progressFill,
@@ -386,22 +409,13 @@ function ProjectedSection({
         />
       </View>
 
+      {/* Overall Balance Row */}
       <View style={styles.balanceRow}>
-        <View style={styles.balanceLeft}>
-          <Text style={[styles.balanceLabel, { color: colors.foreground }]}>Balance</Text>
-          <Text style={[styles.balanceAmount, { color: "#f97316" }]}>
-            - ${expense.toFixed(0)}
-          </Text>
-        </View>
-        <View style={styles.balanceRight}>
-          <View style={styles.balancePctBadge}>
-            <Feather name={balanceUp ? "arrow-up" : "arrow-down"} size={10} color="#f97316" />
-            <Text style={[styles.balancePct, { color: "#f97316" }]}>
-              {balancePctChange.toFixed(1)}%
-            </Text>
-          </View>
-          <Text style={[styles.balanceFinal, { color: colors.foreground }]}>
-            - ${expense.toFixed(0)}
+        <Text style={[styles.balanceLabel, { color: colors.foreground, fontFamily: "Inter_700Bold" }]}>Overall Balance</Text>
+        <View style={styles.projectedRight}>
+          <Text style={[styles.projectedPct, { color: colors.mutedForeground }]}>{expensePct.toFixed(1)}%</Text>
+          <Text style={[styles.projectedAmount, { fontSize: 16, fontFamily: "Inter_700Bold", color: projected >= 0 ? "#4caf50" : "#ef4444" }]}>
+            {`$${Math.abs(projected).toFixed(0)}`}
           </Text>
         </View>
       </View>
@@ -433,13 +447,15 @@ function CalendarView({
   const firstDayOfMonth = new Date(year, currentMonth, 1).getDay();
   const daysInMonth = new Date(year, currentMonth + 1, 0).getDate();
 
+  const { bills = [] } = useApp();
+
   const { income, expense } = useMemo(
-    () => getMonthDataForYearMonth(transactions, year, currentMonth),
-    [transactions, year, currentMonth]
+    () => getMonthDataForYearMonth(transactions, year, currentMonth, bills),
+    [transactions, year, currentMonth, bills]
   );
   const prevData = useMemo(
-    () => getMonthDataForYearMonth(transactions, currentMonth - 1 < 0 ? year - 1 : year, currentMonth - 1 < 0 ? 11 : currentMonth - 1),
-    [transactions, year, currentMonth]
+    () => getMonthDataForYearMonth(transactions, currentMonth - 1 < 0 ? year - 1 : year, currentMonth - 1 < 0 ? 11 : currentMonth - 1, bills),
+    [transactions, year, currentMonth, bills]
   );
 
   const txDays = useMemo(() => {
@@ -585,12 +601,14 @@ function MonthlyView({
     return list;
   }, [currentYear, currentMonthIdx]);
 
+  const { bills = [] } = useApp();
+
   const monthDataList = useMemo(() => {
     return monthList.map(({ year, month, label }, idx) => {
-      const cur = getMonthDataForYearMonth(transactions, year, month);
+      const cur = getMonthDataForYearMonth(transactions, year, month, bills);
       const prevIdx = idx + 1 < monthList.length ? idx + 1 : null;
       const prev = prevIdx !== null
-        ? getMonthDataForYearMonth(transactions, monthList[prevIdx].year, monthList[prevIdx].month)
+        ? getMonthDataForYearMonth(transactions, monthList[prevIdx].year, monthList[prevIdx].month, bills)
         : { income: 0, expense: 0 };
       const netIncome = cur.income - cur.expense;
       const incomeChangePct = prev.income > 0
@@ -606,7 +624,7 @@ function MonthlyView({
         : cur.expense > 0 ? 100 : 0;
       return { label, ...cur, netIncome, incomeChangePct, balancePct, incomeUp, balanceUp, expensePct };
     });
-  }, [transactions, monthList]);
+  }, [transactions, monthList, bills]);
 
   return (
     <ScrollView showsVerticalScrollIndicator={false} contentContainerStyle={{ paddingHorizontal: 12, paddingBottom: 120, gap: 10, paddingTop: 10 }}>
@@ -642,7 +660,7 @@ function MonthlyView({
                 </Text>
               </View>
               <Text style={[styles.monthlyIncome, { color: "#4caf50" }]}>
-                + ${m.netIncome >= 0 ? m.netIncome.toFixed(0) : "0"}
+                {`$${Math.abs(m.netIncome).toFixed(0)}`}
               </Text>
             </View>
           </View>
@@ -662,7 +680,7 @@ function MonthlyView({
             <View style={styles.monthlyBalanceLeft}>
               <Text style={[styles.monthlyBalanceLabel, { color: colors.mutedForeground }]}>Balance</Text>
               <Text style={[styles.monthlyBalanceAmt, { color: "#f97316" }]}>
-                - ${m.expense.toFixed(0)}
+                {`$${m.expense.toFixed(0)}`}
               </Text>
             </View>
             <View style={styles.monthlyBalanceRight}>
@@ -677,7 +695,7 @@ function MonthlyView({
                 </Text>
               </View>
               <Text style={[styles.monthlyBalanceFinal, { color: colors.foreground }]}>
-                - ${m.expense.toFixed(0)}
+                {`$${m.expense.toFixed(0)}`}
               </Text>
             </View>
           </View>
@@ -704,9 +722,10 @@ function CashFlowTab({
   setChartView: (v: ChartView) => void;
   onMonthPress: (year: number, month: number) => void;
 }) {
+  const { bills = [] } = useApp();
   const year = new Date().getFullYear();
 
-  const monthData = useMemo(() => getMonthData(transactions, year), [transactions, year]);
+  const monthData = useMemo(() => getMonthData(transactions, year, bills), [transactions, year, bills]);
 
   const maxVal = useMemo(() => {
     return Math.max(...monthData.map((m) => Math.max(m.income, m.expense)), 1);
@@ -796,9 +815,6 @@ function CashFlowTab({
                 <Text style={[styles.barValue, { color: colors.mutedForeground }]}>
                   {m.income > 0 ? Math.round(m.income) : "0"}
                 </Text>
-                <Text style={[styles.barValue, { color: colors.mutedForeground }]}>
-                  {m.expense > 0 ? `-${Math.round(m.expense)}` : "0"}
-                </Text>
 
                 <View
                   style={[
@@ -821,6 +837,10 @@ function CashFlowTab({
                     )}
                   </View>
                 </View>
+
+                <Text style={[styles.barValue, { color: colors.mutedForeground }]}>
+                  {m.expense > 0 ? `${Math.round(m.expense)}` : "0"}
+                </Text>
 
                 <Text style={[styles.barLabel, { color: colors.mutedForeground }]}>{m.label}</Text>
               </TouchableOpacity>
@@ -947,10 +967,11 @@ function SpendingTab({
   const [selectedCat, setSelectedCat] = useState<string | null>(null);
   // activeSub filters the transaction list inside the category sheet; null = show all
   const [activeSub, setActiveSub] = useState<string | null>(null);
+  const [selectedSubCat, setSelectedSubCat] = useState<string | null>(null);
   const [selectedTx, setSelectedTx] = useState<Transaction | null>(null);
 
   const expenseTxs = useMemo(() =>
-    transactions.filter((t) => t.type === "expense" && t.category !== "Transfer" && t.date.startsWith(monthStr)),
+    transactions.filter((t) => t.type === "expense" && t.category !== "Transfer" && t.category?.toLowerCase() !== "transfer" && t.date.startsWith(monthStr)),
     [transactions, monthStr]
   );
 
@@ -1029,7 +1050,7 @@ function SpendingTab({
   const incomeItems = useMemo(() => {
     const totals: Record<string, number> = {};
     transactions
-      .filter((t) => t.type === "income" && t.date.startsWith(monthStr))
+      .filter((t) => t.type === "income" && t.category !== "Transfer" && t.category?.toLowerCase() !== "transfer" && t.date.startsWith(monthStr))
       .forEach((t) => {
         const main = resolveMainCategory(t.category);
         totals[main] = (totals[main] || 0) + t.amount;
@@ -1050,7 +1071,7 @@ function SpendingTab({
     if (!selectedCat) return [];
     const txType = spendView === "Income" ? "income" : "expense";
     return transactions.filter((t) => {
-      if (t.type !== txType || t.category === "Transfer" || !t.date.startsWith(monthStr)) return false;
+      if (t.type !== txType || t.category === "Transfer" || t.category?.toLowerCase() === "transfer" || !t.date.startsWith(monthStr)) return false;
       return resolveMainCategory(t.category) === selectedCat;
     });
   }, [selectedCat, transactions, monthStr, spendView, resolveMainCategory]);
@@ -1076,6 +1097,18 @@ function SpendingTab({
       return sub === activeSub;
     });
   }, [categoryTxs, activeSub, resolveSubCategory, resolveMainCategory]);
+
+  // All transactions for the selected subcategory this month
+  const subcatTxs = useMemo(() => {
+    if (!selectedSubCat || !selectedCat) return [];
+    const txType = spendView === "Income" ? "income" : "expense";
+    return transactions.filter((t) => {
+      if (t.type !== txType || t.category === "Transfer" || t.category?.toLowerCase() === "transfer" || !t.date.startsWith(monthStr)) return false;
+      const main = resolveMainCategory(t.category);
+      const sub = resolveSubCategory(t.category) || main;
+      return main === selectedCat && sub === selectedSubCat;
+    });
+  }, [selectedSubCat, selectedCat, transactions, monthStr, spendView, resolveMainCategory, resolveSubCategory]);
 
   const getCatVisual = (name: string) => {
     const cat = catByName(name);
@@ -1215,7 +1248,7 @@ function SpendingTab({
         })}
       </ScrollView>
 
-      {/* ── Category Detail Sheet (subcategory donut + ALL transactions) ── */}
+      {/* ── Category Detail Sheet (subcategory donut + subcategories list) ── */}
       <Modal
         visible={!!selectedCat}
         transparent
@@ -1258,59 +1291,90 @@ function SpendingTab({
               </View>
             )}
 
-            {/* Subcategory filter chips — only show when there are multiple subs */}
-            {subcategoryItems.length > 1 && (
-              <ScrollView
-                horizontal
-                showsHorizontalScrollIndicator={false}
-                contentContainerStyle={{ paddingHorizontal: 16, paddingVertical: 10, gap: 8 }}
-              >
-                {subcategoryItems.map(([key, amt]) => {
-                  const parentCat = catByName(selectedCat || "");
-                  const subCat = categories.find((c) => c.name === key && c.parentId);
-                  const col = subCat?.color || parentCat?.color || colors.primary;
-                  const isActive = activeSub === key;
-                  return (
-                    <TouchableOpacity
-                      key={key}
-                      style={[
-                        styles.subFilterChip,
-                        {
-                          backgroundColor: isActive ? col : col + "18",
-                          borderColor: col,
-                        },
-                      ]}
-                      onPress={() => handleSubChipPress(key)}
-                    >
-                      <Text style={[styles.subFilterChipText, { color: isActive ? "#fff" : col }]}>
-                        {key}
-                      </Text>
-                      <Text style={[styles.subFilterChipAmt, { color: isActive ? "#ffffffcc" : col + "cc" }]}>
-                        ${amt.toFixed(0)}
-                      </Text>
-                    </TouchableOpacity>
-                  );
-                })}
-              </ScrollView>
-            )}
+            {/* List of subcategories inside selectedCat */}
+            <View style={{ gap: 12, marginTop: 14, paddingHorizontal: 16 }}>
+              {subcategoryItems.map(([key, amt]) => {
+                const pct = subcatTotal > 0 ? (amt / subcatTotal) * 100 : 0;
+                const parentCat = catByName(selectedCat || "");
+                const subCat = categories.find((c) => c.name === key && c.parentId);
+                const col = subCat?.color || parentCat?.color || colors.primary;
+                const visIcon = (subCat?.icon || parentCat?.icon || "circle") as any;
 
-            {/* Transaction list — ALL category transactions, filtered by activeSub if set */}
+                return (
+                  <TouchableOpacity
+                    key={key}
+                    style={styles.spendItemRow}
+                    activeOpacity={0.7}
+                    onPress={() => {
+                      Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
+                      setSelectedSubCat(key); // Open Modal 2!
+                    }}
+                  >
+                    <View style={[styles.spendItemIcon, { backgroundColor: col + "20" }]}>
+                      <Feather name={visIcon} size={18} color={col} />
+                    </View>
+                    <View style={styles.spendItemInfo}>
+                      <Text style={[styles.spendItemName, { color: colors.foreground }]}>{key}</Text>
+                      <Text style={[styles.spendItemPct, { color: colors.mutedForeground }]}>{pct.toFixed(1)} %</Text>
+                    </View>
+                    <View style={styles.spendItemRight}>
+                      <Text style={[styles.spendItemAmt, { color: colors.foreground }]}>
+                        ${amt.toFixed(2)}
+                      </Text>
+                      <View style={[styles.spendItemBar, { backgroundColor: col }]} />
+                    </View>
+                  </TouchableOpacity>
+                );
+              })}
+            </View>
+          </ScrollView>
+        </View>
+      </Modal>
+
+      {/* ── Subcategory Detail Sheet (lists all transactions for the selected subcategory) ── */}
+      <Modal
+        visible={!!selectedSubCat}
+        transparent
+        animationType="slide"
+        onRequestClose={() => setSelectedSubCat(null)}
+      >
+        <TouchableOpacity
+          style={styles.sheetOverlay}
+          activeOpacity={1}
+          onPress={() => setSelectedSubCat(null)}
+        />
+        <View style={[styles.sheetContainer, { backgroundColor: colors.background }]}>
+          {/* Header */}
+          <View style={styles.sheetHeader}>
+            <TouchableOpacity
+              hitSlop={12}
+              onPress={() => setSelectedSubCat(null)}
+            >
+              <Feather name="arrow-left" size={20} color={colors.foreground} />
+            </TouchableOpacity>
+            <Text style={[styles.sheetTitle, { color: colors.foreground }]}>{selectedSubCat}</Text>
+            <TouchableOpacity onPress={() => setSelectedSubCat(null)} hitSlop={12}>
+              <Feather name="x" size={22} color={colors.foreground} />
+            </TouchableOpacity>
+          </View>
+
+          <ScrollView showsVerticalScrollIndicator={false} contentContainerStyle={{ paddingBottom: 40 }}>
+            {/* Transaction list — only transactions for this subcategory */}
             <View style={{ paddingHorizontal: 16, paddingTop: 4 }}>
               <Text style={[styles.sheetSectionLabel, { color: colors.mutedForeground }]}>
-                {sheetTransactions.length} transaction{sheetTransactions.length !== 1 ? "s" : ""}
-                {activeSub ? ` · ${activeSub}` : ""}
+                {subcatTxs.length} transaction{subcatTxs.length !== 1 ? "s" : ""}
               </Text>
             </View>
-            {sheetTransactions.length === 0 ? (
+            {subcatTxs.length === 0 ? (
               <Text style={[styles.emptyText, { color: colors.mutedForeground, textAlign: "center", paddingVertical: 24 }]}>
                 No transactions
               </Text>
             ) : (
-              sheetTransactions
+              subcatTxs
                 .slice()
                 .sort((a, b) => b.date.localeCompare(a.date))
                 .map((t) => {
-                  const acc = accounts.find((a) => a.id === t.accountId);
+                  const acc = accounts.find((acc) => acc.id === t.accountId);
                   const dt = new Date(t.date);
                   const dateStr = dt.toLocaleDateString("en-US", { month: "short", day: "numeric", year: "numeric" });
                   const subLabel = resolveSubCategory(t.category);
@@ -1447,9 +1511,9 @@ function TransactionsTab({ transactions, colors, showFilter, setShowFilter, filt
     let result = transactions;
     // Type filter (chip bar + filterSettings.type both apply)
     const typeFilter = filterSettings.type !== "All" ? filterSettings.type : filter;
-    if (typeFilter === "Expenses") result = result.filter((t) => t.type === "expense" && t.category !== "Transfer");
-    else if (typeFilter === "Income") result = result.filter((t) => t.type === "income");
-    else if (typeFilter === "Transfer") result = result.filter((t) => t.category === "Transfer");
+    if (typeFilter === "Expenses") result = result.filter((t) => t.type === "expense" && t.category !== "Transfer" && t.category?.toLowerCase() !== "transfer");
+    else if (typeFilter === "Income") result = result.filter((t) => t.type === "income" && t.category !== "Transfer" && t.category?.toLowerCase() !== "transfer");
+    else if (typeFilter === "Transfer") result = result.filter((t) => t.category === "Transfer" || t.category?.toLowerCase() === "transfer");
     // Categories
     if (filterSettings.categories.length > 0)
       result = result.filter((t) => filterSettings.categories.includes(t.category));

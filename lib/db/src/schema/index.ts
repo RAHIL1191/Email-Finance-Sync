@@ -11,3 +11,5 @@ export * from "./budgets";
 export * from "./goals";
 export * from "./tasks";
 export * from "./projects";
+export * from "./holdings";
+export * from "./investment_transactions";
