@@ -14,6 +14,7 @@ import { useSafeAreaInsets } from "react-native-safe-area-context";
 
 import { Account, Bill, Transaction } from "@/context/AppContext";
 import { useColors } from "@/hooks/useColors";
+import { parseLocalDate, localYM, toLocalYMD } from "@/hooks/useLocalDate";
 import TransactionDetailModal from "@/components/TransactionDetailModal";
 
 const FULL_MONTHS = [
@@ -80,16 +81,16 @@ interface Props {
 
 function formatDate(dateStr: string): string {
   const today = new Date();
-  const todayStr = today.toISOString().slice(0, 10);
-  const dateOnly = dateStr.slice(0, 10);
-  const d = new Date(dateStr);
+  const todayStr = toLocalYMD(today);
+  const d = parseLocalDate(dateStr);
+  const dateOnly = toLocalYMD(d);
   const timeStr = d.toLocaleTimeString("en-US", {
     hour: "numeric",
     minute: "2-digit",
     hour12: true,
   });
   if (dateOnly === todayStr) return `Today, ${timeStr}`;
-  const yest = new Date(today.getTime() - 86400000).toISOString().slice(0, 10);
+  const yest = toLocalYMD(new Date(today.getTime() - 86400000));
   if (dateOnly === yest) return `Yesterday, ${timeStr}`;
   return d.toLocaleDateString("en-US", { month: "short", day: "numeric" });
 }
@@ -124,7 +125,7 @@ export default function MonthDetailModal({
   const [editingTransaction, setEditingTransaction] = useState<Transaction | null>(null);
 
   const today = new Date();
-  const todayStr = today.toISOString().slice(0, 10);
+  const todayStr = toLocalYMD(today);
   const monthPrefix = `${year}-${String(month + 1).padStart(2, "0")}`;
   const monthName = FULL_MONTHS[month];
   const monthStartDate = new Date(year, month, 1);
@@ -143,30 +144,30 @@ export default function MonthDetailModal({
   } = useMemo(() => {
     const inMonth = transactions.filter(
       (t) =>
-        t.date.startsWith(monthPrefix) &&
+        localYM(t.date) === monthPrefix &&
         t.category !== "Transfer" &&
         t.category?.toLowerCase() !== "transfer"
     );
 
     const incomeUntilToday = inMonth.filter(
-      (t) => t.type === "income" && t.date.slice(0, 10) <= todayStr
+      (t) => t.type === "income" && toLocalYMD(parseLocalDate(t.date)) <= todayStr
     );
     const incomeUpcoming = inMonth.filter(
-      (t) => t.type === "income" && t.date.slice(0, 10) > todayStr
+      (t) => t.type === "income" && toLocalYMD(parseLocalDate(t.date)) > todayStr
     );
     const expenseUntilToday = inMonth.filter(
-      (t) => t.type === "expense" && t.date.slice(0, 10) <= todayStr
+      (t) => t.type === "expense" && toLocalYMD(parseLocalDate(t.date)) <= todayStr
     );
     const futureExpenses = inMonth.filter(
-      (t) => t.type === "expense" && t.date.slice(0, 10) > todayStr
+      (t) => t.type === "expense" && toLocalYMD(parseLocalDate(t.date)) > todayStr
     );
 
     const upcomingBillItems: ListItem[] = bills
       .filter(
         (b) =>
-          b.dueDate.startsWith(monthPrefix) &&
+          localYM(b.dueDate) === monthPrefix &&
           !b.isPaid &&
-          b.dueDate.slice(0, 10) > todayStr
+          toLocalYMD(parseLocalDate(b.dueDate)) > todayStr
       )
       .map((b) => ({
         id: b.id,

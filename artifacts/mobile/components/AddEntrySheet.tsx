@@ -21,6 +21,7 @@ import { useSafeAreaInsets } from "react-native-safe-area-context";
 
 import { Bill, useApp } from "@/context/AppContext";
 import { useColors } from "@/hooks/useColors";
+import { toLocalYMD } from "@/hooks/useLocalDate";
 import CategoryPickerModal from "./CategoryPickerModal";
 import MerchantPickerModal from "./MerchantPickerModal";
 
@@ -875,7 +876,7 @@ function ExpenseTab({ onSave, onRegisterSave }: { onSave: () => void; onRegister
           type: "expense",
           category: split.category || "Other",
           accountId,
-          date: date.toISOString(),
+          date: toLocalYMD(date),
           note: [notes, tag ? `Tag: ${tag}` : ""].filter(Boolean).join(" · ") || undefined,
           isRefund: tag.trim().toLowerCase() === "refund" ? true : undefined,
           projectId: projectId || undefined,
@@ -893,7 +894,7 @@ function ExpenseTab({ onSave, onRegisterSave }: { onSave: () => void; onRegister
         type: "expense",
         category: category || "Other",
         accountId,
-        date: date.toISOString(),
+        date: toLocalYMD(date),
         note: [notes, tag ? `Tag: ${tag}` : ""].filter(Boolean).join(" · ") || undefined,
         isRefund: tag.trim().toLowerCase() === "refund" ? true : undefined,
         projectId: projectId || undefined,
@@ -1191,7 +1192,7 @@ function IncomeTab({ onSave, onRegisterSave }: { onSave: () => void; onRegisterS
       type: "income",
       category: category || "Other",
       accountId,
-      date: date.toISOString(),
+      date: toLocalYMD(date),
       note: [notes, repeat !== "Never" ? `Repeats ${repeat}` : ""].filter(Boolean).join(" · ") || undefined,
       projectId: projectId || undefined,
       projectName: projectName || undefined,
@@ -1387,7 +1388,7 @@ function TransferTab({ onSave, onRegisterSave }: { onSave: () => void; onRegiste
       type: "expense",
       category: "Transfer",
       accountId: fromId,
-      date: date.toISOString(),
+      date: toLocalYMD(date),
       note: [purpose, notes, repeat !== "Never" ? `Repeats ${repeat}` : ""].filter(Boolean).join(" · ") || undefined,
       source: "manual",
     });
@@ -1397,7 +1398,7 @@ function TransferTab({ onSave, onRegisterSave }: { onSave: () => void; onRegiste
       type: "income",
       category: "Transfer",
       accountId: toId,
-      date: date.toISOString(),
+      date: toLocalYMD(date),
       note: [purpose, notes].filter(Boolean).join(" · ") || undefined,
       source: "manual",
     });
@@ -1595,7 +1596,7 @@ function BillsTab({ onSave, onRegisterSave }: { onSave: () => void; onRegisterSa
     addBill({
       title: title.trim(),
       amount: parsed,
-      dueDate: dueDate.toISOString(),
+      dueDate: toLocalYMD(dueDate),
       category: category || "Other",
       isPaid: false,
       isRecurring,

@@ -14,6 +14,7 @@ import {
   cancelTaskDueNotification,
   checkBudgetAndNotify,
 } from "@/services/notificationService";
+import { parseLocalDate, toLocalYMD } from "@/hooks/useLocalDate";
 import React, {
   createContext,
   useCallback,
@@ -1145,9 +1146,9 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
         };
         const migratedBills = parsedBills.map((b) => {
           if (b.isPaid && b.isRecurring && b.frequency) {
-            let d = new Date(b.dueDate);
+            let d = parseLocalDate(b.dueDate);
             do { d = advanceBillDate(d, b.frequency!); } while (d.getTime() < Date.now());
-            return { ...b, dueDate: d.toISOString(), isPaid: false };
+            return { ...b, dueDate: toLocalYMD(d), isPaid: false };
           }
           return b;
         });
@@ -2758,7 +2759,7 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
       let dirty = false;
       for (const bill of bills) {
         if (bill.isPaid) continue;
-        const due = new Date(bill.dueDate); due.setHours(0, 0, 0, 0);
+        const due = parseLocalDate(bill.dueDate); due.setHours(0, 0, 0, 0);
         const diffDays = Math.round((due.getTime() - today.getTime()) / 86400000);
         if (diffDays > 3 || diffDays < -3) continue;
         const key = `${bill.id}|${bill.dueDate.slice(0, 10)}`;
@@ -2766,7 +2767,7 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
         const WINDOW = 3 * 86400000;
         const match = txs.find((t) => {
           if (t.type !== "expense") return false;
-          const td = new Date(t.date); td.setHours(0, 0, 0, 0);
+          const td = parseLocalDate(t.date); td.setHours(0, 0, 0, 0);
           if (Math.abs(td.getTime() - due.getTime()) > WINDOW) return false;
           if (bill.accountId && t.accountId !== bill.accountId) return false;
           return t.amount === bill.amount;
@@ -2775,7 +2776,7 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
         dirty = true;
         if (match) {
           markBillPaidRef.current(bill.id);
-          const paidDate = new Date(match.date); paidDate.setHours(0, 0, 0, 0);
+          const paidDate = parseLocalDate(match.date); paidDate.setHours(0, 0, 0, 0);
           const paidLate = paidDate.getTime() > due.getTime();
           const daysLate = paidLate ? Math.round((paidDate.getTime() - due.getTime()) / 86400000) : 0;
           fireImmediateNotification(

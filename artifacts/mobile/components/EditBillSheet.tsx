@@ -20,6 +20,7 @@ import { useSafeAreaInsets } from "react-native-safe-area-context";
 
 import { Bill, useApp } from "@/context/AppContext";
 import { useColors } from "@/hooks/useColors";
+import { toLocalYMD } from "@/hooks/useLocalDate";
 import CategoryPickerModal from "@/components/CategoryPickerModal";
 
 // ─── Constants ────────────────────────────────────────────────────────────────
@@ -298,7 +299,7 @@ export default function EditBillSheet({ bill, visible, onClose, onCreateBill }: 
     const data: Omit<Bill, "id"> = {
       title:            title.trim(),
       amount:           parsed,
-      dueDate:          dueDate.toISOString(),
+      dueDate:          toLocalYMD(dueDate),
       category:         category || "Other",
       isPaid:           bill.isPaid,
       isRecurring,

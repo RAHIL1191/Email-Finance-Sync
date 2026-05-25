@@ -22,6 +22,7 @@ import { SafeAreaView } from "react-native-safe-area-context";
 import { computeBalance, useApp } from "@/context/AppContext";
 import { useDrawer } from "@/context/DrawerContext";
 import { useColors } from "@/hooks/useColors";
+import { parseLocalDate } from "@/hooks/useLocalDate";
 
 // ─── Section card wrapper ─────────────────────────────────────────────────────
 function SectionCard({
@@ -238,7 +239,7 @@ export default function HomeScreen() {
         (t.note || "").toLowerCase().includes(q) ||
         t.amount.toFixed(2).includes(q)
       )
-      .sort((a, b) => new Date(b.date).getTime() - new Date(a.date).getTime())
+      .sort((a, b) => parseLocalDate(b.date).getTime() - parseLocalDate(a.date).getTime())
       .slice(0, 50);
   }, [searchQuery, transactions]);
 
@@ -895,7 +896,7 @@ export default function HomeScreen() {
                         {item.merchant || item.title}
                       </Text>
                       <Text style={[srch.resultMeta, { color: colors.mutedForeground }]}>
-                        {item.category}  ·  {new Date(item.date).toLocaleDateString("en-US", { month: "short", day: "numeric", year: "numeric" })}
+                        {item.category}  ·  {parseLocalDate(item.date).toLocaleDateString("en-US", { month: "short", day: "numeric", year: "numeric" })}
                       </Text>
                     </View>
                     <Text style={[srch.resultAmt, { color: isExp ? colors.expense : colors.success }]}>

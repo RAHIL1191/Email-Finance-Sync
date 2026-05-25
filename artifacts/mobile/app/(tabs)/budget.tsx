@@ -19,6 +19,7 @@ import { SafeAreaView, useSafeAreaInsets } from "react-native-safe-area-context"
 import { Budget, Goal, useApp } from "@/context/AppContext";
 import { useDrawer } from "@/context/DrawerContext";
 import { useColors } from "@/hooks/useColors";
+import { parseLocalDate, toLocalYMD } from "@/hooks/useLocalDate";
 import CategoryPickerModal from "@/components/CategoryPickerModal";
 
 // ─── Constants ────────────────────────────────────────────────────────────────
@@ -29,8 +30,8 @@ const MONTH_NAMES = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Se
 
 // ─── Helpers ─────────────────────────────────────────────────────────────────
 function getMonthRange(year: number, month: number) {
-  const start = new Date(year, month, 1).toISOString().slice(0, 10);
-  const end = new Date(year, month + 1, 0).toISOString().slice(0, 10) + "T23:59:59";
+  const start = toLocalYMD(new Date(year, month, 1));
+  const end = toLocalYMD(new Date(year, month + 1, 0)) + "T23:59:59";
   return { start, end };
 }
 
@@ -790,8 +791,8 @@ function BudgetDetailSheet({
 
           {/* Timestamps */}
           <View style={ds.timestamps}>
-            <Text style={[ds.tsText, { color: colors.mutedForeground }]}>Created On {fmt(new Date(budget.createdAt))}</Text>
-            <Text style={[ds.tsText, { color: colors.mutedForeground }]}>Last updated {fmt(new Date(budget.updatedAt))}</Text>
+            <Text style={[ds.tsText, { color: colors.mutedForeground }]}>Created On {fmt(parseLocalDate(budget.createdAt))}</Text>
+            <Text style={[ds.tsText, { color: colors.mutedForeground }]}>Last updated {fmt(parseLocalDate(budget.updatedAt))}</Text>
           </View>
         </ScrollView>
       </SafeAreaView>

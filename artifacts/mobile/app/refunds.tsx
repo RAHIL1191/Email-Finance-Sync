@@ -15,9 +15,10 @@ import { useSafeAreaInsets } from "react-native-safe-area-context";
 
 import { Transaction, useApp } from "@/context/AppContext";
 import { useColors } from "@/hooks/useColors";
+import { parseLocalDate } from "@/hooks/useLocalDate";
 
 function formatDate(iso: string) {
-  return new Date(iso).toLocaleDateString("en-CA", {
+  return parseLocalDate(iso).toLocaleDateString("en-CA", {
     month: "short",
     day: "numeric",
     year: "numeric",
@@ -36,13 +37,13 @@ function detectMatches(
     const key = refund.id;
     if (seen.has(key)) continue;
 
-    const refundDateMs = new Date(refund.date).getTime();
+    const refundDateMs = parseLocalDate(refund.date).getTime();
     const match = allTransactions.find(
       (t) =>
         t.type === "income" &&
         !t.isRefund &&
         Math.abs(t.amount - refund.amount) / refund.amount < 0.01 &&
-        new Date(t.date).getTime() >= refundDateMs
+        parseLocalDate(t.date).getTime() >= refundDateMs
     );
 
     if (match) {

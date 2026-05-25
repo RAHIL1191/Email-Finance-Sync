@@ -35,6 +35,7 @@ import { CATEGORY_COLORS, CATEGORY_ICONS } from "@/components/TransactionItem";
 import { ACCOUNT_CATEGORIES, SubType } from "@/components/AddAccountModal";
 import { PLAID_BANKS, Transaction, InvestmentTransaction, computeBalance, isIncludedInNetworth, txBelongsToAccount, useApp } from "@/context/AppContext";
 import { useColors } from "@/hooks/useColors";
+import { parseLocalDate } from "@/hooks/useLocalDate";
 
 const { width: SCREEN_W } = Dimensions.get("window");
 
@@ -50,7 +51,7 @@ function buildBalanceHistory(
 
   const txByDate: Record<string, Transaction[]> = {};
   for (const tx of txns) {
-    const key = new Date(tx.date).toDateString();
+    const key = parseLocalDate(tx.date).toDateString();
     (txByDate[key] = txByDate[key] || []).push(tx);
   }
 
@@ -242,10 +243,10 @@ function AllTransactionsModal({
   const grouped = useMemo(() => {
     const map = new Map<string, Transaction[]>();
     const sorted = [...filtered].sort(
-      (a, b) => new Date(b.date).getTime() - new Date(a.date).getTime()
+      (a, b) => parseLocalDate(b.date).getTime() - parseLocalDate(a.date).getTime()
     );
     for (const tx of sorted) {
-      const d = new Date(tx.date);
+      const d = parseLocalDate(tx.date);
       const key = d.toLocaleDateString("en-US", {
         month: "long",
         year: "numeric",
@@ -347,7 +348,7 @@ function AllTransactionsModal({
                 {txns.map((tx) => {
                   const icon = (CATEGORY_ICONS[tx.category] || "circle") as any;
                   const catColor = CATEGORY_COLORS[tx.category] || colors.primary;
-                  const d = new Date(tx.date);
+                  const d = parseLocalDate(tx.date);
                   const dateStr = d.toLocaleDateString("en-US", {
                     month: "short",
                     day: "numeric",
@@ -956,7 +957,7 @@ export default function AccountDetailScreen() {
     () =>
       transactions
         .filter((t) => account ? txBelongsToAccount(t, account) : t.accountId === id)
-        .sort((a, b) => new Date(b.date).getTime() - new Date(a.date).getTime()),
+        .sort((a, b) => parseLocalDate(b.date).getTime() - parseLocalDate(a.date).getTime()),
     [transactions, id, account]
   );
 
@@ -1202,7 +1203,7 @@ export default function AccountDetailScreen() {
             {recentTxns.map((tx, i) => {
               const icon = (CATEGORY_ICONS[tx.category] || "circle") as any;
               const catColor = CATEGORY_COLORS[tx.category] || colors.primary;
-              const d = new Date(tx.date);
+              const d = parseLocalDate(tx.date);
               const dateLabel = d.toLocaleDateString("en-US", {
                 month: "short",
                 day: "numeric",
