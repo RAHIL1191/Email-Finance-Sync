@@ -1,6 +1,6 @@
 import { Router } from "express";
 import { eq, and, desc, gte, lte, inArray } from "drizzle-orm";
-import { db, transactionsTable, insertTransactionSchema, updateTransactionSchema, categoriesTable } from "@workspace/db";
+import { db, transactionsTable, insertTransactionSchema, updateTransactionSchema, categoriesTable, accountsTable } from "@workspace/db";
 import { validate, requireHouseholdId } from "../middlewares/validate.js";
 
 const router = Router();
@@ -145,22 +145,35 @@ router.post("/transactions/bulk", async (req, res) => {
       .from(categoriesTable)
       .where(eq(categoriesTable.householdId, householdId));
 
+    // Fetch valid account IDs to filter out orphaned transactions
+    const validAccounts = await db
+      .select({ id: accountsTable.id })
+      .from(accountsTable)
+      .where(eq(accountsTable.householdId, householdId));
+    const validAccountIds = new Set(validAccounts.map((a) => a.id));
+
     const now = new Date();
-    const payload = transactions.map((t) => {
-      // Strip client-supplied timestamp fields — Drizzle expects Date objects for
-      // timestamp columns but the mobile client sends ISO strings, which causes
-      // "value.toISOString is not a function". Let the DB defaults handle createdAt
-      // and supply a fresh Date for updatedAt.
-      const { createdAt: _c, updatedAt: _u, ...rest } = t as any;
-      const mappedCategory = findClosestCategory(t.category || "Others", categories);
-      return {
-        ...rest,
-        category: mappedCategory,
-        householdId: res.locals.householdId,
-        deviceId: res.locals.deviceId,
-        updatedAt: now,
-      };
-    });
+    const payload = transactions
+      .filter((t) => validAccountIds.has(t.accountId))
+      .map((t) => {
+        // Strip client-supplied timestamp fields — Drizzle expects Date objects for
+        // timestamp columns but the mobile client sends ISO strings, which causes
+        // "value.toISOString is not a function". Let the DB defaults handle createdAt
+        // and supply a fresh Date for updatedAt.
+        const { createdAt: _c, updatedAt: _u, ...rest } = t as any;
+        const mappedCategory = findClosestCategory(t.category || "Others", categories);
+        return {
+          ...rest,
+          category: mappedCategory,
+          householdId: res.locals.householdId,
+          deviceId: res.locals.deviceId,
+          updatedAt: now,
+        };
+      });
+    if (payload.length === 0) {
+      res.status(201).json({ synced: 0 });
+      return;
+    }
     const rows = await db
       .insert(transactionsTable)
       .values(payload)
@@ -179,7 +192,6 @@ router.post("/transactions/bulk", async (req, res) => {
           plaidAccountId: transactionsTable.plaidAccountId,
           bank: transactionsTable.bank,
           note: transactionsTable.note,
-          updatedAt: new Date(),
         },
       })
       .returning();

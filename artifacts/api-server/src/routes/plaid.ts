@@ -300,7 +300,7 @@ router.post("/plaid/exchange-token", async (req, res) => {
         balance: a.balances.current ?? a.balances.available ?? 0,
         lastFour: a.mask ?? "",
       })),
-      transactions: transactions.map(mapPlaidTransaction),
+      transactions: transactions.map((t) => mapPlaidTransaction(t, resolvedBankName)),
       transactionCount: transactions.length,
       holdings,
       investmentTransactions,
@@ -467,7 +467,7 @@ router.post("/plaid/sync/:itemId", async (req, res) => {
     }
 
     res.json({
-      transactions: transactions.map(mapPlaidTransaction),
+      transactions: transactions.map((t) => mapPlaidTransaction(t, record.bankName)),
       count: transactions.length,
       holdings,
       investmentTransactions,
@@ -703,7 +703,7 @@ function mapPlaidCategory(primary: string, detailed?: string): string {
   }
 }
 
-function mapPlaidTransaction(t: any) {
+function mapPlaidTransaction(t: any, bankName: string) {
   const amount = typeof t.amount === "number" ? t.amount : 0;
   const primary: string =
     t.personal_finance_category?.primary ??
@@ -723,7 +723,7 @@ function mapPlaidTransaction(t: any) {
     date: (t.date ?? new Date().toISOString().slice(0, 10)) as string,
     accountId: t.account_id as string,
     plaidAccountId: t.account_id as string,
-    bank: title,
+    bank: bankName,
   };
 }
 
