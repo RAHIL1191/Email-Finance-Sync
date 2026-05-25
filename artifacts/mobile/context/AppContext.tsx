@@ -1115,12 +1115,15 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
         setAccounts(localAccts);
 
         const localTxs: Transaction[] = versionOk && txRaw ? JSON.parse(txRaw) : [];
-        // Filter out any standard transactions that belong to investment accounts.
-        // This breaks the sync loop where the client re-uploads old duplicates.
+        // Filter out orphaned transactions (account no longer exists) and
+        // standard transactions that belong to investment accounts.
+        const allLocalAcctIds = new Set(localAccts.map((a) => a.id));
         const investmentAcctIds = new Set(
           localAccts.filter((a) => a.type === "investment").map((a) => a.id)
         );
-        const cleanedLocalTxs = localTxs.filter((t) => !investmentAcctIds.has(t.accountId));
+        const cleanedLocalTxs = localTxs.filter(
+          (t) => allLocalAcctIds.has(t.accountId) && !investmentAcctIds.has(t.accountId)
+        );
         setTransactions(cleanedLocalTxs);
 
         if (rrspLimitRaw) setRrspLimitState(Number(rrspLimitRaw));
