@@ -3,7 +3,7 @@ import * as Haptics from "expo-haptics";
 import React from "react";
 import { StyleSheet, Text, TouchableOpacity, View } from "react-native";
 
-import { PLAID_BANKS, Transaction, useApp } from "@/context/AppContext";
+import { Transaction, useApp } from "@/context/AppContext";
 import { useColors } from "@/hooks/useColors";
 
 export const CATEGORY_ICONS: Record<string, string> = {
@@ -94,16 +94,11 @@ export default function TransactionItem({ transaction, onPress }: Props) {
                   : "Investment"}
               </Text>
             </View>
-            {(() => {
-              const bankMeta = PLAID_BANKS.find(
-                (b) => b.name.toLowerCase() === (account.bank ?? "").toLowerCase()
-              );
-              return bankMeta ? (
-                <Text style={styles.bankIcon}>{bankMeta.icon}</Text>
-              ) : (
-                <Feather name="briefcase" size={12} color={colors.mutedForeground} />
-              );
-            })()}
+            {account.bank ? (
+              <Text style={[styles.bankName, { color: colors.mutedForeground }]} numberOfLines={1}>
+                {account.bank}
+              </Text>
+            ) : null}
           </View>
         )}
       </View>
@@ -159,8 +154,9 @@ const styles = StyleSheet.create({
     fontSize: 10,
     fontFamily: "Inter_500Medium",
   },
-  bankIcon: {
-    fontSize: 13,
+  bankName: {
+    fontSize: 11,
+    fontFamily: "Inter_400Regular",
   },
   amount: {
     fontSize: 15,
