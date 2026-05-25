@@ -18,6 +18,7 @@ import { useSafeAreaInsets } from "react-native-safe-area-context";
 
 import { useApp } from "@/context/AppContext";
 import { useColors } from "@/hooks/useColors";
+import { toLocalYMD } from "@/hooks/useLocalDate";
 import CategoryPickerModal from "./CategoryPickerModal";
 
 function BillDatePickerModal({
@@ -109,7 +110,7 @@ export default function AddBillModal({ visible, onClose }: Props) {
     addBill({
       title: title.trim(),
       amount: parsed,
-      dueDate: dueDate.toISOString(),
+      dueDate: toLocalYMD(dueDate),
       category,
       isPaid: false,
       isRecurring,

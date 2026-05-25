@@ -1,6 +1,6 @@
 import AsyncStorage from "@react-native-async-storage/async-storage";
 import { Platform } from "react-native";
-import { parseLocalDate } from "@/hooks/useLocalDate";
+import { parseLocalDate, toLocalYMD } from "@/hooks/useLocalDate";
 
 // ─── Storage keys ─────────────────────────────────────────────────────────────
 
@@ -203,7 +203,7 @@ function getPeriodKey(period: string): string {
     const d = new Date(now);
     d.setHours(0, 0, 0, 0);
     d.setDate(d.getDate() - d.getDay());
-    return `${d.getFullYear()}-W${d.toISOString().slice(0, 10)}`;
+    return `${d.getFullYear()}-W${toLocalYMD(d)}`;
   }
   return `${now.getFullYear()}`;
 }

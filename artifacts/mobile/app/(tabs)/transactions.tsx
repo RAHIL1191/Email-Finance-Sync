@@ -26,7 +26,7 @@ import TransactionItem from "@/components/TransactionItem";
 import { Account, Bill, Category, Transaction, InvestmentTransaction, Holding, computeBalance, useApp } from "@/context/AppContext";
 import { useDrawer } from "@/context/DrawerContext";
 import { useColors } from "@/hooks/useColors";
-import { parseLocalDate } from "@/hooks/useLocalDate";
+import { parseLocalDate, localYM, toLocalYMD } from "@/hooks/useLocalDate";
 
 // ── Period Settings Sheet ──────────────────────────────────────────────────────
 type GroupByPeriod = "Monthly" | "Weekly" | "Bi-Weekly" | "Yearly" | "Custom";
@@ -316,18 +316,18 @@ const DAY_HEADERS = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"];
 
 function getMonthData(transactions: Transaction[], year: number, bills?: Bill[]) {
   return MONTHS.map((label, idx) => {
-    const monthStart = new Date(year, idx, 1).toISOString().slice(0, 7);
+    const monthStart = `${year}-${String(idx + 1).padStart(2, "0")}`;
     const income = transactions
-      .filter((t) => t.type === "income" && t.category !== "Transfer" && t.category?.toLowerCase() !== "transfer" && t.date.startsWith(monthStart))
+      .filter((t) => t.type === "income" && t.category !== "Transfer" && t.category?.toLowerCase() !== "transfer" && localYM(t.date) === monthStart)
       .reduce((s, t) => s + t.amount, 0);
     let expense = transactions
-      .filter((t) => t.type === "expense" && t.category !== "Transfer" && t.category?.toLowerCase() !== "transfer" && t.date.startsWith(monthStart))
+      .filter((t) => t.type === "expense" && t.category !== "Transfer" && t.category?.toLowerCase() !== "transfer" && localYM(t.date) === monthStart)
       .reduce((s, t) => s + t.amount, 0);
 
     if (bills) {
-      const todayStr = new Date().toISOString().slice(0, 10);
+      const todayStr = toLocalYMD(new Date());
       const upcomingBillsTotal = bills
-        .filter((b) => b.dueDate.startsWith(monthStart) && !b.isPaid && b.dueDate.slice(0, 10) > todayStr)
+        .filter((b) => localYM(b.dueDate) === monthStart && !b.isPaid && toLocalYMD(parseLocalDate(b.dueDate)) > todayStr)
         .reduce((s, b) => s + b.amount, 0);
       expense += upcomingBillsTotal;
     }
@@ -337,18 +337,18 @@ function getMonthData(transactions: Transaction[], year: number, bills?: Bill[])
 }
 
 function getMonthDataForYearMonth(transactions: Transaction[], year: number, month: number, bills?: Bill[]) {
-  const monthStart = new Date(year, month, 1).toISOString().slice(0, 7);
+  const monthStart = `${year}-${String(month + 1).padStart(2, "0")}`;
   const income = transactions
-    .filter((t) => t.type === "income" && t.category !== "Transfer" && t.category?.toLowerCase() !== "transfer" && t.date.startsWith(monthStart))
+    .filter((t) => t.type === "income" && t.category !== "Transfer" && t.category?.toLowerCase() !== "transfer" && localYM(t.date) === monthStart)
     .reduce((s, t) => s + t.amount, 0);
   let expense = transactions
-    .filter((t) => t.type === "expense" && t.category !== "Transfer" && t.category?.toLowerCase() !== "transfer" && t.date.startsWith(monthStart))
+    .filter((t) => t.type === "expense" && t.category !== "Transfer" && t.category?.toLowerCase() !== "transfer" && localYM(t.date) === monthStart)
     .reduce((s, t) => s + t.amount, 0);
 
   if (bills) {
-    const todayStr = new Date().toISOString().slice(0, 10);
+    const todayStr = toLocalYMD(new Date());
     const upcomingBillsTotal = bills
-      .filter((b) => b.dueDate.startsWith(monthStart) && !b.isPaid && b.dueDate.slice(0, 10) > todayStr)
+      .filter((b) => localYM(b.dueDate) === monthStart && !b.isPaid && toLocalYMD(parseLocalDate(b.dueDate)) > todayStr)
       .reduce((s, b) => s + b.amount, 0);
     expense += upcomingBillsTotal;
   }
@@ -460,10 +460,10 @@ function CalendarView({
   );
 
   const txDays = useMemo(() => {
-    const monthStr = new Date(year, currentMonth, 1).toISOString().slice(0, 7);
+    const monthStr = `${year}-${String(currentMonth + 1).padStart(2, "0")}`;
     const days = new Set<number>();
     transactions
-      .filter((t) => t.date.startsWith(monthStr))
+      .filter((t) => localYM(t.date) === monthStr)
       .forEach((t) => {
         const d = parseLocalDate(t.date).getDate();
         days.add(d);
@@ -972,7 +972,7 @@ function SpendingTab({
   const [selectedTx, setSelectedTx] = useState<Transaction | null>(null);
 
   const expenseTxs = useMemo(() =>
-    transactions.filter((t) => t.type === "expense" && t.category !== "Transfer" && t.category?.toLowerCase() !== "transfer" && t.date.startsWith(monthStr)),
+    transactions.filter((t) => t.type === "expense" && t.category !== "Transfer" && t.category?.toLowerCase() !== "transfer" && localYM(t.date) === monthStr),
     [transactions, monthStr]
   );
 
@@ -980,7 +980,7 @@ function SpendingTab({
     if (!includeBills) return 0;
     return bills
       .filter((b) => {
-        const d = new Date(b.dueDate);
+        const d = parseLocalDate(b.dueDate);
         return d.getFullYear() === year && d.getMonth() === currentMonth;
       })
       .reduce((s, b) => s + b.amount, 0);
@@ -1051,7 +1051,7 @@ function SpendingTab({
   const incomeItems = useMemo(() => {
     const totals: Record<string, number> = {};
     transactions
-      .filter((t) => t.type === "income" && t.category !== "Transfer" && t.category?.toLowerCase() !== "transfer" && t.date.startsWith(monthStr))
+      .filter((t) => t.type === "income" && t.category !== "Transfer" && t.category?.toLowerCase() !== "transfer" && localYM(t.date) === monthStr)
       .forEach((t) => {
         const main = resolveMainCategory(t.category);
         totals[main] = (totals[main] || 0) + t.amount;
@@ -1072,7 +1072,7 @@ function SpendingTab({
     if (!selectedCat) return [];
     const txType = spendView === "Income" ? "income" : "expense";
     return transactions.filter((t) => {
-      if (t.type !== txType || t.category === "Transfer" || t.category?.toLowerCase() === "transfer" || !t.date.startsWith(monthStr)) return false;
+      if (t.type !== txType || t.category === "Transfer" || t.category?.toLowerCase() === "transfer" || localYM(t.date) !== monthStr) return false;
       return resolveMainCategory(t.category) === selectedCat;
     });
   }, [selectedCat, transactions, monthStr, spendView, resolveMainCategory]);
@@ -1104,7 +1104,7 @@ function SpendingTab({
     if (!selectedSubCat || !selectedCat) return [];
     const txType = spendView === "Income" ? "income" : "expense";
     return transactions.filter((t) => {
-      if (t.type !== txType || t.category === "Transfer" || t.category?.toLowerCase() === "transfer" || !t.date.startsWith(monthStr)) return false;
+      if (t.type !== txType || t.category === "Transfer" || t.category?.toLowerCase() === "transfer" || localYM(t.date) !== monthStr) return false;
       const main = resolveMainCategory(t.category);
       const sub = resolveSubCategory(t.category) || main;
       return main === selectedCat && sub === selectedSubCat;
@@ -1785,9 +1785,9 @@ function matchesTypeFilter(t: InvestmentTransaction, f: string): boolean {
 
 function periodStart(p: PeriodOpt): string | null {
   const now = new Date();
-  if (p === "Month") return new Date(now.getFullYear(), now.getMonth(), 1).toISOString().slice(0, 10);
-  if (p === "3 Months") { now.setMonth(now.getMonth() - 3); return now.toISOString().slice(0, 10); }
-  if (p === "Year") return new Date(now.getFullYear(), 0, 1).toISOString().slice(0, 10);
+  if (p === "Month") return toLocalYMD(new Date(now.getFullYear(), now.getMonth(), 1));
+  if (p === "3 Months") { now.setMonth(now.getMonth() - 3); return toLocalYMD(now); }
+  if (p === "Year") return toLocalYMD(new Date(now.getFullYear(), 0, 1));
   return null;
 }
 
@@ -1935,7 +1935,7 @@ function PortfolioTab({ holdings, investmentTransactions, accounts, transactions
 
   const sixMonthsAgo = new Date();
   sixMonthsAgo.setMonth(sixMonthsAgo.getMonth() - 6);
-  const sixMonthsAgoStr = sixMonthsAgo.toISOString().slice(0, 10);
+  const sixMonthsAgoStr = toLocalYMD(sixMonthsAgo);
 
   const pStart = periodStart(filterPeriod);
   // Cap displayed activity to last 6 months for UI rendering performance, or narrower if filtered

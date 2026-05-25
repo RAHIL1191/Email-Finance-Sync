@@ -16,7 +16,7 @@ import { useSafeAreaInsets } from "react-native-safe-area-context";
 
 import { Transaction, useApp } from "@/context/AppContext";
 import { useColors } from "@/hooks/useColors";
-import { parseLocalDate } from "@/hooks/useLocalDate";
+import { parseLocalDate, toLocalYMD } from "@/hooks/useLocalDate";
 import { CATEGORY_COLORS, CATEGORY_ICONS } from "./TransactionItem";
 import DateTimePicker from "@react-native-community/datetimepicker";
 import CategoryPickerModal from "./CategoryPickerModal";
@@ -217,7 +217,7 @@ export default function TransactionDetailModal({ visible, onClose, transaction }
     if (!title.trim() || isNaN(parsed) || parsed <= 0) return;
     const fields = editTypeToFields(editType);
     const resolvedCategory = editType === "TRANSFER" ? "Transfer" : editType === "BILLS" ? "Bills" : category;
-    const dateStr = editDate?.toISOString() ?? transaction.date;
+    const dateStr = editDate ? toLocalYMD(editDate) : transaction.date;
 
     if (isSplit) {
       if (splitCategories.length === 0) {

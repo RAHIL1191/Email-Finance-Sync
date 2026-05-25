@@ -20,7 +20,7 @@ import DateTimePicker from "@react-native-community/datetimepicker";
 
 import { useApp, getApiBase } from "@/context/AppContext";
 import { useColors } from "@/hooks/useColors";
-import { parseLocalDate } from "@/hooks/useLocalDate";
+import { parseLocalDate, toLocalYMD } from "@/hooks/useLocalDate";
 
 type CategoryId = "bills" | "expenses" | "income" | "transfers" | "portfolio";
 
@@ -114,8 +114,8 @@ export default function ResetCleanupScreen() {
     setIsDeleting(true);
     try {
       const serverOps: Promise<any>[] = [];
-      const fStart = fromDate ? fromDate.toISOString().slice(0, 10) : undefined;
-      const fEnd = toDate ? toDate.toISOString().slice(0, 10) : undefined;
+      const fStart = fromDate ? toLocalYMD(fromDate) : undefined;
+      const fEnd = toDate ? toLocalYMD(toDate) : undefined;
       const fAccs = selectedAccounts.length > 0 ? selectedAccounts.join(",") : undefined;
 
       const qBuilder = (typeStr?: string) => {

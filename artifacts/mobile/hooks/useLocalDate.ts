@@ -15,3 +15,23 @@ export function parseLocalDate(dateStr: string | undefined | null): Date {
   }
   return new Date(dateStr);
 }
+
+/**
+ * Format a Date as "YYYY-MM-DD" in the user's local timezone.
+ * Use this instead of `date.toISOString().slice(0, 10)` which returns the UTC date.
+ */
+export function toLocalYMD(d: Date): string {
+  const y = d.getFullYear();
+  const m = String(d.getMonth() + 1).padStart(2, "0");
+  const day = String(d.getDate()).padStart(2, "0");
+  return `${y}-${m}-${day}`;
+}
+
+/**
+ * Extract the "YYYY-MM" month key from a date string in the user's local timezone.
+ * Handles both date-only ("2026-04-30") and full ISO ("2026-05-01T02:00:00Z") strings.
+ */
+export function localYM(dateStr: string): string {
+  const d = parseLocalDate(dateStr);
+  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}`;
+}

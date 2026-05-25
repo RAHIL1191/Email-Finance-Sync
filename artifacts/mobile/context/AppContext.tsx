@@ -14,7 +14,7 @@ import {
   cancelTaskDueNotification,
   checkBudgetAndNotify,
 } from "@/services/notificationService";
-import { parseLocalDate } from "@/hooks/useLocalDate";
+import { parseLocalDate, toLocalYMD } from "@/hooks/useLocalDate";
 import React, {
   createContext,
   useCallback,
@@ -1146,9 +1146,9 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
         };
         const migratedBills = parsedBills.map((b) => {
           if (b.isPaid && b.isRecurring && b.frequency) {
-            let d = new Date(b.dueDate);
+            let d = parseLocalDate(b.dueDate);
             do { d = advanceBillDate(d, b.frequency!); } while (d.getTime() < Date.now());
-            return { ...b, dueDate: d.toISOString(), isPaid: false };
+            return { ...b, dueDate: toLocalYMD(d), isPaid: false };
           }
           return b;
         });
@@ -2759,7 +2759,7 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
       let dirty = false;
       for (const bill of bills) {
         if (bill.isPaid) continue;
-        const due = new Date(bill.dueDate); due.setHours(0, 0, 0, 0);
+        const due = parseLocalDate(bill.dueDate); due.setHours(0, 0, 0, 0);
         const diffDays = Math.round((due.getTime() - today.getTime()) / 86400000);
         if (diffDays > 3 || diffDays < -3) continue;
         const key = `${bill.id}|${bill.dueDate.slice(0, 10)}`;
