@@ -1,5 +1,5 @@
 import { Router } from "express";
-import { eq, and, desc, gte, lte, inArray, sql } from "drizzle-orm";
+import { eq, and, desc, gte, lte, inArray } from "drizzle-orm";
 import { db, transactionsTable, insertTransactionSchema, updateTransactionSchema, categoriesTable, accountsTable } from "@workspace/db";
 import { validate, requireHouseholdId } from "../middlewares/validate.js";
 
@@ -192,17 +192,6 @@ router.post("/transactions/bulk", async (req, res) => {
           plaidAccountId: transactionsTable.plaidAccountId,
           bank: transactionsTable.bank,
           note: transactionsTable.note,
-          updatedAt: sql`CASE WHEN
-            "transactions"."title" IS DISTINCT FROM EXCLUDED."title"
-            OR "transactions"."amount" IS DISTINCT FROM EXCLUDED."amount"
-            OR "transactions"."type" IS DISTINCT FROM EXCLUDED."type"
-            OR "transactions"."category" IS DISTINCT FROM EXCLUDED."category"
-            OR "transactions"."date" IS DISTINCT FROM EXCLUDED."date"
-            OR "transactions"."note" IS DISTINCT FROM EXCLUDED."note"
-            OR "transactions"."merchant" IS DISTINCT FROM EXCLUDED."merchant"
-            THEN NOW()
-            ELSE "transactions"."updated_at"
-          END`,
         },
       })
       .returning();
