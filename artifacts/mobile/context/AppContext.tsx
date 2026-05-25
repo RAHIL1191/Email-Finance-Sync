@@ -1289,6 +1289,30 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
   useEffect(() => { if (initialized) AsyncStorage.setItem(STORAGE_KEYS.holdings, JSON.stringify(holdings)); }, [holdings, initialized]);
   useEffect(() => { if (initialized) AsyncStorage.setItem(STORAGE_KEYS.rrspLimit, String(rrspLimit)); }, [rrspLimit, initialized]);
 
+  // ── Auto backup ──────────────────────────────────────────────────────────
+  useEffect(() => {
+    if (!initialized) return;
+    const timer = setTimeout(async () => {
+      try {
+        const raw = await AsyncStorage.getItem("@fintrack/backup_settings");
+        if (!raw) return;
+        const settings = JSON.parse(raw);
+        if (!settings.autoBackup) return;
+        const pairs = await AsyncStorage.multiGet(Object.values(STORAGE_KEYS));
+        const data: Record<string, string | null> = {};
+        for (const [key, value] of pairs) data[key] = value;
+        const backup = { version: 1, createdAt: new Date().toISOString(), appVersion: "1.0.0", data };
+        const FileSystem = require("expo-file-system");
+        await FileSystem.writeAsStringAsync(
+          `${FileSystem.documentDirectory}fintrack-auto-backup.json`,
+          JSON.stringify(backup),
+        );
+        await AsyncStorage.setItem("@fintrack/last_backup_date", new Date().toISOString());
+      } catch {}
+    }, 5000);
+    return () => clearTimeout(timer);
+  }, [transactions, accounts, bills, budgets, goals, projects, categories, categoryRules, tasks, initialized]);
+
   const setRrspLimit = useCallback((val: number) => {
     setRrspLimitState(val);
   }, []);
