@@ -16,6 +16,7 @@ import { useSafeAreaInsets } from "react-native-safe-area-context";
 
 import { Transaction, useApp } from "@/context/AppContext";
 import { useColors } from "@/hooks/useColors";
+import { parseLocalDate } from "@/hooks/useLocalDate";
 import { CATEGORY_COLORS, CATEGORY_ICONS } from "./TransactionItem";
 import DateTimePicker from "@react-native-community/datetimepicker";
 import CategoryPickerModal from "./CategoryPickerModal";
@@ -174,7 +175,7 @@ export default function TransactionDetailModal({ visible, onClose, transaction }
       setTag(extractedTag);
       setProjectId(transaction.projectId);
       setProjectName(transaction.projectName);
-      setEditDate(new Date(transaction.date));
+      setEditDate(parseLocalDate(transaction.date));
       setMerchant(transaction.merchant || transaction.title || "");
       setSplitCategories([]);
       setIsSplitMode(false);
@@ -188,12 +189,17 @@ export default function TransactionDetailModal({ visible, onClose, transaction }
   const icon = (CATEGORY_ICONS[transaction.category] || "circle") as any;
   const catColor = CATEGORY_COLORS[transaction.category] || colors.primary;
 
-  const dateObj = new Date(transaction.date);
+  const dateObj = parseLocalDate(transaction.date);
   const _now = new Date();
   const isToday = _now.toDateString() === dateObj.toDateString();
   const isCurrentYear = _now.getFullYear() === dateObj.getFullYear();
   const timeStr = dateObj.toLocaleTimeString("en-US", { hour: "numeric", minute: "2-digit", hour12: true });
   const dateLine = isToday ? `Today, ${timeStr}` : `${dateObj.toLocaleDateString("en-US", { weekday: "short", month: "short", day: "numeric", ...(isCurrentYear ? {} : { year: "numeric" }) })}, ${timeStr}`;
+
+  const createdDate = parseLocalDate(transaction.createdAt);
+  const updatedDate = parseLocalDate(transaction.updatedAt);
+  const fmtTimestamp = (d: Date) =>
+    `${d.toLocaleDateString("en-US", { month: "short", day: "numeric" })}, ${d.toLocaleTimeString("en-US", { hour: "numeric", minute: "2-digit", hour12: true }).toLowerCase()}`;
 
   const typeLabel = transaction.type === "income" ? "Income" : "Expense";
 
@@ -759,7 +765,7 @@ export default function TransactionDetailModal({ visible, onClose, transaction }
                     {siblings.map((t, i) => {
                       const sibIcon = (CATEGORY_ICONS[t.category] || "circle") as any;
                       const sibColor = CATEGORY_COLORS[t.category] || colors.primary;
-                      const sibDate = new Date(t.date);
+                      const sibDate = parseLocalDate(t.date);
                       const sibTime = sibDate.toLocaleTimeString("en-US", { hour: "numeric", minute: "2-digit", hour12: true });
                       const sibDateLabel = `${sibDate.toLocaleDateString("en-US", { month: "short", day: "numeric" })}, ${sibTime}`;
                       return (
@@ -838,12 +844,10 @@ export default function TransactionDetailModal({ visible, onClose, transaction }
               {/* Timestamps */}
               <View style={[s.timestampCard, { backgroundColor: colors.card, borderColor: colors.border }]}>
                 <Text style={[s.timestampText, { color: colors.mutedForeground }]}>
-                  Created {dateObj.toLocaleDateString("en-US", { month: "short", day: "numeric" })},{" "}
-                  {timeStr.toLowerCase()}
+                  Created {fmtTimestamp(createdDate)}
                 </Text>
                 <Text style={[s.timestampText, { color: colors.mutedForeground }]}>
-                  Updated {dateObj.toLocaleDateString("en-US", { month: "short", day: "numeric" })},{" "}
-                  {timeStr.toLowerCase()}
+                  Updated {fmtTimestamp(updatedDate)}
                 </Text>
               </View>
             </KeyboardAwareScrollView>

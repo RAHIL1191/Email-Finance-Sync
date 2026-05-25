@@ -26,6 +26,7 @@ import TransactionItem from "@/components/TransactionItem";
 import { Account, Bill, Category, Transaction, InvestmentTransaction, Holding, computeBalance, useApp } from "@/context/AppContext";
 import { useDrawer } from "@/context/DrawerContext";
 import { useColors } from "@/hooks/useColors";
+import { parseLocalDate } from "@/hooks/useLocalDate";
 
 // ── Period Settings Sheet ──────────────────────────────────────────────────────
 type GroupByPeriod = "Monthly" | "Weekly" | "Bi-Weekly" | "Yearly" | "Custom";
@@ -464,7 +465,7 @@ function CalendarView({
     transactions
       .filter((t) => t.date.startsWith(monthStr))
       .forEach((t) => {
-        const d = new Date(t.date).getDate();
+        const d = parseLocalDate(t.date).getDate();
         days.add(d);
       });
     return days;
@@ -1375,7 +1376,7 @@ function SpendingTab({
                 .sort((a, b) => b.date.localeCompare(a.date))
                 .map((t) => {
                   const acc = accounts.find((acc) => acc.id === t.accountId);
-                  const dt = new Date(t.date);
+                  const dt = parseLocalDate(t.date);
                   const dateStr = dt.toLocaleDateString("en-US", { month: "short", day: "numeric", year: "numeric" });
                   const subLabel = resolveSubCategory(t.category);
                   const vis = getCatVisual(subLabel || selectedCat || t.category);
@@ -1544,7 +1545,7 @@ function TransactionsTab({ transactions, colors, showFilter, setShowFilter, filt
     const currentYear = today.getFullYear();
 
     filtered.forEach((t) => {
-      const d = new Date(t.date);
+      const d = parseLocalDate(t.date);
       const dateKey = d.toDateString();
       const isToday = dateKey === today.toDateString();
       const isYesterday = dateKey === yesterday.toDateString();
@@ -1723,7 +1724,7 @@ function ReviewTab({
                 {item.merchant || item.title}
               </Text>
               <Text style={[styles.reviewSub, { color: colors.mutedForeground }]} numberOfLines={1}>
-                {item.bank || "Email"} · {item.category} · {new Date(item.date).toLocaleDateString()}
+                {item.bank || "Email"} · {item.category} · {parseLocalDate(item.date).toLocaleDateString()}
               </Text>
             </View>
             <Text style={[styles.reviewAmount, { color: item.type === "expense" ? colors.expense : colors.success }]}>

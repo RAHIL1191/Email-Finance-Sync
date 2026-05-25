@@ -20,6 +20,7 @@ import DateTimePicker from "@react-native-community/datetimepicker";
 
 import { useApp, getApiBase } from "@/context/AppContext";
 import { useColors } from "@/hooks/useColors";
+import { parseLocalDate } from "@/hooks/useLocalDate";
 
 type CategoryId = "bills" | "expenses" | "income" | "transfers" | "portfolio";
 
@@ -68,7 +69,7 @@ export default function ResetCleanupScreen() {
   const isFiltered = (t: any) => {
     if (!fromDate || !toDate) return false;
 
-    const txDate = new Date(t.date);
+    const txDate = parseLocalDate(t.date);
     const startOfFromDate = new Date(fromDate.getFullYear(), fromDate.getMonth(), fromDate.getDate(), 0, 0, 0, 0);
     if (txDate < startOfFromDate) return false;
 

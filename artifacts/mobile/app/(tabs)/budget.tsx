@@ -19,6 +19,7 @@ import { SafeAreaView, useSafeAreaInsets } from "react-native-safe-area-context"
 import { Budget, Goal, useApp } from "@/context/AppContext";
 import { useDrawer } from "@/context/DrawerContext";
 import { useColors } from "@/hooks/useColors";
+import { parseLocalDate } from "@/hooks/useLocalDate";
 import CategoryPickerModal from "@/components/CategoryPickerModal";
 
 // ─── Constants ────────────────────────────────────────────────────────────────
@@ -790,8 +791,8 @@ function BudgetDetailSheet({
 
           {/* Timestamps */}
           <View style={ds.timestamps}>
-            <Text style={[ds.tsText, { color: colors.mutedForeground }]}>Created On {fmt(new Date(budget.createdAt))}</Text>
-            <Text style={[ds.tsText, { color: colors.mutedForeground }]}>Last updated {fmt(new Date(budget.updatedAt))}</Text>
+            <Text style={[ds.tsText, { color: colors.mutedForeground }]}>Created On {fmt(parseLocalDate(budget.createdAt))}</Text>
+            <Text style={[ds.tsText, { color: colors.mutedForeground }]}>Last updated {fmt(parseLocalDate(budget.updatedAt))}</Text>
           </View>
         </ScrollView>
       </SafeAreaView>
