@@ -179,7 +179,6 @@ router.post("/transactions/bulk", async (req, res) => {
           plaidAccountId: transactionsTable.plaidAccountId,
           bank: transactionsTable.bank,
           note: transactionsTable.note,
-          updatedAt: new Date(),
         },
       })
       .returning();

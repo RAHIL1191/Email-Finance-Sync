@@ -49,6 +49,8 @@ export interface Transaction {
   plaidAccountId?: string;
   /** Links split transactions together — all splits from the same operation share this id */
   splitGroupId?: string;
+  createdAt?: string;
+  updatedAt?: string;
 }
 
 export interface Account {
@@ -1415,7 +1417,8 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
           }
         }
       }
-      const next = prev.map((t) => (t.id === id ? { ...t, ...updates } : t));
+      const now = new Date().toISOString();
+      const next = prev.map((t) => (t.id === id ? { ...t, ...updates, updatedAt: now } : t));
       mergedTx = next.find((t) => t.id === id);
       return next;
     });
@@ -1424,10 +1427,8 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
         transactionsRef.current.map((t) => (t.id === id ? mergedTx! : t)),
         budgetsRef.current
       );
-      apiCall("/api/transactions/bulk", "POST", householdIdRef.current, deviceIdRef.current, { transactions: [mergedTx] });
-    } else {
-      apiCall(`/api/transactions/${id}`, "PUT", householdIdRef.current, deviceIdRef.current, updates);
     }
+    apiCall(`/api/transactions/${id}`, "PUT", householdIdRef.current, deviceIdRef.current, updates);
   }, []);
 
   const deleteTransaction = useCallback((id: string) => {
