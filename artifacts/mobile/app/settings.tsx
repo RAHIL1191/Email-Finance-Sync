@@ -201,6 +201,17 @@ export default function SettingsScreen() {
             Alert.alert("Merchants", "Merchant management coming soon.");
           },
         },
+        {
+          kind: "nav",
+          label: "Backup & Restore",
+          sub: "Export or import your local data",
+          icon: "save",
+          color: "#3b82f6",
+          onPress: () => {
+            Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
+            router.push("/backup-restore" as any);
+          },
+        },
       ],
     },
     {
