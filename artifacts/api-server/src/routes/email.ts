@@ -316,18 +316,18 @@ router.post("/email/debug-sync", async (req, res) => {
 function getSmtpConfig(email: string): { host: string; port: number; secure: boolean } {
   const domain = email.split("@")[1]?.toLowerCase() || "";
   if (domain.includes("gmail") || domain.includes("googlemail")) {
-    return { host: "smtp.gmail.com", port: 465, secure: true };
+    return { host: "smtp.gmail.com", port: 587, secure: false };
   }
   if (domain.includes("outlook") || domain.includes("hotmail") || domain.includes("live")) {
     return { host: "smtp.office365.com", port: 587, secure: false };
   }
   if (domain.includes("yahoo")) {
-    return { host: "smtp.mail.yahoo.com", port: 465, secure: true };
+    return { host: "smtp.mail.yahoo.com", port: 587, secure: false };
   }
   if (domain.includes("icloud") || domain.includes("me.com")) {
     return { host: "smtp.mail.me.com", port: 587, secure: false };
   }
-  return { host: "smtp.gmail.com", port: 465, secure: true };
+  return { host: "smtp.gmail.com", port: 587, secure: false };
 }
 
 interface SendReportRequest {
