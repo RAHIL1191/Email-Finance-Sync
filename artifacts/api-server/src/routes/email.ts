@@ -1,6 +1,7 @@
 import { Router } from "express";
 import { ImapFlow } from "imapflow";
 import { simpleParser } from "mailparser";
+import nodemailer from "nodemailer";
 import { parseEmailContent } from "../lib/emailParser.js";
 import { GMAIL_QUERY } from "../lib/parser/index.js";
 import { debugParseEmail } from "../lib/parser/debug.js";
@@ -309,6 +310,95 @@ router.post("/email/debug-sync", async (req, res) => {
     });
   } catch (err: any) {
     res.status(400).json({ error: err?.message || "Failed to connect" });
+  }
+});
+
+function getSmtpConfig(email: string): { host: string; port: number; secure: boolean } {
+  const domain = email.split("@")[1]?.toLowerCase() || "";
+  if (domain.includes("gmail") || domain.includes("googlemail")) {
+    return { host: "smtp.gmail.com", port: 465, secure: true };
+  }
+  if (domain.includes("outlook") || domain.includes("hotmail") || domain.includes("live")) {
+    return { host: "smtp.office365.com", port: 587, secure: false };
+  }
+  if (domain.includes("yahoo")) {
+    return { host: "smtp.mail.yahoo.com", port: 465, secure: true };
+  }
+  if (domain.includes("icloud") || domain.includes("me.com")) {
+    return { host: "smtp.mail.me.com", port: 587, secure: false };
+  }
+  return { host: "smtp.gmail.com", port: 465, secure: true };
+}
+
+interface SendReportRequest {
+  senderEmail: string;
+  appPassword: string;
+  recipientEmail: string;
+  subject: string;
+  htmlBody?: string;
+  textBody?: string;
+  attachmentCsv?: string;
+  attachmentFileName?: string;
+}
+
+router.post("/email/send-report", async (req, res) => {
+  const {
+    senderEmail,
+    appPassword,
+    recipientEmail,
+    subject,
+    htmlBody,
+    textBody,
+    attachmentCsv,
+    attachmentFileName,
+  } = req.body as SendReportRequest;
+
+  if (!senderEmail || !appPassword || !recipientEmail || !subject) {
+    res.status(400).json({ error: "senderEmail, appPassword, recipientEmail, and subject are required" });
+    return;
+  }
+
+  const { host, port, secure } = getSmtpConfig(senderEmail);
+
+  const transporter = nodemailer.createTransport({
+    host,
+    port,
+    secure,
+    auth: {
+      user: senderEmail,
+      pass: appPassword,
+    },
+    tls: {
+      rejectUnauthorized: false,
+    },
+  });
+
+  const attachments: any[] = [];
+  if (attachmentCsv) {
+    attachments.push({
+      filename: attachmentFileName || "statement.csv",
+      content: attachmentCsv,
+      contentType: "text/csv",
+    });
+  }
+
+  const mailOptions = {
+    from: `FinTrack <${senderEmail}>`,
+    to: recipientEmail,
+    subject,
+    text: textBody || "Please find your requested statement attached.",
+    html: htmlBody,
+    attachments,
+  };
+
+  try {
+    req.log.info({ senderEmail, recipientEmail, subject }, "Sending email report");
+    await transporter.sendMail(mailOptions);
+    req.log.info("Email report sent successfully");
+    res.json({ success: true, message: "Email sent successfully" });
+  } catch (err: any) {
+    req.log.error({ err }, "Failed to send email report");
+    res.status(400).json({ error: "Failed to send email", detail: err?.message || "" });
   }
 });
 

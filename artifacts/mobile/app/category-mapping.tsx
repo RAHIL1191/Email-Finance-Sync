@@ -234,7 +234,7 @@ export default function CategoryMappingScreen() {
       }
       if (merchantEnabled && merchantValue.trim()) {
         const val = merchantValue.trim().toLowerCase();
-        const merchant = (tx.merchant || "").toLowerCase();
+        const merchant = (tx.merchant || tx.title || "").toLowerCase();
         if (merchantOperator === "exactly" ? merchant !== val : !merchant.includes(val)) return false;
       }
       if (amountEnabled && amountValue.trim()) {

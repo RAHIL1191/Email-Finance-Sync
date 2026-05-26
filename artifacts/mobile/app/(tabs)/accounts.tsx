@@ -13,6 +13,7 @@ import {
   Text,
   TextInput,
   TouchableOpacity,
+  Switch,
   View,
 } from "react-native";
 import { KeyboardAwareScrollView } from "react-native-keyboard-controller";
@@ -529,7 +530,7 @@ function ConnectedInstitutionsModal({
 }) {
   const colors = useColors();
   const insets = useSafeAreaInsets();
-  const { plaidSync, emailSync, disconnectEmail, syncEmailTransactions, wipeAllTransactions, isSyncing } = useApp();
+  const { plaidSync, emailSync, disconnectEmail, syncEmailTransactions, updateEmailSyncSettings, wipeAllTransactions, isSyncing } = useApp();
   const [syncResult, setSyncResult] = useState<{ imported: number; error?: string } | null>(null);
 
   const handleEmailSync = async () => {
@@ -616,15 +617,46 @@ function ConnectedInstitutionsModal({
                   ))}
                 </View>
               )}
-              <View style={{ flexDirection: "row", gap: 10 }}>
-                <TouchableOpacity
-                  style={[styles.plaidSyncBtn, { backgroundColor: colors.success, opacity: isSyncing ? 0.7 : 1, flex: 1 }]}
-                  onPress={handleEmailSync}
-                  disabled={isSyncing}
-                >
-                  {isSyncing ? <ActivityIndicator size="small" color="#fff" /> : <Feather name="refresh-cw" size={14} color="#fff" />}
-                  <Text style={styles.syncBtnText}>{isSyncing ? "Scanning…" : "Sync Emails"}</Text>
-                </TouchableOpacity>
+              <View style={{ marginVertical: 8, gap: 8 }}>
+                <View style={{ flexDirection: "row", alignItems: "center", justifyContent: "space-between", paddingVertical: 4 }}>
+                  <View style={{ flex: 1, paddingRight: 12 }}>
+                    <Text style={{ fontSize: 14, fontFamily: "Inter_600SemiBold", color: colors.foreground }}>
+                      Sync transactions from email
+                    </Text>
+                    <Text style={{ fontSize: 11, fontFamily: "Inter_400Regular", color: colors.mutedForeground, marginTop: 2 }}>
+                      Automatically parse transaction alerts from your inbox
+                    </Text>
+                  </View>
+                  <Switch
+                    value={!!emailSync.syncTransactions}
+                    onValueChange={(val) => {
+                      Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
+                      updateEmailSyncSettings({ syncTransactions: val });
+                    }}
+                    trackColor={{ false: colors.border, true: colors.success + "aa" }}
+                    thumbColor={emailSync.syncTransactions ? colors.success : colors.mutedForeground}
+                    ios_backgroundColor={colors.border}
+                  />
+                </View>
+              </View>
+
+              <View style={{ flexDirection: "row", gap: 10, marginTop: 4 }}>
+                {emailSync.syncTransactions ? (
+                  <TouchableOpacity
+                    style={[styles.plaidSyncBtn, { backgroundColor: colors.success, opacity: isSyncing ? 0.7 : 1, flex: 1 }]}
+                    onPress={handleEmailSync}
+                    disabled={isSyncing}
+                  >
+                    {isSyncing ? <ActivityIndicator size="small" color="#fff" /> : <Feather name="refresh-cw" size={14} color="#fff" />}
+                    <Text style={styles.syncBtnText}>{isSyncing ? "Scanning…" : "Sync Emails"}</Text>
+                  </TouchableOpacity>
+                ) : (
+                  <View style={{ flex: 1, justifyContent: "center", paddingVertical: 8, paddingHorizontal: 4 }}>
+                    <Text style={{ fontSize: 12, fontFamily: "Inter_400Regular", color: colors.mutedForeground, fontStyle: "italic" }}>
+                      Transaction sync disabled. Credentials are used for report delivery only.
+                    </Text>
+                  </View>
+                )}
                 <TouchableOpacity
                   style={[styles.plaidDisconnectBtn, { borderColor: colors.mutedForeground }]}
                   onPress={() => router.push("/email-debug")}

@@ -52,6 +52,9 @@ export interface Transaction {
   splitGroupId?: string;
   createdAt?: string;
   updatedAt?: string;
+  plaidTransactionId?: string;
+  pending?: boolean;
+  pendingTransactionId?: string | null;
 }
 
 export interface Account {
@@ -209,6 +212,7 @@ export interface EmailSync {
   email: string;
   appPassword: string;
   isConnected: boolean;
+  syncTransactions?: boolean;
   lastSynced?: string;
   lastEmailsScanned?: number;
   lastImported?: number;
@@ -344,6 +348,7 @@ interface AppContextType {
   addCategoryMappingRule: (rule: { id?: string; merchantPattern?: string; merchantExact?: string; fromCategory?: string | null; category: string; applyScope: "future" | "past_and_future"; source?: "manual" | "learned" }) => void;
   deleteCategoryRule: (id: string) => void;
   connectEmail: (email: string, appPassword: string) => Promise<{ success: boolean; error?: string }>;
+  updateEmailSyncSettings: (settings: Partial<EmailSync>) => void;
   disconnectEmail: () => void;
   resetEmailTransactions: () => void;
   syncEmailTransactions: () => Promise<{ imported: number; parsed?: any[]; error?: string }>;
@@ -550,6 +555,24 @@ function upsertTransactions(prev: Transaction[], incoming: Transaction[]): Trans
   const byContent = new Map<string, Transaction>(); // dedupKey → tx
   const byId = new Map<string, Transaction>();      // id → winning tx
 
+  // Collect pending transaction IDs to evict
+  const pendingTxIdsToEvict = new Set<string>();
+  incoming.forEach((t: any) => {
+    if (t.pendingTransactionId) {
+      pendingTxIdsToEvict.add(t.pendingTransactionId);
+    }
+  });
+
+  // Filter out any matching pending transactions from existing state
+  let filteredPrev = prev;
+  if (pendingTxIdsToEvict.size > 0) {
+    filteredPrev = prev.filter((t) => {
+      const matchesId = t.id && pendingTxIdsToEvict.has(t.id);
+      const matchesPlaidId = t.plaidTransactionId && pendingTxIdsToEvict.has(t.plaidTransactionId);
+      return !matchesId && !matchesPlaidId;
+    });
+  }
+
   const addTx = (t: Transaction) => {
     const key = dedupKey(t);
     const tp = SOURCE_PRIORITY[t.source ?? ""] ?? 0;
@@ -575,7 +598,7 @@ function upsertTransactions(prev: Transaction[], incoming: Transaction[]): Trans
     if (t.id) byId.set(t.id, t);
   };
 
-  prev.forEach(addTx);
+  filteredPrev.forEach(addTx);
   incoming.forEach(addTx);
 
   return Array.from(byContent.values()).sort((a, b) => b.date.localeCompare(a.date));
@@ -663,7 +686,7 @@ function matchesRichRule(tx: Transaction, payload: any): boolean {
   // 2. Merchant Name
   if (conds.merchantEnabled) {
     const val = (conds.merchantValue || "").trim().toLowerCase();
-    const merchant = (tx.merchant || "").toLowerCase();
+    const merchant = (tx.merchant || tx.title || "").toLowerCase();
     if (conds.merchantOperator === "exactly") {
       if (merchant !== val) return false;
     } else { // contains
@@ -2022,7 +2045,7 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
         });
         const data = await res.json();
         if (!res.ok) return { success: false, error: data.error || "Connection failed" };
-        setEmailSync({ email, appPassword, isConnected: true, lastSynced: undefined });
+        setEmailSync({ email, appPassword, isConnected: true, syncTransactions: false, lastSynced: undefined });
         return { success: true };
       } catch {
         return { success: false, error: "Network error. Make sure the app is connected." };
@@ -2030,6 +2053,10 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
     },
     []
   );
+
+  const updateEmailSyncSettings = useCallback((settings: Partial<EmailSync>) => {
+    setEmailSync((prev) => ({ ...prev, ...settings }));
+  }, []);
 
   const remapEmailTransactions = useCallback((bankPattern: string, accountId: string) => {
     setTransactions((prev) =>
@@ -2919,7 +2946,7 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
         addProject, updateProject, deleteProject,
         addCategory, updateCategory, deleteCategory, seedCategories,
         learnCategoryRule, autoCategorize, addCategoryMappingRule, deleteCategoryRule,
-        connectEmail, disconnectEmail, resetEmailTransactions, syncEmailTransactions, wipeAllTransactions, wipePortfolio, wipeData,
+        connectEmail, updateEmailSyncSettings, disconnectEmail, resetEmailTransactions, syncEmailTransactions, wipeAllTransactions, wipePortfolio, wipeData,
         connectPlaid, syncPlaidTransactions, delinkPlaid, disconnectPlaid,
         // investmentTransactions + holdings already exposed above
         isSyncing, totalBalance, monthlyIncome, monthlyExpense,

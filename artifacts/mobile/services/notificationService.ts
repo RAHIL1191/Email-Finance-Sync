@@ -256,7 +256,7 @@ export async function scheduleBillNotifications(bill: BillLike): Promise<void> {
             sound: true,
             channelId: "default",
             data: { billId: bill.id, type: "upcoming" },
-          },
+          } as any,
           trigger: {
             type: "date",
             date: triggerDate,
@@ -278,7 +278,7 @@ export async function scheduleBillNotifications(bill: BillLike): Promise<void> {
             sound: true,
             channelId: "default",
             data: { billId: bill.id, type: "overdue" },
-          },
+          } as any,
           trigger: {
             type: "date",
             date: triggerDate,
@@ -362,7 +362,7 @@ export async function scheduleTaskReminder(task: TaskLike): Promise<void> {
         sound: true,
         channelId: "default",
         data: { taskId: task.id, type: "task" },
-      },
+      } as any,
       trigger: {
         type: "date",
         date: triggerDate,
@@ -410,7 +410,7 @@ export async function scheduleTaskDueNotification(task: TaskDueLike): Promise<vo
         sound: true,
         channelId: "default",
         data: { taskId: task.id, type: "task_due" },
-      },
+      } as any,
       trigger: {
         type: "date",
         date: triggerDate,
@@ -518,7 +518,7 @@ export async function fireImmediateNotification(title: string, body: string, dat
     const { status } = await N.getPermissionsAsync();
     if (status !== "granted") return;
     await N.scheduleNotificationAsync({
-      content: { title, body, sound: true, channelId: "default", data: data ?? {} },
+      content: { title, body, sound: true, channelId: "default", data: data ?? {} } as any,
       trigger: null,
     });
   } catch {}

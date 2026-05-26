@@ -223,7 +223,9 @@ export default function HomeScreen() {
 
   const handleRefresh = async () => {
     setRefreshing(true);
-    if (emailSync.isConnected) await syncEmailTransactions();
+    if (emailSync.isConnected && emailSync.syncTransactions) {
+      await syncEmailTransactions();
+    }
     setRefreshing(false);
   };
 
@@ -393,7 +395,7 @@ export default function HomeScreen() {
           </View>
         </View>
         <View style={styles.headerActions}>
-          {emailSync.isConnected && (
+          {emailSync.isConnected && emailSync.syncTransactions && (
             <TouchableOpacity
               style={[styles.iconBtn, { backgroundColor: colors.card, borderColor: colors.border }]}
               onPress={() => { Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light); syncEmailTransactions(); }}

@@ -1,6 +1,12 @@
 import { Feather } from "@expo/vector-icons";
 import * as Haptics from "expo-haptics";
 import React, { useMemo, useState } from "react";
+import { router } from "expo-router";
+import * as FileSystem from "expo-file-system/src/legacy/FileSystem";
+import * as Sharing from "expo-sharing";
+import * as Print from "expo-print";
+import DateTimePicker from "@react-native-community/datetimepicker";
+import { toLocalYMD } from "@/hooks/useLocalDate";
 import {
   Alert,
   Dimensions,
@@ -9,8 +15,10 @@ import {
   ScrollView,
   StyleSheet,
   Text,
+  TextInput,
   TouchableOpacity,
   View,
+  ActivityIndicator,
 } from "react-native";
 import { SafeAreaView } from "react-native-safe-area-context";
 
@@ -21,7 +29,7 @@ import BillFilterModal, {
   BillFilterSettings,
   DEFAULT_FILTER,
 } from "@/components/BillFilterModal";
-import { Bill, useApp } from "@/context/AppContext";
+import { Bill, useApp, getApiBase } from "@/context/AppContext";
 import { useDrawer } from "@/context/DrawerContext";
 import { useColors } from "@/hooks/useColors";
 
@@ -638,7 +646,7 @@ const TABS: { key: Tab; label: string }[] = [
 export default function BillsScreen() {
   const colors = useColors();
   const { openDrawer } = useDrawer();
-  const { bills, addBill, updateBill, markBillPaid, deleteBill } = useApp();
+  const { bills, addBill, updateBill, markBillPaid, deleteBill, emailSync, userName } = useApp();
   const [tab, setTab]           = useState<Tab>("upcoming");
   const [showAdd, setShowAdd]   = useState(false);
   const [showFilter, setShowFilter] = useState(false);
@@ -647,6 +655,299 @@ export default function BillsScreen() {
   const [editBill,           setEditBill]           = useState<Bill | null>(null);
   const [thisOnlyParent,     setThisOnlyParent]     = useState<Bill | null>(null);
   const [showOverdueModal,   setShowOverdueModal]   = useState(false);
+
+  const [showReportModal, setShowReportModal] = useState(false);
+  const [reportFromDate, setReportFromDate] = useState<Date>(new Date(Date.now() - 30 * 86400000));
+  const [reportToDate, setReportToDate] = useState<Date>(new Date(Date.now() + 30 * 86400000));
+  const [reportFormat, setReportFormat] = useState<"excel" | "pdf">("excel");
+  const [showFromPicker, setShowFromPicker] = useState(false);
+  const [showToPicker, setShowToPicker] = useState(false);
+  const [recipientEmail, setRecipientEmail] = useState(emailSync?.email || "");
+  const [isSendingReport, setIsSendingReport] = useState(false);
+
+  React.useEffect(() => {
+    if (emailSync?.email) {
+      setRecipientEmail(emailSync.email);
+    }
+  }, [emailSync?.email]);
+
+  const getBillsInDateRange = (start: Date, end: Date) => {
+    const base = bills.filter((b) => {
+      const d = new Date(b.dueDate);
+      return d >= start && d <= end;
+    });
+
+    const occurrences: Bill[] = [];
+    bills.forEach((b) => {
+      if (!b.isRecurring || !b.frequency) return;
+      
+      let next = new Date(b.dueDate);
+      while (next < start) {
+        next = addFreq(next, b.frequency);
+      }
+      
+      while (next <= end) {
+        const isParentDue = Math.abs(new Date(b.dueDate).getTime() - next.getTime()) < 1000;
+        if (!isParentDue) {
+          occurrences.push({
+            ...b,
+            id: `${b.id}_occ_${next.getTime()}`,
+            dueDate: next.toISOString(),
+            isPaid: false,
+          });
+        }
+        next = addFreq(next, b.frequency);
+      }
+    });
+
+    return [...base, ...occurrences].sort((a, b) => new Date(a.dueDate).getTime() - new Date(b.dueDate).getTime());
+  };
+
+  const handleDownloadExcel = async (start: Date, end: Date) => {
+    const periodBills = getBillsInDateRange(start, end);
+    let csv = "Title,Category,Due Date,Due Amount,Paid Status,Paid Amount,Paid Date,Notes\n";
+    
+    periodBills.forEach(b => {
+      const dueDateStr = new Date(b.dueDate).toLocaleDateString("en-US", { month: "short", day: "numeric", year: "numeric" });
+      const paidAmount = b.isPaid ? b.amount.toFixed(2) : "0.00";
+      const paidDateStr = b.isPaid ? dueDateStr : ""; 
+      const status = b.isPaid ? "Paid" : "Unpaid";
+      
+      csv += `"${b.title}","${b.category}","${dueDateStr}",${b.amount.toFixed(2)},"${status}",${paidAmount},"${paidDateStr}","${b.notes || ""}"\n`;
+    });
+    
+    const dateStr = toLocalYMD(new Date());
+    const fileName = `FinTrack_Bill_Report_${dateStr}.csv`;
+    const filePath = `${FileSystem.documentDirectory}${fileName}`;
+    
+    await FileSystem.writeAsStringAsync(filePath, csv);
+    
+    const canShare = await Sharing.isAvailableAsync();
+    if (canShare) {
+      await Sharing.shareAsync(filePath, {
+        mimeType: "text/csv",
+        dialogTitle: "Save Bill Report",
+      });
+    } else {
+      Alert.alert("Export Complete", `Report saved to:\n${filePath}`);
+    }
+  };
+
+  const generateHtmlReport = (start: Date, end: Date): string => {
+    const periodBills = getBillsInDateRange(start, end);
+    const startFmt = start.toLocaleDateString("en-US", { month: "short", day: "numeric", year: "numeric" });
+    const endFmt = end.toLocaleDateString("en-US", { month: "short", day: "numeric", year: "numeric" });
+    
+    const totalDue = periodBills.reduce((acc, b) => acc + b.amount, 0);
+    const totalPaid = periodBills.reduce((acc, b) => acc + (b.isPaid ? b.amount : 0), 0);
+    
+    const rows = periodBills.map(b => {
+      const cfg = catConfig(b.category);
+      
+      // Format as "3 Jun 2025" style
+      const dueObj = new Date(b.dueDate);
+      const dueDay = dueObj.getDate();
+      const dueMonth = dueObj.toLocaleString("en-US", { month: "short" });
+      const dueYear = dueObj.getFullYear();
+      const dueDateStr = `${dueDay} ${dueMonth} ${dueYear}`;
+      
+      const paidAmtStr = b.isPaid ? `$${b.amount.toFixed(2)}` : "";
+      const paidDateStr = b.isPaid ? dueDateStr : ""; 
+      const paidClass = b.isPaid ? 'class="paid-amount"' : "";
+      const firstLetter = b.category ? b.category.charAt(0).toUpperCase() : "O";
+      
+      return `
+        <tr>
+          <td>
+            <div class="title-cell">
+              <div class="category-badge" style="background-color: ${cfg.bg};">
+                ${firstLetter}
+              </div>
+              <span style="font-weight: 500;">${b.title}</span>
+            </div>
+          </td>
+          <td>${dueDateStr}</td>
+          <td style="font-weight: 500;">$${b.amount.toFixed(2)}</td>
+          <td ${paidClass}>${paidAmtStr}</td>
+          <td>${paidDateStr}</td>
+          <td style="color: #6b7280; font-size: 12px;">${b.notes || ""}</td>
+        </tr>
+      `;
+    }).join("");
+    
+    return `
+      <!DOCTYPE html>
+      <html>
+        <head>
+          <meta charset="utf-8" />
+          <title>Bill Report</title>
+          <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
+          <style>
+            body {
+              font-family: 'Inter', -apple-system, sans-serif;
+              color: #1f2937;
+              margin: 0;
+              padding: 24px;
+              background-color: #ffffff;
+            }
+            .header-banner {
+              background-color: #0070c0;
+              color: #ffffff;
+              padding: 24px;
+              border-radius: 8px 8px 0 0;
+              display: flex;
+              justify-content: space-between;
+              align-items: center;
+            }
+            .header-info {
+              display: flex;
+              align-items: center;
+            }
+            .header-titles h1 {
+              margin: 0;
+              font-size: 26px;
+              font-weight: 700;
+              letter-spacing: -0.5px;
+            }
+            .header-titles p {
+              margin: 4px 0 0 0;
+              font-size: 14px;
+              opacity: 0.9;
+            }
+            .header-titles .report-type {
+              font-size: 12px;
+              opacity: 0.8;
+              margin-top: 2px;
+              text-transform: uppercase;
+              letter-spacing: 0.5px;
+              font-weight: 600;
+            }
+            .header-user {
+              text-align: right;
+            }
+            .header-user .name {
+              font-size: 20px;
+              font-weight: 700;
+            }
+            table {
+              width: 100%;
+              border-collapse: collapse;
+              margin-top: 0;
+            }
+            th {
+              background-color: #0070c0;
+              color: #ffffff;
+              font-weight: 700;
+              text-align: left;
+              padding: 14px 16px;
+              font-size: 12px;
+              text-transform: uppercase;
+              letter-spacing: 0.5px;
+              border: none;
+            }
+            td {
+              padding: 14px 16px;
+              border-bottom: 1px solid #e5e7eb;
+              font-size: 13px;
+              color: #374151;
+            }
+            .category-badge {
+              display: inline-flex;
+              align-items: center;
+              justify-content: center;
+              width: 28px;
+              height: 28px;
+              border-radius: 50%;
+              color: #ffffff;
+              font-size: 11px;
+              font-weight: 700;
+              margin-right: 12px;
+            }
+            .title-cell {
+              display: flex;
+              align-items: center;
+            }
+            .paid-amount {
+              color: #10b981;
+              font-weight: 700;
+            }
+            .total-row {
+              background-color: #f9fafb;
+              font-weight: 700;
+              border-top: 2px solid #e5e7eb;
+              border-bottom: 2px solid #e5e7eb;
+            }
+            .total-label {
+              text-align: right;
+              font-size: 14px;
+              color: #1f2937;
+            }
+            .total-val {
+              font-size: 14px;
+            }
+          </style>
+        </head>
+        <body>
+          <div class="header-banner">
+            <div class="header-info">
+              <svg width="42" height="42" viewBox="0 0 100 100" fill="none" xmlns="http://www.w3.org/2000/svg" style="margin-right: 16px;">
+                <rect width="100" height="100" rx="24" fill="#ffffff"/>
+                <path d="M30 35H70M30 50H70M30 65H55" stroke="#0070c0" stroke-width="8" stroke-linecap="round"/>
+                <circle cx="65" cy="65" r="10" fill="#10b981"/>
+              </svg>
+              <div class="header-titles">
+                <h1>Bill Report</h1>
+                <p>${startFmt} to ${endFmt}</p>
+                <div class="report-type">Personal Report</div>
+              </div>
+            </div>
+            <div class="header-user">
+              <div class="name">${userName || "Allen"}</div>
+            </div>
+          </div>
+          
+          <table>
+            <thead>
+              <tr>
+                <th style="width: 30%;">Title</th>
+                <th style="width: 15%;">Due Date</th>
+                <th style="width: 15%;">Due Amount</th>
+                <th style="width: 15%;">Paid Amount</th>
+                <th style="width: 15%;">Paid Date</th>
+                <th style="width: 10%;">Notes</th>
+              </tr>
+            </thead>
+            <tbody>
+              ${rows || '<tr><td colspan="6" style="padding: 32px; text-align: center; color: #9ca3af; font-size: 14px;">No bills found for the selected period.</td></tr>'}
+            </tbody>
+            <tfoot>
+              <tr class="total-row">
+                <td colspan="2" class="total-label" style="padding: 16px;">Total Bills:</td>
+                <td class="total-val" style="padding: 16px; color: #1f2937;">$${totalDue.toFixed(2)}</td>
+                <td class="total-val" style="padding: 16px; color: #10b981;">$${totalPaid.toFixed(2)}</td>
+                <td colspan="2" style="padding: 16px;"></td>
+              </tr>
+            </tfoot>
+          </table>
+        </body>
+      </html>
+    `;
+  };
+
+  const handleDownloadPdf = async (start: Date, end: Date) => {
+    const htmlContent = generateHtmlReport(start, end);
+    const { uri } = await Print.printToFileAsync({ html: htmlContent });
+    
+    const canShare = await Sharing.isAvailableAsync();
+    if (canShare) {
+      await Sharing.shareAsync(uri, {
+        mimeType: "application/pdf",
+        dialogTitle: "Save Bill Report",
+      });
+    } else {
+      Alert.alert("Export Complete", `Report generated successfully.`);
+    }
+  };
 
   // Called when user picks "THIS ONLY" for edit on a recurring bill
   const onEditThisOnly = (bill: Bill) => {
@@ -775,7 +1076,13 @@ export default function BillsScreen() {
               )}
             </View>
           </TouchableOpacity>
-          <TouchableOpacity hitSlop={8}>
+          <TouchableOpacity 
+            hitSlop={8}
+            onPress={() => {
+              Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
+              setShowReportModal(true);
+            }}
+          >
             <Feather name="download" size={20} color={colors.primary} />
           </TouchableOpacity>
         </View>
@@ -903,6 +1210,279 @@ export default function BillsScreen() {
         }}
         onClose={() => setShowFilter(false)}
       />
+
+      {/* Generate Report Modal */}
+      <Modal
+        visible={showReportModal}
+        animationType="slide"
+        transparent
+        onRequestClose={() => setShowReportModal(false)}
+      >
+        <View style={repSt.backdrop}>
+          <TouchableOpacity
+            style={StyleSheet.absoluteFill}
+            activeOpacity={1}
+            onPress={() => setShowReportModal(false)}
+          />
+          <View style={[repSt.sheet, { backgroundColor: colors.card }]}>
+            {/* Header */}
+            <View style={repSt.header}>
+              <Text style={[repSt.headerTitle, { color: colors.foreground }]}>Generate Report</Text>
+              <TouchableOpacity onPress={() => setShowReportModal(false)} hitSlop={8}>
+                <Feather name="x" size={22} color={colors.foreground} />
+              </TouchableOpacity>
+            </View>
+
+            {/* Date Range Section */}
+            <Text style={[repSt.sectionLabel, { color: colors.foreground }]}>Date Range</Text>
+            <View style={repSt.dateRow}>
+              <TouchableOpacity
+                style={[repSt.dateBtn, { borderColor: colors.border }]}
+                onPress={() => {
+                  Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
+                  setShowFromPicker(true);
+                }}
+              >
+                <Text style={[repSt.dateBtnLabel, { color: colors.mutedForeground }]}>From</Text>
+                <Text style={[repSt.dateBtnVal, { color: colors.foreground }]}>
+                  {reportFromDate.toLocaleDateString("en-US", { month: "short", day: "numeric", year: "numeric" })}
+                </Text>
+              </TouchableOpacity>
+
+              <TouchableOpacity
+                style={[repSt.dateBtn, { borderColor: colors.border }]}
+                onPress={() => {
+                  Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
+                  setShowToPicker(true);
+                }}
+              >
+                <Text style={[repSt.dateBtnLabel, { color: colors.mutedForeground }]}>To</Text>
+                <Text style={[repSt.dateBtnVal, { color: colors.foreground }]}>
+                  {reportToDate.toLocaleDateString("en-US", { month: "short", day: "numeric", year: "numeric" })}
+                </Text>
+              </TouchableOpacity>
+            </View>
+
+            {/* Date Pickers */}
+            {showFromPicker && (
+              <DateTimePicker
+                value={reportFromDate}
+                mode="date"
+                display="default"
+                onChange={(event, selectedDate) => {
+                  setShowFromPicker(false);
+                  if (selectedDate) setReportFromDate(selectedDate);
+                }}
+              />
+            )}
+            {showToPicker && (
+              <DateTimePicker
+                value={reportToDate}
+                mode="date"
+                display="default"
+                onChange={(event, selectedDate) => {
+                  setShowToPicker(false);
+                  if (selectedDate) setReportToDate(selectedDate);
+                }}
+              />
+            )}
+
+            {/* Report Format Section */}
+            <Text style={[repSt.sectionLabel, { color: colors.foreground, marginTop: 20 }]}>Report Format</Text>
+            <View style={[repSt.formatContainer, { borderColor: colors.border }]}>
+              <TouchableOpacity
+                style={[repSt.formatTab, reportFormat === "excel" && { backgroundColor: colors.primary }]}
+                onPress={() => {
+                  Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
+                  setReportFormat("excel");
+                }}
+              >
+                <Text style={[repSt.formatText, { color: reportFormat === "excel" ? "#fff" : colors.foreground }]}>Excel</Text>
+              </TouchableOpacity>
+              <TouchableOpacity
+                style={[repSt.formatTab, reportFormat === "pdf" && { backgroundColor: colors.primary }]}
+                onPress={() => {
+                  Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
+                  setReportFormat("pdf");
+                }}
+              >
+                <Text style={[repSt.formatText, { color: reportFormat === "pdf" ? "#fff" : colors.foreground }]}>PDF</Text>
+              </TouchableOpacity>
+            </View>
+
+            {/* Recipient Email Input */}
+            <Text style={[repSt.sectionLabel, { color: colors.foreground, marginTop: 20 }]}>Recipient Email</Text>
+            <TextInput
+              style={[
+                repSt.inputField,
+                {
+                  color: colors.foreground,
+                  borderColor: colors.border,
+                  backgroundColor: colors.background,
+                }
+              ]}
+              value={recipientEmail}
+              onChangeText={setRecipientEmail}
+              placeholder="Enter email address"
+              placeholderTextColor={colors.mutedForeground}
+              keyboardType="email-address"
+              autoCapitalize="none"
+            />
+
+            {/* Action Buttons */}
+            <View style={{ marginTop: 14, gap: 14 }}>
+              <TouchableOpacity
+                style={[repSt.outlineBtn, { borderColor: colors.primary }]}
+                onPress={async () => {
+                  Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium);
+                  try {
+                    if (reportFormat === "excel") {
+                      await handleDownloadExcel(reportFromDate, reportToDate);
+                    } else {
+                      await handleDownloadPdf(reportFromDate, reportToDate);
+                    }
+                    setShowReportModal(false);
+                  } catch (e) {
+                    Alert.alert("Error", `Could not generate report: ${e}`);
+                  }
+                }}
+              >
+                <Text style={[repSt.outlineBtnText, { color: colors.primary }]}>SHARE REPORT</Text>
+                <Feather name="share-2" size={16} color={colors.primary} />
+              </TouchableOpacity>
+
+              <TouchableOpacity
+                style={[repSt.primaryBtn, { backgroundColor: colors.primary, opacity: isSendingReport ? 0.7 : 1 }]}
+                disabled={isSendingReport}
+                onPress={async () => {
+                  Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium);
+                  
+                  // Check if emailSync is connected
+                  if (!emailSync || !emailSync.isConnected) {
+                    Alert.alert(
+                      "Connection Required",
+                      "Please connect your email credentials in the Accounts tab first to send email reports.",
+                      [
+                        { text: "Cancel", style: "cancel" },
+                        { 
+                          text: "Go to Accounts", 
+                          onPress: () => { 
+                            setShowReportModal(false); 
+                            router.push("/(tabs)/accounts" as any); 
+                          } 
+                        }
+                      ]
+                    );
+                    return;
+                  }
+
+                  const email = recipientEmail.trim();
+                  if (!email) {
+                    Alert.alert(
+                      "Email Required",
+                      "Please enter a recipient email address to send the statement."
+                    );
+                    return;
+                  }
+                  if (!email.includes("@")) {
+                    Alert.alert(
+                      "Invalid Email",
+                      "Please enter a valid email address."
+                    );
+                    return;
+                  }
+
+                  setIsSendingReport(true);
+                  try {
+                    let textBody = "Please find your requested spreadsheet statement attached.";
+                    let htmlBody = `<p>Please find your requested statement attached.</p>`;
+                    let attachmentCsv: string | undefined = undefined;
+
+                    const periodBills = getBillsInDateRange(reportFromDate, reportToDate);
+                    const startFmt = reportFromDate.toLocaleDateString("en-US", { month: "short", day: "numeric", year: "numeric" });
+                    const endFmt = reportToDate.toLocaleDateString("en-US", { month: "short", day: "numeric", year: "numeric" });
+                    const subject = `FinTrack Bill Statement: ${startFmt} to ${endFmt}`;
+
+                    if (reportFormat === "excel") {
+                      let csv = "Title,Category,Due Date,Due Amount,Paid Status,Paid Amount,Paid Date,Notes\n";
+                      periodBills.forEach(b => {
+                        const dueDateStr = new Date(b.dueDate).toLocaleDateString("en-US", { month: "short", day: "numeric", year: "numeric" });
+                        const paidAmount = b.isPaid ? b.amount.toFixed(2) : "0.00";
+                        const paidDateStr = b.isPaid ? dueDateStr : ""; 
+                        const status = b.isPaid ? "Paid" : "Unpaid";
+                        csv += `"${b.title}","${b.category}","${dueDateStr}",${b.amount.toFixed(2)},"${status}",${paidAmount},"${paidDateStr}","${b.notes || ""}"\n`;
+                      });
+                      attachmentCsv = csv;
+                      htmlBody = `
+                        <div style="font-family: sans-serif; color: #1f2937; padding: 20px;">
+                          <h2 style="color: #0070c0;">Your FinTrack Statement is Ready</h2>
+                          <p>Your statement from <strong>${startFmt}</strong> to <strong>${endFmt}</strong> has been successfully compiled.</p>
+                          <p>Please find the attached CSV spreadsheet containing all transaction details.</p>
+                          <br/>
+                          <p style="font-size: 12px; color: #6b7280;">Sent via FinTrack Secure SMTP Delivery.</p>
+                        </div>
+                      `;
+                    } else {
+                      // Generate and send beautiful inline HTML report for PDF option
+                      htmlBody = generateHtmlReport(reportFromDate, reportToDate);
+                      textBody = `Your FinTrack Bill Statement from ${startFmt} to ${endFmt} is ready. View it in your HTML-compatible email client.`;
+                    }
+
+                    const res = await fetch(`${getApiBase()}/api/email/send-report`, {
+                      method: "POST",
+                      headers: {
+                        "Content-Type": "application/json",
+                        "X-Household-ID": "device",
+                        "X-Device-ID": "mobile",
+                      },
+                      body: JSON.stringify({
+                        senderEmail: emailSync.email,
+                        appPassword: emailSync.appPassword,
+                        recipientEmail: email,
+                        subject,
+                        htmlBody,
+                        textBody,
+                        attachmentCsv,
+                        attachmentFileName: `FinTrack_Bill_Statement_${toLocalYMD(new Date())}.csv`
+                      })
+                    });
+
+                    const data = await res.json();
+                    if (!res.ok) {
+                      throw new Error(data.error || "Failed to deliver email statement.");
+                    }
+
+                    Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
+                    Alert.alert(
+                      "Report Delivered",
+                      `Statement successfully compiled and emailed to ${email}.`
+                    );
+                    setShowReportModal(false);
+                  } catch (e: any) {
+                    Haptics.notificationAsync(Haptics.NotificationFeedbackType.Error);
+                    Alert.alert("Delivery Failed", e.message || "Failed to transmit report via SMTP.");
+                  } finally {
+                    setIsSendingReport(false);
+                  }
+                }}
+              >
+                {isSendingReport ? (
+                  <View style={{ flexDirection: "row", alignItems: "center", gap: 8, justifyContent: "center" }}>
+                    <ActivityIndicator size="small" color="#fff" />
+                    <Text style={repSt.primaryBtnText}>SENDING REPORT...</Text>
+                  </View>
+                ) : (
+                  <Text style={repSt.primaryBtnText}>SEND OVER EMAIL</Text>
+                )}
+              </TouchableOpacity>
+
+              <Text style={[repSt.captionText, { color: colors.mutedForeground }]}>
+                (Statement will be sent to the email address specified above.)
+              </Text>
+            </View>
+          </View>
+        </View>
+      </Modal>
     </SafeAreaView>
   );
 }
@@ -1008,5 +1588,112 @@ const styles = StyleSheet.create({
     shadowOpacity: 0.2,
     shadowRadius: 8,
     elevation: 6,
+  },
+});
+
+const repSt = StyleSheet.create({
+  backdrop: {
+    flex: 1,
+    justifyContent: "flex-end",
+    backgroundColor: "rgba(0,0,0,0.6)",
+  },
+  sheet: {
+    borderTopLeftRadius: 24,
+    borderTopRightRadius: 24,
+    paddingHorizontal: 20,
+    paddingTop: 12,
+    paddingBottom: Platform.OS === "ios" ? 44 : 24,
+  },
+  header: {
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "space-between",
+    paddingVertical: 14,
+    marginBottom: 12,
+  },
+  headerTitle: {
+    fontSize: 18,
+    fontFamily: "Inter_700Bold",
+  },
+  sectionLabel: {
+    fontSize: 14,
+    fontFamily: "Inter_600SemiBold",
+    marginBottom: 8,
+  },
+  dateRow: {
+    flexDirection: "row",
+    gap: 12,
+    marginBottom: 10,
+  },
+  dateBtn: {
+    flex: 1,
+    padding: 12,
+    borderRadius: 12,
+    borderWidth: 1,
+    alignItems: "center",
+  },
+  dateBtnLabel: {
+    fontSize: 11,
+    fontFamily: "Inter_500Medium",
+    marginBottom: 4,
+  },
+  dateBtnVal: {
+    fontSize: 14,
+    fontFamily: "Inter_600SemiBold",
+  },
+  formatContainer: {
+    flexDirection: "row",
+    borderWidth: 1,
+    borderRadius: 12,
+    overflow: "hidden",
+    padding: 2,
+  },
+  formatTab: {
+    flex: 1,
+    paddingVertical: 10,
+    alignItems: "center",
+    borderRadius: 10,
+  },
+  formatText: {
+    fontSize: 14,
+    fontFamily: "Inter_600SemiBold",
+  },
+  outlineBtn: {
+    flexDirection: "row",
+    borderWidth: 1.5,
+    borderRadius: 12,
+    paddingVertical: 14,
+    alignItems: "center",
+    justifyContent: "center",
+    gap: 8,
+  },
+  outlineBtnText: {
+    fontSize: 15,
+    fontFamily: "Inter_700Bold",
+  },
+  primaryBtn: {
+    borderRadius: 12,
+    paddingVertical: 14,
+    alignItems: "center",
+    justifyContent: "center",
+  },
+  primaryBtnText: {
+    fontSize: 15,
+    fontFamily: "Inter_700Bold",
+    color: "#fff",
+  },
+  inputField: {
+    borderWidth: 1,
+    borderRadius: 12,
+    padding: 12,
+    fontSize: 14,
+    fontFamily: "Inter_500Medium",
+    marginBottom: 10,
+  },
+  captionText: {
+    fontSize: 12,
+    fontFamily: "Inter_400Regular",
+    textAlign: "center",
+    marginTop: 4,
   },
 });

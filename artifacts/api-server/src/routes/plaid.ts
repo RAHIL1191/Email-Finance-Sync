@@ -715,12 +715,15 @@ function mapPlaidTransaction(t: any, bankName: string) {
 
   return {
     plaidTransactionId: t.transaction_id as string,
+    pending: t.pending as boolean,
+    pendingTransactionId: t.pending_transaction_id as string | null,
     title,
     merchant: merchant || title,
     amount: Math.abs(amount),
     type: amount > 0 ? ("expense" as const) : ("income" as const),
     category: mapPlaidCategory(primary, detailed),
-    date: (t.date ?? new Date().toISOString().slice(0, 10)) as string,
+    // Prefer authorized_date (actual purchase day) over the posted date
+    date: (t.authorized_date ?? t.date ?? new Date().toISOString().slice(0, 10)) as string,
     accountId: t.account_id as string,
     plaidAccountId: t.account_id as string,
     bank: bankName,
