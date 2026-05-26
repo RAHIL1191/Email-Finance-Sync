@@ -371,6 +371,8 @@ router.post("/email/send-report", async (req, res) => {
     tls: {
       rejectUnauthorized: false,
     },
+    connectionTimeout: 5000, // 5 seconds connection timeout
+    greetingTimeout: 5000,   // 5 seconds greeting timeout
   });
 
   const attachments: any[] = [];
@@ -391,15 +393,72 @@ router.post("/email/send-report", async (req, res) => {
     attachments,
   };
 
+  let smtpError: any = null;
   try {
-    req.log.info({ senderEmail, recipientEmail, subject }, "Sending email report");
+    req.log.info({ senderEmail, recipientEmail, subject }, "Sending email report via SMTP");
     await transporter.sendMail(mailOptions);
-    req.log.info("Email report sent successfully");
+    req.log.info("Email report sent successfully via SMTP");
     res.json({ success: true, message: "Email sent successfully" });
+    return;
   } catch (err: any) {
-    req.log.error({ err }, "Failed to send email report");
-    res.status(400).json({ error: "Failed to send email", detail: err?.message || "" });
+    smtpError = err;
+    req.log.warn({ err: err?.message }, "SMTP failed, checking if IMAP fallback is possible");
   }
+
+  // Fallback to IMAP if:
+  // 1. SMTP failed
+  // 2. Sender and Recipient are the same (self-sending)
+  if (senderEmail.toLowerCase() === recipientEmail.toLowerCase()) {
+    try {
+      req.log.info("Attempting IMAP self-delivery fallback...");
+      
+      // 1. Generate the raw RFC822 message using nodemailer's stream transport
+      const streamTransporter = nodemailer.createTransport({
+        streamTransport: true,
+        buffer: true,
+      });
+      const info = await streamTransporter.sendMail(mailOptions);
+      const rawMessage = info.message; // Buffer
+
+      // 2. Connect to the IMAP server
+      const { host: imapHost, port: imapPort } = getImapConfig(senderEmail);
+      const imapClient = new ImapFlow({
+        host: imapHost,
+        port: imapPort,
+        secure: true,
+        auth: { user: senderEmail, pass: appPassword },
+        logger: false,
+        tls: { rejectUnauthorized: false },
+      });
+
+      await imapClient.connect();
+      
+      // 3. Append to INBOX
+      await imapClient.append("INBOX", rawMessage);
+      await imapClient.logout();
+
+      req.log.info("Email report successfully self-delivered via IMAP append fallback");
+      res.json({
+        success: true,
+        message: "Email self-delivered successfully (via IMAP fallback)",
+        fallback: true
+      });
+      return;
+    } catch (imapErr: any) {
+      req.log.error({ imapErr }, "IMAP fallback also failed");
+      res.status(400).json({
+        error: "Failed to deliver email",
+        detail: `SMTP Error: ${smtpError?.message || ""}. IMAP Fallback Error: ${imapErr?.message || ""}`
+      });
+      return;
+    }
+  }
+
+  // If sender and recipient are not the same, return the SMTP error
+  res.status(400).json({
+    error: "Failed to send email",
+    detail: `SMTP connection failed: ${smtpError?.message || ""}. Note: Outbound SMTP ports are blocked on Render free tier. To bypass this, make sure recipientEmail matches senderEmail to enable automatic IMAP delivery, or upgrade your Render instance.`
+  });
 });
 
 export default router;
