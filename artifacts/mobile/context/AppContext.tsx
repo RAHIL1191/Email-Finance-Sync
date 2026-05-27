@@ -2838,6 +2838,13 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
               !(t.plaidTransactionId && currentPlaidIds.has(t.plaidTransactionId))
           );
           imported = precomputedFresh.length;
+
+          // Debug: show what Plaid returned vs what was filtered
+          const blockedByKey = candidates.filter((t) => currentKeys.has(dedupKey(t))).length;
+          const blockedById = candidates.filter((t) => currentIds.has(t.id)).length;
+          const blockedByPlaidId = candidates.filter((t) => t.plaidTransactionId && currentPlaidIds.has(t.plaidTransactionId)).length;
+          const dates = candidates.map((t) => t.date).sort();
+          console.log(`[Plaid sync] Returned ${candidates.length} txs (${dates[0]} → ${dates[dates.length - 1]}). Fresh: ${imported}. Blocked: byKey=${blockedByKey}, byId=${blockedById}, byPlaidId=${blockedByPlaidId}. Local has ${transactionsRef.current.length} txs.`);
           if (precomputedFresh.length > 0) {
             bgCall("/api/transactions/bulk", "POST", householdIdRef.current, deviceIdRef.current, { transactions: precomputedFresh });
             processReviewStatusForTransactions(precomputedFresh);

@@ -377,6 +377,7 @@ router.post("/plaid/sync/:itemId", async (req, res) => {
       cursor = syncRes.data.next_cursor;
       hasMore = syncRes.data.has_more;
     }
+    const syncCount = transactions.length;
 
     // transactionsGet: only called when transactionsSync returned nothing (e.g. Wealthsimple
     // Canada async processing) or when backfill is explicitly requested.
@@ -403,6 +404,7 @@ router.post("/plaid/sync/:itemId", async (req, res) => {
           total = txRes.data.total_transactions ?? page.length;
           page.forEach((t) => txMap.set(t.transaction_id, t));
           offset += page.length;
+          req.log.info({ pageNum: Math.ceil(offset / pageSize), pageSize: page.length, total, offset }, "transactionsGet page fetched");
           if (!backfill) break;
           if (page.length === 0) break;
         }
@@ -412,6 +414,16 @@ router.post("/plaid/sync/:itemId", async (req, res) => {
         req.log.error({ err: pErr }, "Plaid transactionsGet backfill failed");
       }
     }
+
+    // Log summary of what Plaid returned
+    const allDates = transactions.map((t: any) => t.authorized_date ?? t.date).filter(Boolean).sort();
+    req.log.info({
+      backfill,
+      force,
+      syncCount,
+      totalAfterMerge: transactions.length,
+      dateRange: allDates.length ? `${allDates[0]} → ${allDates[allDates.length - 1]}` : "none",
+    }, "Plaid sync summary");
 
     // Filter out standard transactions that belong to investment accounts.
     // Investment accounts sync holdings + investment transactions separately.
