@@ -537,12 +537,16 @@ function bgCall(
 const SOURCE_PRIORITY: Record<string, number> = { plaid: 3, manual: 2, email: 1 };
 
 /**
- * Dedup key: accountId + amount + date (day-precision).
+ * Dedup key: accountId + amount (cents) + date (day-precision).
  * Intentionally excludes title/bank — Gmail parses "Transaction at X" while Plaid
  * returns "X"; the three stable fields catch cross-source duplicates cleanly.
+ *
+ * Amount is normalised to integer cents via Math.round(amount * 100) so that
+ * float4 (PostgreSQL `real`) round-trip precision drift (e.g. 49.99 → 49.9900016784668)
+ * never causes a false-negative during dedup.
  */
 function dedupKey(t: { amount: number; date: string; accountId?: string }): string {
-  return `${(t.accountId ?? "").toLowerCase()}|${t.amount}|${t.date.slice(0, 10)}`;
+  return `${(t.accountId ?? "").toLowerCase()}|${Math.round((t.amount ?? 0) * 100)}|${t.date.slice(0, 10)}`;
 }
 
 /**
@@ -568,18 +572,20 @@ function upsertTransactions(prev: Transaction[], incoming: Transaction[]): Trans
   // Sort: higher priority score transactions first
   allTxs.sort((a, b) => getPriorityScore(b) - getPriorityScore(a));
 
-  // Pass A: Strict exact ID and content deduplication based on priority score.
+  // Pass A: Strict exact ID, plaidTransactionId, and content deduplication based on priority score.
   // This collapses exact duplicates from overlapping sync sources.
   const uniqueTxs: Transaction[] = [];
   const byId = new Map<string, Transaction>();
   const byContent = new Map<string, Transaction>();
+  const byPlaidTxId = new Map<string, Transaction>();
 
   for (const t of allTxs) {
     const key = dedupKey(t);
     const existingById = t.id ? byId.get(t.id) : null;
     const existingByContent = byContent.get(key);
+    const existingByPlaidTxId = t.plaidTransactionId ? byPlaidTxId.get(t.plaidTransactionId) : null;
 
-    if (existingById || existingByContent) {
+    if (existingById || existingByContent || existingByPlaidTxId) {
       // Re-attribution or duplicate: skip since we already have a higher/equal priority version
       continue;
     }
@@ -587,6 +593,7 @@ function upsertTransactions(prev: Transaction[], incoming: Transaction[]): Trans
     uniqueTxs.push(t);
     if (t.id) byId.set(t.id, t);
     byContent.set(key, t);
+    if (t.plaidTransactionId) byPlaidTxId.set(t.plaidTransactionId, t);
   }
 
   // Pass B: Fuzzy Pending-Posted Collapsing across the combined list.
@@ -1314,27 +1321,67 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
           }
         } catch {}
 
-        // ── Background: push local transactions to server ─────────────────────
-        if (dedupedLocalTxs.length > 0) {
-          fetch(`${getApiBase()}/api/transactions/bulk`, {
-            method: "POST",
-            headers: { "Content-Type": "application/json", "X-Household-ID": hId, "X-Device-ID": dId },
-            body: JSON.stringify({ transactions: dedupedLocalTxs }),
-          }).catch(() => {});
-        }
+        // ── Sequenced sync: pull server → merge → push diff ─────────────────
+        // Pull FIRST so we know what the server already has, then only push
+        // truly local-only transactions. This eliminates the race condition
+        // that previously caused duplicates when push and pull ran concurrently.
+        (async () => {
+          try {
+            const serverRes = await fetch(`${getApiBase()}/api/transactions`, {
+              headers: { "X-Household-ID": hId, "X-Device-ID": dId },
+              signal: AbortSignal.timeout(10000),
+            });
+            if (serverRes.ok) {
+              const serverTxs: Transaction[] = await serverRes.json();
+              // Build a set of server-known keys for fast lookup
+              const serverIdSet = new Set(serverTxs.map((t) => t.id));
+              const serverContentKeys = new Set(serverTxs.map(dedupKey));
+              const serverPlaidIds = new Set(
+                serverTxs.map((t) => t.plaidTransactionId).filter(Boolean)
+              );
 
-        // ── Background: pull server transactions and merge via upsertTransactions ──
-        // upsertTransactions handles dedup by accountId|amount|date and prefers
-        // plaid > manual > email, so cross-source duplicates are always collapsed.
-        fetch(`${getApiBase()}/api/transactions`, {
-          headers: { "X-Household-ID": hId, "X-Device-ID": dId },
-        }).then(async (r) => {
-          if (!r.ok) return;
-          const serverTxs: Transaction[] = await r.json();
-          if (serverTxs.length > 0) {
-            setTransactions((prev) => upsertTransactions(prev, serverTxs));
+              // Merge server txs into local state
+              if (serverTxs.length > 0) {
+                setTransactions((prev) => upsertTransactions(prev, serverTxs));
+              }
+
+              // Compute the local-only diff: txs that the server doesn't have by any key
+              const localOnly = dedupedLocalTxs.filter(
+                (t) =>
+                  !serverIdSet.has(t.id) &&
+                  !serverContentKeys.has(dedupKey(t)) &&
+                  !(t.plaidTransactionId && serverPlaidIds.has(t.plaidTransactionId))
+              );
+
+              // Push only the diff
+              if (localOnly.length > 0) {
+                fetch(`${getApiBase()}/api/transactions/bulk`, {
+                  method: "POST",
+                  headers: { "Content-Type": "application/json", "X-Household-ID": hId, "X-Device-ID": dId },
+                  body: JSON.stringify({ transactions: localOnly }),
+                }).catch(() => {});
+              }
+            } else {
+              // Server unreachable — push all local txs as fallback (server dedup will handle it)
+              if (dedupedLocalTxs.length > 0) {
+                fetch(`${getApiBase()}/api/transactions/bulk`, {
+                  method: "POST",
+                  headers: { "Content-Type": "application/json", "X-Household-ID": hId, "X-Device-ID": dId },
+                  body: JSON.stringify({ transactions: dedupedLocalTxs }),
+                }).catch(() => {});
+              }
+            }
+          } catch {
+            // Network error — push all local as fallback
+            if (dedupedLocalTxs.length > 0) {
+              fetch(`${getApiBase()}/api/transactions/bulk`, {
+                method: "POST",
+                headers: { "Content-Type": "application/json", "X-Household-ID": hId, "X-Device-ID": dId },
+                body: JSON.stringify({ transactions: dedupedLocalTxs }),
+              }).catch(() => {});
+            }
           }
-        }).catch(() => {});
+        })();
 
         // ── Background: pull server accounts (always authoritative for account list) ──
         fetch(`${getApiBase()}/api/accounts`, {

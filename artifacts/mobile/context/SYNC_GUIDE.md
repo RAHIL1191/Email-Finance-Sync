@@ -195,30 +195,34 @@ AppContext.tsx → addTransaction(tx)
 
 ---
 
-## 5. App Startup Self-Healing
+## 5. App Startup Self-Healing (Sequenced Sync)
 
-Every time the app launches, these background processes run automatically:
+Every time the app launches, these processes run in order:
 
 ```
 App launch
   │
   ├─ Load AsyncStorage → populate all state (accounts, transactions, etc.)
   │
-  ├─ GET /api/transactions
-  │     → merge with local using upsertTransactions (dedup by amount|date|title)
-  │     → server is source of truth for regular transactions
-  │
-  ├─ GET /api/accounts
-  │     → compare server accounts vs local accounts
-  │     → accounts missing on server (e.g. after DB wipe): POST /api/accounts
-  │     → merge server accounts with local, preserve plaid metadata
-  │
   ├─ GET /api/categories
   │     → if server has categories: use them
   │     → if empty + local empty: seed defaults (POST /api/categories/seed)
   │
-  └─ GET /api/category-rules
-        → load auto-categorization rules
+  ├─ GET /api/category-rules
+  │     → load auto-categorization rules
+  │
+  ├─ SEQUENCED transaction sync (pull → merge → push diff):
+  │     1. GET /api/transactions
+  │        → merge with local using upsertTransactions
+  │     2. Compute local-only diff (txs server doesn't have by id, content key, or plaidTransactionId)
+  │     3. POST /api/transactions/bulk (ONLY local-only diff)
+  │        → server dedup catches any remaining edge cases
+  │     Fallback: if server unreachable, push all local txs
+  │
+  └─ GET /api/accounts (concurrent with tx sync)
+        → compare server accounts vs local accounts
+        → accounts missing on server (e.g. after DB wipe): POST /api/accounts
+        → merge server accounts with local, preserve plaid metadata
 ```
 
 ---
@@ -248,11 +252,24 @@ App launch
 
 ## Deduplication Logic
 
-Regular transactions are deduped by a content key:
+Regular transactions are deduped by three dimensions (any match = duplicate):
+
+1. **ID** — exact match on `transaction.id`
+2. **Content key** — `accountId|amountCents|date(YYYY-MM-DD)`
+   - Amount is normalised to integer cents via `Math.round(amount * 100)` to prevent
+     float4 (PostgreSQL `real`) round-trip precision drift from causing false negatives.
+3. **plaidTransactionId** — Plaid's unique transaction ID, when present
+
 ```
-key = `${amount.toFixed(2)}|${date.slice(0,10)}|${title.toLowerCase().trim()}`
+contentKey = `${accountId.toLowerCase()}|${Math.round(amount * 100)}|${date.slice(0,10)}`
 ```
 
 Investment transactions are deduped by `plaidTxId` (Plaid's unique investment transaction ID).
 
 Source priority (highest wins): `plaid` > `manual` > `email`
+
+### DB-level safety
+- Primary key on `id` prevents row-level duplicates
+- Partial unique index on `plaid_transaction_id WHERE plaid_transaction_id IS NOT NULL`
+  prevents the same Plaid transaction from being stored twice
+- `onConflictDoUpdate` on bulk upsert ensures existing rows are updated, never duplicated
