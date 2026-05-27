@@ -364,6 +364,7 @@ router.post("/plaid/sync/:itemId", async (req, res) => {
     ]);
     const plaidAccounts = accountsRes.data.accounts;
 
+    let removedIds: string[] = [];
     let hasMore = true;
     while (hasMore) {
       const syncRes = await client.transactionsSync({
@@ -374,45 +375,47 @@ router.post("/plaid/sync/:itemId", async (req, res) => {
           ...(backfill ? { days_requested: 730 } : {}),
         },
       });
-      transactions = [...transactions, ...syncRes.data.added];
+      transactions = [...transactions, ...syncRes.data.added, ...syncRes.data.modified];
+      removedIds = [...removedIds, ...syncRes.data.removed.map((r) => r.transaction_id)];
       cursor = syncRes.data.next_cursor;
       hasMore = syncRes.data.has_more;
     }
     const syncCount = transactions.length;
 
-    // transactionsGet: always called as a safety net for institutions (e.g. BMO credit cards,
-    // Wealthsimple) that don't always surface transactions via the cursor-based sync alone.
+    // transactionsGet: only called when transactionsSync returned nothing (e.g. Wealthsimple
+    // Canada async processing) or when backfill is explicitly requested.
     // backfill=true → 2-year window, paginated; otherwise 90-day window, single page.
-    try {
-      const daysBack = backfill ? 730 : 90;
-      const startDate = new Date(Date.now() - daysBack * 86400000).toISOString().slice(0, 10);
-      const endDate   = new Date().toISOString().slice(0, 10);
-      const txMap = new Map<string, any>();
-      transactions.forEach((t) => txMap.set(t.transaction_id, t));
+    if (transactions.length === 0 || backfill) {
+      try {
+        const daysBack = backfill ? 730 : 90;
+        const startDate = new Date(Date.now() - daysBack * 86400000).toISOString().slice(0, 10);
+        const endDate   = new Date().toISOString().slice(0, 10);
+        const txMap = new Map<string, any>();
+        transactions.forEach((t) => txMap.set(t.transaction_id, t));
 
-      let offset = 0;
-      const pageSize = 500;
-      let total = Infinity;
-      while (offset < total) {
-        const txRes = await client.transactionsGet({
-          access_token: record.accessToken,
-          start_date: startDate,
-          end_date: endDate,
-          options: { count: pageSize, offset },
-        });
-        const page = txRes.data.transactions ?? [];
-        total = txRes.data.total_transactions ?? page.length;
-        page.forEach((t) => txMap.set(t.transaction_id, t));
-        offset += page.length;
-        req.log.info({ pageNum: Math.ceil(offset / pageSize), pageSize: page.length, total, offset }, "transactionsGet page fetched");
-        // Non-backfill: single page is enough
-        if (!backfill) break;
-        if (page.length === 0) break;
+        let offset = 0;
+        const pageSize = 500;
+        let total = Infinity;
+        while (offset < total) {
+          const txRes = await client.transactionsGet({
+            access_token: record.accessToken,
+            start_date: startDate,
+            end_date: endDate,
+            options: { count: pageSize, offset },
+          });
+          const page = txRes.data.transactions ?? [];
+          total = txRes.data.total_transactions ?? page.length;
+          page.forEach((t) => txMap.set(t.transaction_id, t));
+          offset += page.length;
+          req.log.info({ pageNum: Math.ceil(offset / pageSize), pageSize: page.length, total, offset }, "transactionsGet page fetched");
+          if (!backfill) break;
+          if (page.length === 0) break;
+        }
+        transactions = Array.from(txMap.values());
+      } catch (err: any) {
+        const pErr = err?.response?.data ?? err?.message ?? err;
+        req.log.error({ err: pErr }, "Plaid transactionsGet backfill failed");
       }
-      transactions = Array.from(txMap.values());
-    } catch (err: any) {
-      const pErr = err?.response?.data ?? err?.message ?? err;
-      req.log.error({ err: pErr }, "Plaid transactionsGet backfill failed");
     }
 
     // Log summary of what Plaid returned
@@ -509,6 +512,7 @@ router.post("/plaid/sync/:itemId", async (req, res) => {
     res.json({
       transactions: transactions.map((t) => mapPlaidTransaction(t, record.bankName)),
       count: transactions.length,
+      removedIds,
       holdings,
       investmentTransactions,
       // Return Plaid accounts so client can self-heal accountIds / plaidAccMap

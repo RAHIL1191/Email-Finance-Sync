@@ -2644,8 +2644,9 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
           return false;
         });
 
-        // Auto-force when item has never successfully imported any transactions
-        const neverImported = !item.lastImported || item.lastImported === 0;
+        // Auto-force only when this item truly has no local transactions yet
+        const hasLocalTxs = transactionsRef.current.some((t) => t.plaidItemId === itemId);
+        const neverImported = !hasLocalTxs;
         const res = await apiCall(
           `/api/plaid/sync/${itemId}`,
           "POST",
@@ -2766,6 +2767,13 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
           }
         }
 
+        // Remove transactions that Plaid marked as removed (e.g. pending → posted)
+        const removedPlaidIds: string[] = Array.isArray(data.removedIds) ? data.removedIds : [];
+        if (removedPlaidIds.length > 0) {
+          const removedSet = new Set(removedPlaidIds);
+          setTransactions((prev) => prev.filter((t) => !removedSet.has(t.id)));
+        }
+
         const rules = categoryRulesRef.current;
         let imported = 0;
 
@@ -2818,6 +2826,7 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
               { plaidAccMap, plaidItemId: itemId, fallbackAccountId: fallbackId }
             );
           });
+          // Dedup by both content key AND plaidTransactionId
           const currentKeys = new Set(transactionsRef.current.map(dedupKey));
           const currentIds = new Set(transactionsRef.current.map((t) => t.id).filter(Boolean));
           const currentPlaidIds = new Set(transactionsRef.current.map((t) => t.plaidTransactionId).filter(Boolean));
@@ -2889,7 +2898,10 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
 
           // 2. Merge precomputed fresh transactions (re-filter against remapped for accuracy)
           const remappedKeys = new Set(remapped.map(dedupKey));
-          const fresh = precomputedFresh.filter((t) => !remappedKeys.has(dedupKey(t)));
+          const remappedIds = new Set(remapped.map((t) => t.id));
+          const fresh = precomputedFresh.filter(
+            (t) => !remappedKeys.has(dedupKey(t)) && !remappedIds.has(t.id)
+          );
 
           return upsertTransactions(remapped, fresh);
         });
