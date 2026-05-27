@@ -390,13 +390,15 @@ function EmailConnectModal({ onClose }: { onClose: () => void }) {
 function PlaidItemPanel({ item, onRelink }: { item: PlaidItem; onRelink: (item: PlaidItem) => void }) {
   const colors = useColors();
   const { syncPlaidTransactions, delinkPlaid, disconnectPlaid, isSyncing } = useApp();
-  const [syncResult, setSyncResult] = useState<{ imported: number; parsed?: Array<{ title?: string; merchant?: string; amount: number; type?: string; bank?: string; rawSubject?: string }>; error?: string } | null>(null);
+  const [syncResult, setSyncResult] = useState<{ imported: number; importedTransactions?: any[]; parsed?: Array<{ title?: string; merchant?: string; amount: number; type?: string; bank?: string; rawSubject?: string }>; error?: string } | null>(null);
+  const [showImportedDetails, setShowImportedDetails] = useState(false);
   const [showDelinkConfirm, setShowDelinkConfirm] = useState(false);
   const [showRemoveConfirm, setShowRemoveConfirm] = useState(false);
 
   const handleSync = async () => {
     Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium);
     setSyncResult(null);
+    setShowImportedDetails(false);
     const result = await syncPlaidTransactions(item.itemId);
     setSyncResult(result);
     if (result.imported > 0) Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
@@ -444,14 +446,43 @@ function PlaidItemPanel({ item, onRelink }: { item: PlaidItem; onRelink: (item: 
         </View>
       )}
       {syncResult && (
-        <View style={[styles.syncResultBox, { backgroundColor: syncResult.error ? colors.expense + "12" : "#10b98112", borderColor: syncResult.error ? colors.expense + "30" : "#10b98130" }]}>
-          <Feather name={syncResult.error ? "alert-circle" : "check"} size={13} color={syncResult.error ? colors.expense : "#10b981"} />
-          <Text style={[styles.syncResultText, { color: syncResult.error ? colors.expense : "#10b981" }]}>
-            {syncResult.error ? syncResult.error : syncResult.imported > 0 ? `${syncResult.imported} new transaction${syncResult.imported !== 1 ? "s" : ""} imported` : "No new transactions found"}
-          </Text>
-          <TouchableOpacity onPress={() => setSyncResult(null)} hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }} style={{ marginLeft: "auto" }}>
-            <Feather name="x" size={13} color={syncResult.error ? colors.expense : "#10b981"} />
-          </TouchableOpacity>
+        <View style={[styles.syncResultBox, { flexDirection: "column", alignItems: "stretch", backgroundColor: syncResult.error ? colors.expense + "12" : "#10b98112", borderColor: syncResult.error ? colors.expense + "30" : "#10b98130" }]}>
+          <View style={{ flexDirection: "row", alignItems: "center", gap: 6, width: "100%" }}>
+            <Feather name={syncResult.error ? "alert-circle" : "check"} size={13} color={syncResult.error ? colors.expense : "#10b981"} />
+            <TouchableOpacity 
+              activeOpacity={0.7}
+              onPress={() => {
+                if (syncResult.imported > 0) {
+                  Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
+                  setShowImportedDetails(!showImportedDetails);
+                }
+              }}
+              style={{ flex: 1, paddingVertical: 2 }}
+            >
+              <Text style={[styles.syncResultText, { color: syncResult.error ? colors.expense : "#10b981", textDecorationLine: syncResult.imported > 0 ? "underline" : "none" }]}>
+                {syncResult.error ? syncResult.error : syncResult.imported > 0 ? `${syncResult.imported} new transaction${syncResult.imported !== 1 ? "s" : ""} imported` : "No new transactions found"}
+                {syncResult.imported > 0 && ` (tap to ${showImportedDetails ? "hide" : "view"})`}
+              </Text>
+            </TouchableOpacity>
+            <TouchableOpacity onPress={() => { setSyncResult(null); setShowImportedDetails(false); }} hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}>
+              <Feather name="x" size={13} color={syncResult.error ? colors.expense : "#10b981"} />
+            </TouchableOpacity>
+          </View>
+
+          {showImportedDetails && syncResult.importedTransactions && syncResult.importedTransactions.length > 0 && (
+            <View style={{ marginTop: 8, paddingTop: 8, borderTopWidth: 1, borderTopColor: (syncResult.error ? colors.expense : "#10b981") + "30", gap: 6 }}>
+              {syncResult.importedTransactions.map((tx: any, idx: number) => (
+                <View key={tx.id || idx} style={{ flexDirection: "row", justifyContent: "space-between", alignItems: "center", paddingVertical: 2 }}>
+                  <Text style={{ fontSize: 11, color: colors.foreground, fontFamily: "Inter_500Medium", flex: 1, marginRight: 8 }} numberOfLines={1}>
+                    {tx.merchant || tx.title || "Transaction"}
+                  </Text>
+                  <Text style={{ fontSize: 11, color: tx.type === "income" ? colors.success : colors.foreground, fontFamily: "Inter_600SemiBold" }}>
+                    {tx.type === "income" ? "+" : "-"}${Number(tx.amount || 0).toFixed(2)}
+                  </Text>
+                </View>
+              ))}
+            </View>
+          )}
         </View>
       )}
       <View style={{ flexDirection: "row", gap: 8, flexWrap: "wrap" }}>

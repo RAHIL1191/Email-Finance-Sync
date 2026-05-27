@@ -1,5 +1,5 @@
 import { Router } from "express";
-import { eq, and, desc, gte, lte, inArray } from "drizzle-orm";
+import { eq, and, desc, gte, lte, inArray, sql } from "drizzle-orm";
 import { db, transactionsTable, insertTransactionSchema, updateTransactionSchema, categoriesTable, accountsTable } from "@workspace/db";
 import { validate, requireHouseholdId } from "../middlewares/validate.js";
 
@@ -174,24 +174,45 @@ router.post("/transactions/bulk", async (req, res) => {
       res.status(201).json({ synced: 0 });
       return;
     }
+
+    // 1. Detect and delete pending transactions that are now being replaced by posted ones
+    const pendingIdsToDelete = transactions
+      .map((t) => t.pendingTransactionId)
+      .filter((id): id is string => typeof id === "string" && id.length > 0);
+
+    if (pendingIdsToDelete.length > 0) {
+      await db
+        .delete(transactionsTable)
+        .where(
+          and(
+            eq(transactionsTable.householdId, householdId),
+            inArray(transactionsTable.id, pendingIdsToDelete)
+          )
+        );
+    }
+
+    // 2. Insert or update transactions using correct sql excluded references
     const rows = await db
       .insert(transactionsTable)
       .values(payload)
       .onConflictDoUpdate({
         target: transactionsTable.id,
         set: {
-          title: transactionsTable.title,
-          amount: transactionsTable.amount,
-          type: transactionsTable.type,
-          category: transactionsTable.category,
-          accountId: transactionsTable.accountId,
-          date: transactionsTable.date,
-          source: transactionsTable.source,
-          merchant: transactionsTable.merchant,
-          plaidItemId: transactionsTable.plaidItemId,
-          plaidAccountId: transactionsTable.plaidAccountId,
-          bank: transactionsTable.bank,
-          note: transactionsTable.note,
+          title: sql`excluded.title`,
+          amount: sql`excluded.amount`,
+          type: sql`excluded.type`,
+          category: sql`excluded.category`,
+          accountId: sql`excluded.account_id`,
+          date: sql`excluded.date`,
+          source: sql`excluded.source`,
+          merchant: sql`excluded.merchant`,
+          plaidItemId: sql`excluded.plaid_item_id`,
+          plaidAccountId: sql`excluded.plaid_account_id`,
+          bank: sql`excluded.bank`,
+          note: sql`excluded.note`,
+          pending: sql`excluded.pending`,
+          pendingTransactionId: sql`excluded.pending_transaction_id`,
+          updatedAt: sql`excluded.updated_at`,
         },
       })
       .returning();
