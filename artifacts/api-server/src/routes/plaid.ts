@@ -369,7 +369,10 @@ router.post("/plaid/sync/:itemId", async (req, res) => {
       const syncRes = await client.transactionsSync({
         access_token: record.accessToken,
         cursor,
-        options: { include_personal_finance_category: true },
+        options: {
+          include_personal_finance_category: true,
+          ...(backfill ? { days_requested: 730 } : {}),
+        },
       });
       transactions = [...transactions, ...syncRes.data.added];
       cursor = syncRes.data.next_cursor;
