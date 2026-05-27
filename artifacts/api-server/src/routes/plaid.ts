@@ -369,6 +369,7 @@ router.post("/plaid/sync/:itemId", async (req, res) => {
     ]);
     const plaidAccounts = accountsRes.data.accounts;
 
+    let removedIds: string[] = [];
     let hasMore = true;
     while (hasMore) {
       const syncRes = await client.transactionsSync({
@@ -376,27 +377,27 @@ router.post("/plaid/sync/:itemId", async (req, res) => {
         cursor,
         options: { include_personal_finance_category: true },
       });
-      transactions = [...transactions, ...syncRes.data.added];
+      transactions = [...transactions, ...syncRes.data.added, ...syncRes.data.modified];
+      removedIds = [...removedIds, ...syncRes.data.removed.map((r) => r.transaction_id)];
       cursor = syncRes.data.next_cursor;
       hasMore = syncRes.data.has_more;
     }
 
-    // transactionsGet: safety net for institutions that don't fully surface
-    // transactions via cursor-based sync alone (e.g. BMO credit cards, Wealthsimple).
-    try {
-      const startDate = new Date(Date.now() - 90 * 86400000).toISOString().slice(0, 10);
-      const endDate   = new Date().toISOString().slice(0, 10);
-      const txMap = new Map<string, any>();
-      transactions.forEach((t) => txMap.set(t.transaction_id, t));
-      const txRes = await client.transactionsGet({
-        access_token: record.accessToken,
-        start_date: startDate,
-        end_date: endDate,
-        options: { count: 500 },
-      });
-      (txRes.data.transactions ?? []).forEach((t) => txMap.set(t.transaction_id, t));
-      transactions = Array.from(txMap.values());
-    } catch {}
+    // transactionsGet: backfill only when transactionsSync returned nothing
+    // (e.g. Wealthsimple Canada async processing or exhausted cursor).
+    if (transactions.length === 0) {
+      try {
+        const startDate = new Date(Date.now() - 90 * 86400000).toISOString().slice(0, 10);
+        const endDate   = new Date().toISOString().slice(0, 10);
+        const txRes = await client.transactionsGet({
+          access_token: record.accessToken,
+          start_date: startDate,
+          end_date: endDate,
+          options: { count: 500 },
+        });
+        transactions = txRes.data.transactions ?? [];
+      } catch {}
+    }
 
     // Filter out standard transactions that belong to investment accounts.
     // Investment accounts sync holdings + investment transactions separately.
@@ -482,6 +483,7 @@ router.post("/plaid/sync/:itemId", async (req, res) => {
     res.json({
       transactions: transactions.map((t) => mapPlaidTransaction(t, record.bankName)),
       count: transactions.length,
+      removedIds,
       holdings,
       investmentTransactions,
       // Return Plaid accounts so client can self-heal accountIds / plaidAccMap

@@ -2643,8 +2643,9 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
           return false;
         });
 
-        // Auto-force when item has never successfully imported any transactions
-        const neverImported = !item.lastImported || item.lastImported === 0;
+        // Auto-force only when this item truly has no local transactions yet
+        const hasLocalTxs = transactionsRef.current.some((t) => t.plaidItemId === itemId);
+        const neverImported = !hasLocalTxs;
         const res = await apiCall(
           `/api/plaid/sync/${itemId}`,
           "POST",
@@ -2763,6 +2764,13 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
               correctIdByContent.set(key, localId);
             }
           }
+        }
+
+        // Remove transactions that Plaid marked as removed (e.g. pending → posted)
+        const removedPlaidIds: string[] = Array.isArray(data.removedIds) ? data.removedIds : [];
+        if (removedPlaidIds.length > 0) {
+          const removedSet = new Set(removedPlaidIds);
+          setTransactions((prev) => prev.filter((t) => !removedSet.has(t.id)));
         }
 
         const rules = categoryRulesRef.current;
