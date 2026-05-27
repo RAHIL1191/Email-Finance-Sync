@@ -555,6 +555,15 @@ function upsertTransactions(prev: Transaction[], incoming: Transaction[]): Trans
   const byContent = new Map<string, Transaction>(); // dedupKey → tx
   const byId = new Map<string, Transaction>();      // id → winning tx
 
+  // Capture pending transaction dates for preservation when posted settlements arrive
+  const pendingDatesMap = new Map<string, string>();
+  prev.forEach((t) => {
+    if (t.pending && t.date) {
+      if (t.id) pendingDatesMap.set(t.id, t.date);
+      if (t.plaidTransactionId) pendingDatesMap.set(t.plaidTransactionId, t.date);
+    }
+  });
+
   // Collect pending transaction IDs to evict
   const pendingTxIdsToEvict = new Set<string>();
   incoming.forEach((t: any) => {
@@ -574,35 +583,47 @@ function upsertTransactions(prev: Transaction[], incoming: Transaction[]): Trans
   }
 
   // Smart fallback eviction: a posted transaction replaces an older pending one
-  // within +/- 3 days window, having exact same amount and account and fuzzy title match
+  // within +/- 3 days window, having exact same amount and account and fuzzy title match.
+  // Overrides the posted transaction's date to retain the original pending transaction's date.
   const incomingPosted = incoming.filter((t) => !t.pending);
   if (incomingPosted.length > 0) {
-    filteredPrev = filteredPrev.filter((oldTx) => {
-      if (!oldTx.pending) return true; // keep all posted/manual transactions
+    incomingPosted.forEach((newTx) => {
+      // Direct pendingTransactionId match
+      if (newTx.pendingTransactionId) {
+        const origDate = pendingDatesMap.get(newTx.pendingTransactionId);
+        if (origDate) {
+          newTx.date = origDate;
+        }
+      }
 
-      const isReplaced = incomingPosted.some((newTx) => {
-        if (oldTx.accountId !== newTx.accountId) return false;
-        if (Math.abs(oldTx.amount - newTx.amount) > 0.001) return false;
+      // Fuzzy matching fallback
+      filteredPrev = filteredPrev.filter((oldTx) => {
+        if (!oldTx.pending) return true; // keep all posted/manual transactions
 
-        const oldDate = new Date(oldTx.date);
-        const newDate = new Date(newTx.date);
-        const diffMs = Math.abs(newDate.getTime() - oldDate.getTime());
-        const diffDays = diffMs / (1000 * 60 * 60 * 24);
-        if (diffDays > 3) return false;
+        const isReplaced = (
+          oldTx.accountId === newTx.accountId &&
+          Math.abs(oldTx.amount - newTx.amount) < 0.001 &&
+          Math.abs(new Date(oldTx.date).getTime() - new Date(newTx.date).getTime()) / (1000 * 60 * 60 * 24) <= 3
+        );
 
-        const oldTitle = (oldTx.merchant || oldTx.title || "").toLowerCase().trim();
-        const newTitle = (newTx.merchant || newTx.title || "").toLowerCase().trim();
-        const firstWord = (str: string) => str.split(/[^a-zA-Z0-9]/)[0] || "";
+        if (isReplaced) {
+          const oldTitle = (oldTx.merchant || oldTx.title || "").toLowerCase().trim();
+          const newTitle = (newTx.merchant || newTx.title || "").toLowerCase().trim();
+          const firstWord = (str: string) => str.split(/[^a-zA-Z0-9]/)[0] || "";
 
-        const isTitleMatch =
-          oldTitle.includes(newTitle) ||
-          newTitle.includes(oldTitle) ||
-          (firstWord(oldTitle).length >= 4 && firstWord(oldTitle) === firstWord(newTitle));
+          const isTitleMatch =
+            oldTitle.includes(newTitle) ||
+            newTitle.includes(oldTitle) ||
+            (firstWord(oldTitle).length >= 4 && firstWord(oldTitle) === firstWord(newTitle));
 
-        return isTitleMatch;
+          if (isTitleMatch) {
+            newTx.date = oldTx.date; // copy original pending date to posted transaction
+            return false; // evict old pending transaction
+          }
+        }
+
+        return true;
       });
-
-      return !isReplaced;
     });
   }
 
@@ -1182,7 +1203,10 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
         const cleanedLocalTxs = localTxs.filter(
           (t) => allLocalAcctIds.has(t.accountId) && !investmentAcctIds.has(t.accountId)
         );
-        setTransactions(cleanedLocalTxs);
+        
+        // Strict de-duplication of local transactions before loading into memory
+        const dedupedLocalTxs = upsertTransactions([], cleanedLocalTxs);
+        setTransactions(dedupedLocalTxs);
 
         if (rrspLimitRaw) setRrspLimitState(Number(rrspLimitRaw));
         const parsedBills: Bill[] = billRaw ? JSON.parse(billRaw) : [];
@@ -1266,11 +1290,11 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
         } catch {}
 
         // ── Background: push local transactions to server ─────────────────────
-        if (cleanedLocalTxs.length > 0) {
+        if (dedupedLocalTxs.length > 0) {
           fetch(`${getApiBase()}/api/transactions/bulk`, {
             method: "POST",
             headers: { "Content-Type": "application/json", "X-Household-ID": hId, "X-Device-ID": dId },
-            body: JSON.stringify({ transactions: cleanedLocalTxs }),
+            body: JSON.stringify({ transactions: dedupedLocalTxs }),
           }).catch(() => {});
         }
 
@@ -2680,16 +2704,49 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
         let precomputedFresh: Transaction[] = [];
         if (Array.isArray(data.transactions) && data.transactions.length > 0) {
           const fallbackId = Object.values(plaidAccMap)[0] ?? "";
-          const candidates = (data.transactions as any[]).flatMap((t) =>
-            normalizeImportedTxs(
-              { ...t, id: t.plaidTransactionId || undefined },
+          
+          // Build list of existing pending transactions to preserve their original creation dates
+          const existingPending = transactionsRef.current.filter((t) => t.pending);
+
+          const candidates = (data.transactions as any[]).flatMap((t) => {
+            let targetDate = t.date;
+            
+            // If the transaction from Plaid is posted, check if it replaces an existing pending one
+            if (!t.pending) {
+              const matchedPending = existingPending.find((old) => {
+                // Direct pending transaction ID match
+                if (t.pending_transaction_id && (old.id === t.pending_transaction_id || old.plaidTransactionId === t.pending_transaction_id)) {
+                  return true;
+                }
+                // Fallback fuzzy match: same account, same amount, +/- 3 days date difference
+                if (old.accountId === plaidAccMap[t.account_id] && Math.abs(old.amount - Math.abs(t.amount)) < 0.001) {
+                  const oldD = new Date(old.date);
+                  const newD = new Date(t.authorized_date ?? t.date);
+                  const diffDays = Math.abs(newD.getTime() - oldD.getTime()) / (1000 * 60 * 60 * 24);
+                  if (diffDays <= 3) {
+                    const oldTitle = (old.merchant || old.title || "").toLowerCase().trim();
+                    const newTitle = (t.merchant_name || t.name || "").toLowerCase().trim();
+                    const firstWord = (str: string) => str.split(/[^a-zA-Z0-9]/)[0] || "";
+                    return oldTitle.includes(newTitle) || newTitle.includes(oldTitle) || (firstWord(oldTitle).length >= 4 && firstWord(oldTitle) === firstWord(newTitle));
+                  }
+                }
+                return false;
+              });
+
+              if (matchedPending) {
+                targetDate = matchedPending.date; // Use original pending transaction date
+              }
+            }
+
+            return normalizeImportedTxs(
+              { ...t, date: targetDate, id: t.plaidTransactionId || undefined },
               "plaid",
               plaidAccounts,
               rules,
               categoriesRef.current,
               { plaidAccMap, plaidItemId: itemId, fallbackAccountId: fallbackId }
-            )
-          );
+            );
+          });
           const currentKeys = new Set(transactionsRef.current.map(dedupKey));
           const currentIds = new Set(transactionsRef.current.map((t) => t.id).filter(Boolean));
           const currentPlaidIds = new Set(transactionsRef.current.map((t) => t.plaidTransactionId).filter(Boolean));
