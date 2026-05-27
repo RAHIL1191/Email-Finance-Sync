@@ -405,7 +405,10 @@ router.post("/plaid/sync/:itemId", async (req, res) => {
         if (page.length === 0) break;
       }
       transactions = Array.from(txMap.values());
-    } catch {}
+    } catch (err: any) {
+      const pErr = err?.response?.data ?? err?.message ?? err;
+      req.log.error({ err: pErr }, "Plaid transactionsGet backfill failed");
+    }
 
     // Filter out standard transactions that belong to investment accounts.
     // Investment accounts sync holdings + investment transactions separately.

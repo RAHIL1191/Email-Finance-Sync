@@ -206,19 +206,17 @@ router.post("/transactions/bulk", async (req, res) => {
     // Sort: higher priority transactions first
     allTxs.sort((a, b) => getPriorityScore(b) - getPriorityScore(a));
 
-    // Pass A: Strict exact ID, plaidTransactionId, and content deduplication based on priority score.
+    // Pass A: Strict exact ID and content deduplication based on priority score.
     const uniqueTxs: any[] = [];
     const byId = new Map<string, any>();
     const byContent = new Map<string, any>();
-    const byPlaidTxId = new Map<string, any>();
 
     for (const t of allTxs) {
       const key = dedupKey(t);
       const existingById = t.id ? byId.get(t.id) : null;
       const existingByContent = byContent.get(key);
-      const existingByPlaidTxId = t.plaidTransactionId ? byPlaidTxId.get(t.plaidTransactionId) : null;
 
-      if (existingById || existingByContent || existingByPlaidTxId) {
+      if (existingById || existingByContent) {
         // Skip exact duplicate
         continue;
       }
@@ -226,16 +224,14 @@ router.post("/transactions/bulk", async (req, res) => {
       uniqueTxs.push(t);
       if (t.id) byId.set(t.id, t);
       byContent.set(key, t);
-      if (t.plaidTransactionId) byPlaidTxId.set(t.plaidTransactionId, t);
     }
 
     // Pass B: Fuzzy Pending-Posted Collapsing across the combined list.
-    // 1. Gather all pending transaction dates by ID and Plaid ID so we can preserve them.
+    // 1. Gather all pending transaction dates by ID so we can preserve them.
     const pendingDatesMap = new Map<string, string>();
     uniqueTxs.forEach((t) => {
       if (t.pending && t.date) {
         if (t.id) pendingDatesMap.set(t.id, t.date);
-        if (t.plaidTransactionId) pendingDatesMap.set(t.plaidTransactionId, t.date);
       }
     });
 
@@ -256,8 +252,7 @@ router.post("/transactions/bulk", async (req, res) => {
       remainingTxs = remainingTxs.filter((t) => {
         if (!t.pending) return true; // keep all posted
         const matchesId = t.id && pendingTxIdsToEvict.has(t.id);
-        const matchesPlaidId = t.plaidTransactionId && pendingTxIdsToEvict.has(t.plaidTransactionId);
-        return !matchesId && !matchesPlaidId;
+        return !matchesId;
       });
     }
 
@@ -334,31 +329,7 @@ router.post("/transactions/bulk", async (req, res) => {
       return;
     }
 
-    // 6. Delete any existing DB rows whose plaidTransactionId matches an incoming tx
-    //    but has a different id (handles id divergence from migration scripts, etc.)
-    const incomingPlaidTxIds = finalPayload
-      .map((t: any) => t.plaidTransactionId)
-      .filter((id: any): id is string => !!id);
-    if (incomingPlaidTxIds.length > 0) {
-      const existingByPlaid = existing.filter(
-        (e) => e.plaidTransactionId && incomingPlaidTxIds.includes(e.plaidTransactionId)
-      );
-      const conflictIds = existingByPlaid
-        .filter((e) => !finalPayload.some((p: any) => p.id === e.id))
-        .map((e) => e.id);
-      if (conflictIds.length > 0) {
-        await db
-          .delete(transactionsTable)
-          .where(
-            and(
-              eq(transactionsTable.householdId, householdId),
-              inArray(transactionsTable.id, conflictIds)
-            )
-          );
-      }
-    }
-
-    // 7. Insert or update transactions using correct sql excluded references
+    // 6. Insert or update transactions using correct sql excluded references
     const rows = await db
       .insert(transactionsTable)
       .values(finalPayload)
@@ -375,7 +346,6 @@ router.post("/transactions/bulk", async (req, res) => {
           merchant: sql`excluded.merchant`,
           plaidItemId: sql`excluded.plaid_item_id`,
           plaidAccountId: sql`excluded.plaid_account_id`,
-          plaidTransactionId: sql`excluded.plaid_transaction_id`,
           bank: sql`excluded.bank`,
           note: sql`excluded.note`,
           pending: sql`excluded.pending`,
