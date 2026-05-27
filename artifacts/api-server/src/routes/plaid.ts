@@ -407,7 +407,10 @@ router.post("/plaid/sync/:itemId", async (req, res) => {
           if (page.length === 0) break;
         }
         transactions = Array.from(txMap.values());
-      } catch {}
+      } catch (err: any) {
+        const pErr = err?.response?.data ?? err?.message ?? err;
+        req.log.error({ err: pErr }, "Plaid transactionsGet backfill failed");
+      }
     }
 
     // Filter out standard transactions that belong to investment accounts.
@@ -444,43 +447,51 @@ router.post("/plaid/sync/:itemId", async (req, res) => {
       .set({ cursor: cursor ?? null, lastSyncedAt: new Date() })
       .where(eq(plaidItemsTable.id, itemId));
 
-    // Fetch investment holdings + transactions alongside regular sync
+    // Fetch investment holdings + transactions alongside regular sync,
+    // but only if this item actually has investment accounts. Calling these APIs
+    // on a credit card / chequing item always returns PRODUCTS_NOT_SUPPORTED.
     let holdings: ReturnType<typeof mapHolding>[] = [];
     let investmentTransactions: ReturnType<typeof mapInvestmentTransaction>[] = [];
-    try {
-      const holdRes = await client.investmentsHoldingsGet({ access_token: record.accessToken });
-      const secMap = buildSecMap(holdRes.data.securities);
-      holdings = holdRes.data.holdings.map((h) => mapHolding(h, secMap));
-    } catch (invErr) {
-      req.log.warn({ invErr }, "investmentsHoldingsGet failed during sync");
-    }
-    try {
-      const iStartDate = new Date(Date.now() - 730 * 86400000).toISOString().slice(0, 10);
-      const iEndDate = new Date().toISOString().slice(0, 10);
-      let invOffset = 0;
-      const invCount = 500;
-      let invTotal = Infinity;
-      while (investmentTransactions.length < invTotal) {
-        const invRes = await client.investmentsTransactionsGet({
-          access_token: record.accessToken,
-          start_date: iStartDate,
-          end_date: iEndDate,
-          options: { count: invCount, offset: invOffset },
-        });
-        invTotal = invRes.data.total_investment_transactions;
-        const secMap = buildSecMap(invRes.data.securities);
-        const page = invRes.data.investment_transactions.map((t) => mapInvestmentTransaction(t, secMap));
-        investmentTransactions = [...investmentTransactions, ...page];
-        invOffset += page.length;
-        if (page.length === 0) break;
+    const hasInvestmentAccounts = plaidAccounts.some(
+      (a) => mapAccountType(a.type as string, a.subtype as string | null) === "investment"
+    );
+
+    if (hasInvestmentAccounts) {
+      try {
+        const holdRes = await client.investmentsHoldingsGet({ access_token: record.accessToken });
+        const secMap = buildSecMap(holdRes.data.securities);
+        holdings = holdRes.data.holdings.map((h) => mapHolding(h, secMap));
+      } catch (invErr) {
+        req.log.warn({ invErr }, "investmentsHoldingsGet failed during sync");
       }
-    } catch (invErr: any) {
-      req.log.warn({
-        err: invErr?.message || String(invErr),
-        code: invErr?.response?.data?.error_code,
-        type: invErr?.response?.data?.error_type,
-        msg: invErr?.response?.data?.error_message
-      }, "investmentTransactionsGet failed during sync");
+      try {
+        const iStartDate = new Date(Date.now() - 730 * 86400000).toISOString().slice(0, 10);
+        const iEndDate = new Date().toISOString().slice(0, 10);
+        let invOffset = 0;
+        const invCount = 500;
+        let invTotal = Infinity;
+        while (investmentTransactions.length < invTotal) {
+          const invRes = await client.investmentsTransactionsGet({
+            access_token: record.accessToken,
+            start_date: iStartDate,
+            end_date: iEndDate,
+            options: { count: invCount, offset: invOffset },
+          });
+          invTotal = invRes.data.total_investment_transactions;
+          const secMap = buildSecMap(invRes.data.securities);
+          const page = invRes.data.investment_transactions.map((t) => mapInvestmentTransaction(t, secMap));
+          investmentTransactions = [...investmentTransactions, ...page];
+          invOffset += page.length;
+          if (page.length === 0) break;
+        }
+      } catch (invErr: any) {
+        req.log.warn({
+          err: invErr?.message || String(invErr),
+          code: invErr?.response?.data?.error_code,
+          type: invErr?.response?.data?.error_type,
+          msg: invErr?.response?.data?.error_message
+        }, "investmentTransactionsGet failed during sync");
+      }
     }
 
     res.json({
