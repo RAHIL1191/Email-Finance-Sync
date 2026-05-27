@@ -341,6 +341,7 @@ router.post("/plaid/sync/:itemId", async (req, res) => {
 
   try {
     const force = !!(req.body as any)?.force;
+    const backfill = !!(req.body as any)?.backfill;
     let transactions: any[] = [];
     let cursor = force ? undefined : (record.cursor ?? undefined);
 
@@ -375,21 +376,34 @@ router.post("/plaid/sync/:itemId", async (req, res) => {
       hasMore = syncRes.data.has_more;
     }
 
-    // When sync returns 0 (e.g. Wealthsimple Canada async processing or exhausted cursor),
-    // we always call transactionsGet to pick up and backfill whatever is currently available.
+    // transactionsGet: always called as a safety net for institutions (e.g. BMO credit cards,
+    // Wealthsimple) that don't always surface transactions via the cursor-based sync alone.
+    // backfill=true → 2-year window, paginated; otherwise 90-day window, single page.
     try {
-      const startDate = new Date(Date.now() - 90 * 86400000).toISOString().slice(0, 10);
+      const daysBack = backfill ? 730 : 90;
+      const startDate = new Date(Date.now() - daysBack * 86400000).toISOString().slice(0, 10);
       const endDate   = new Date().toISOString().slice(0, 10);
-      const txRes = await client.transactionsGet({
-        access_token: record.accessToken,
-        start_date: startDate,
-        end_date: endDate,
-        options: { count: 500 },
-      });
-      const getTxs = txRes.data.transactions ?? [];
-      const txMap = new Map();
+      const txMap = new Map<string, any>();
       transactions.forEach((t) => txMap.set(t.transaction_id, t));
-      getTxs.forEach((t) => txMap.set(t.transaction_id, t));
+
+      let offset = 0;
+      const pageSize = 500;
+      let total = Infinity;
+      while (offset < total) {
+        const txRes = await client.transactionsGet({
+          access_token: record.accessToken,
+          start_date: startDate,
+          end_date: endDate,
+          options: { count: pageSize, offset },
+        });
+        const page = txRes.data.transactions ?? [];
+        total = txRes.data.total_transactions ?? page.length;
+        page.forEach((t) => txMap.set(t.transaction_id, t));
+        offset += page.length;
+        // Non-backfill: single page is enough
+        if (!backfill) break;
+        if (page.length === 0) break;
+      }
       transactions = Array.from(txMap.values());
     } catch {}
 
