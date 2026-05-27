@@ -189,7 +189,7 @@ router.post("/plaid/exchange-token", async (req, res) => {
       }
     }
 
-    // 3. Fetch initial transactions via sync cursor
+    // 3. Fetch initial transactions via sync cursor — request up to 2 years on first add
     let transactions: any[] = [];
     let cursor: string | undefined;
     try {
@@ -198,7 +198,7 @@ router.post("/plaid/exchange-token", async (req, res) => {
         const syncRes = await client.transactionsSync({
           access_token,
           cursor,
-          options: { include_personal_finance_category: true },
+          options: { include_personal_finance_category: true, days_requested: 730 },
         });
         transactions = [...transactions, ...syncRes.data.added];
         cursor = syncRes.data.next_cursor;
@@ -208,23 +208,29 @@ router.post("/plaid/exchange-token", async (req, res) => {
       // Fall back to /transactions/get if sync throws
     }
 
-    // Some institutions (e.g. Wealthsimple Canada) return 0 via transactionsSync
-    // on first link because transactions are processed asynchronously. Additionally,
-    // we always call transactionsGet to pull in Credit Card / depository transactions,
-    // merging them by transaction_id to ensure complete historical backfill.
+    // Paginate transactionsGet with 730-day window to catch any transactions
+    // that transactionsSync missed (e.g. BMO credit cards, Wealthsimple async).
     try {
-      const startDate = new Date(Date.now() - 90 * 86400000).toISOString().slice(0, 10);
+      const startDate = new Date(Date.now() - 730 * 86400000).toISOString().slice(0, 10);
       const endDate = new Date().toISOString().slice(0, 10);
-      const txRes = await client.transactionsGet({
-        access_token,
-        start_date: startDate,
-        end_date: endDate,
-        options: { count: 500 },
-      });
-      const getTxs = txRes.data.transactions ?? [];
       const txMap = new Map();
       transactions.forEach((t) => txMap.set(t.transaction_id, t));
-      getTxs.forEach((t) => txMap.set(t.transaction_id, t));
+      let offset = 0;
+      const pageSize = 500;
+      let total = Infinity;
+      while (offset < total) {
+        const txRes = await client.transactionsGet({
+          access_token,
+          start_date: startDate,
+          end_date: endDate,
+          options: { count: pageSize, offset },
+        });
+        const page = txRes.data.transactions ?? [];
+        total = txRes.data.total_transactions ?? page.length;
+        page.forEach((t) => txMap.set(t.transaction_id, t));
+        offset += page.length;
+        if (page.length === 0) break;
+      }
       transactions = Array.from(txMap.values());
     } catch {}
 
@@ -341,7 +347,6 @@ router.post("/plaid/sync/:itemId", async (req, res) => {
 
   try {
     const force = !!(req.body as any)?.force;
-    const backfill = !!(req.body as any)?.backfill;
     let transactions: any[] = [];
     let cursor = force ? undefined : (record.cursor ?? undefined);
 
@@ -365,67 +370,33 @@ router.post("/plaid/sync/:itemId", async (req, res) => {
     const plaidAccounts = accountsRes.data.accounts;
 
     let hasMore = true;
-    const syncOptions = {
-      include_personal_finance_category: true,
-      ...(backfill ? { days_requested: 730 } : {}),
-    };
-    req.log.info({ cursor: cursor ?? null, options: syncOptions, force, backfill }, "transactionsSync request params");
     while (hasMore) {
       const syncRes = await client.transactionsSync({
         access_token: record.accessToken,
         cursor,
-        options: syncOptions,
+        options: { include_personal_finance_category: true },
       });
       transactions = [...transactions, ...syncRes.data.added];
       cursor = syncRes.data.next_cursor;
       hasMore = syncRes.data.has_more;
     }
-    const syncCount = transactions.length;
 
-    // transactionsGet: always called as a safety net for institutions (e.g. BMO credit cards,
-    // Wealthsimple) that don't always surface transactions via the cursor-based sync alone.
-    // backfill=true → 2-year window, paginated; otherwise 90-day window, single page.
+    // transactionsGet: safety net for institutions that don't fully surface
+    // transactions via cursor-based sync alone (e.g. BMO credit cards, Wealthsimple).
     try {
-      const daysBack = backfill ? 730 : 90;
-      const startDate = new Date(Date.now() - daysBack * 86400000).toISOString().slice(0, 10);
+      const startDate = new Date(Date.now() - 90 * 86400000).toISOString().slice(0, 10);
       const endDate   = new Date().toISOString().slice(0, 10);
       const txMap = new Map<string, any>();
       transactions.forEach((t) => txMap.set(t.transaction_id, t));
-
-      let offset = 0;
-      const pageSize = 500;
-      let total = Infinity;
-      while (offset < total) {
-        const txRes = await client.transactionsGet({
-          access_token: record.accessToken,
-          start_date: startDate,
-          end_date: endDate,
-          options: { count: pageSize, offset },
-        });
-        const page = txRes.data.transactions ?? [];
-        total = txRes.data.total_transactions ?? page.length;
-        page.forEach((t) => txMap.set(t.transaction_id, t));
-        offset += page.length;
-        req.log.info({ pageNum: Math.ceil(offset / pageSize), pageSize: page.length, total, offset }, "transactionsGet page fetched");
-        // Non-backfill: single page is enough
-        if (!backfill) break;
-        if (page.length === 0) break;
-      }
+      const txRes = await client.transactionsGet({
+        access_token: record.accessToken,
+        start_date: startDate,
+        end_date: endDate,
+        options: { count: 500 },
+      });
+      (txRes.data.transactions ?? []).forEach((t) => txMap.set(t.transaction_id, t));
       transactions = Array.from(txMap.values());
-    } catch (err: any) {
-      const pErr = err?.response?.data ?? err?.message ?? err;
-      req.log.error({ err: pErr }, "Plaid transactionsGet backfill failed");
-    }
-
-    // Log summary of what Plaid returned
-    const allDates = transactions.map((t: any) => t.authorized_date ?? t.date).filter(Boolean).sort();
-    req.log.info({
-      backfill,
-      force,
-      syncCount,
-      totalAfterMerge: transactions.length,
-      dateRange: allDates.length ? `${allDates[0]} → ${allDates[allDates.length - 1]}` : "none",
-    }, "Plaid sync summary");
+    } catch {}
 
     // Filter out standard transactions that belong to investment accounts.
     // Investment accounts sync holdings + investment transactions separately.

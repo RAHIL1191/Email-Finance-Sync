@@ -359,8 +359,7 @@ interface AppContextType {
     filters?: { startDate?: string; endDate?: string; accountIds?: string[] }
   ) => Promise<void>;
   connectPlaid: (item: PlaidItem, newAccounts: Omit<Account, "id">[], initialTransactions: Omit<Transaction, "id">[], rawHoldingsData?: any[], rawInvTxsData?: any[]) => Promise<{ imported: number }>;
-  syncPlaidTransactions: (itemId: string, forceFullSync?: boolean, backfill?: boolean) => Promise<{ imported: number; error?: string }>;
-  backfillAllHistory: () => Promise<{ totalImported: number }>;
+  syncPlaidTransactions: (itemId: string, forceFullSync?: boolean) => Promise<{ imported: number; error?: string }>;
   delinkPlaid: (itemId: string) => void;
   disconnectPlaid: (itemId: string) => void;
   isSyncing: boolean;
@@ -2606,7 +2605,7 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
   );
 
   const syncPlaidTransactions = useCallback(
-    async (itemId: string, forceFullSync = false, backfill = false): Promise<{ imported: number; importedTransactions?: Transaction[]; error?: string }> => {
+    async (itemId: string, forceFullSync = false): Promise<{ imported: number; importedTransactions?: Transaction[]; error?: string }> => {
       const item = plaidSync.items.find((i) => i.itemId === itemId);
       if (!item) return { imported: 0, error: "Bank not found" };
 
@@ -2651,7 +2650,7 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
           "POST",
           householdIdRef.current,
           deviceIdRef.current,
-          (hasMismatched || forceFullSync || neverImported || backfill) ? { force: true, ...(backfill ? { backfill: true } : {}) } : undefined
+          (hasMismatched || forceFullSync || neverImported) ? { force: true } : undefined
         );
 
         if (!res) {
@@ -2830,12 +2829,6 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
           );
           imported = precomputedFresh.length;
 
-          // Debug: show what Plaid returned vs what was filtered
-          const blockedByKey = candidates.filter((t) => currentKeys.has(dedupKey(t))).length;
-          const blockedById = candidates.filter((t) => currentIds.has(t.id)).length;
-          const blockedByPlaidId = candidates.filter((t) => t.plaidTransactionId && currentPlaidIds.has(t.plaidTransactionId)).length;
-          const dates = candidates.map((t) => t.date).sort();
-          console.log(`[Plaid sync] Returned ${candidates.length} txs (${dates[0]} → ${dates[dates.length - 1]}). Fresh: ${imported}. Blocked: byKey=${blockedByKey}, byId=${blockedById}, byPlaidId=${blockedByPlaidId}. Local has ${transactionsRef.current.length} txs.`);
           if (precomputedFresh.length > 0) {
             bgCall("/api/transactions/bulk", "POST", householdIdRef.current, deviceIdRef.current, { transactions: precomputedFresh });
             processReviewStatusForTransactions(precomputedFresh);
@@ -2966,20 +2959,6 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
     },
     [plaidSync, accounts]
   );
-
-  // ── One-time 2-year history backfill for all connected Plaid items ────────
-  const backfillAllHistory = useCallback(async (): Promise<{ totalImported: number }> => {
-    const items = plaidSync.items;
-    if (items.length === 0) return { totalImported: 0 };
-    let totalImported = 0;
-    for (const item of items) {
-      try {
-        const result = await syncPlaidTransactions(item.itemId, true, true);
-        totalImported += result.imported ?? 0;
-      } catch {}
-    }
-    return { totalImported };
-  }, [plaidSync.items, syncPlaidTransactions]);
 
   // ── Auto-sync ref (always latest version) ─────────────────────────────────
   const syncPlaidTransactionsRef = useRef(syncPlaidTransactions);
@@ -3152,7 +3131,7 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
         addCategory, updateCategory, deleteCategory, seedCategories,
         learnCategoryRule, autoCategorize, addCategoryMappingRule, deleteCategoryRule,
         connectEmail, updateEmailSyncSettings, disconnectEmail, resetEmailTransactions, syncEmailTransactions, wipeAllTransactions, wipePortfolio, wipeData,
-        connectPlaid, syncPlaidTransactions, backfillAllHistory, delinkPlaid, disconnectPlaid,
+        connectPlaid, syncPlaidTransactions, delinkPlaid, disconnectPlaid,
         // investmentTransactions + holdings already exposed above
         isSyncing, totalBalance, monthlyIncome, monthlyExpense,
         deviceId, householdId, changeHouseholdId,

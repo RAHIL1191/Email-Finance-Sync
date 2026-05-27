@@ -394,22 +394,12 @@ function PlaidItemPanel({ item, onRelink }: { item: PlaidItem; onRelink: (item: 
   const [showImportedDetails, setShowImportedDetails] = useState(false);
   const [showDelinkConfirm, setShowDelinkConfirm] = useState(false);
   const [showRemoveConfirm, setShowRemoveConfirm] = useState(false);
-  const [showBackfillConfirm, setShowBackfillConfirm] = useState(false);
 
   const handleSync = async () => {
     Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium);
     setSyncResult(null);
     setShowImportedDetails(false);
     const result = await syncPlaidTransactions(item.itemId);
-    setSyncResult(result);
-    if (result.imported > 0) Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
-  };
-
-  const handleBackfill = async () => {
-    Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium);
-    setSyncResult(null);
-    setShowImportedDetails(false);
-    const result = await syncPlaidTransactions(item.itemId, true, true);
     setSyncResult(result);
     if (result.imported > 0) Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
   };
@@ -519,14 +509,6 @@ function PlaidItemPanel({ item, onRelink }: { item: PlaidItem; onRelink: (item: 
           <Text style={[styles.syncBtnText, { color: "#f97316" }]}>Delink</Text>
         </TouchableOpacity>
         <TouchableOpacity
-          style={[styles.plaidSyncBtn, { backgroundColor: "#8b5cf618", flex: 1, minWidth: 90, opacity: isSyncing ? 0.7 : 1 }]}
-          onPress={() => { Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium); setShowBackfillConfirm(true); }}
-          disabled={isSyncing}
-        >
-          <Feather name="clock" size={14} color="#8b5cf6" />
-          <Text style={[styles.syncBtnText, { color: "#8b5cf6" }]}>2yr History</Text>
-        </TouchableOpacity>
-        <TouchableOpacity
           style={[styles.plaidDisconnectBtn, { borderColor: colors.expense }]}
           onPress={() => setShowRemoveConfirm(true)}
         >
@@ -556,18 +538,6 @@ function PlaidItemPanel({ item, onRelink }: { item: PlaidItem; onRelink: (item: 
         onConfirm={() => {
           setShowRemoveConfirm(false);
           disconnectPlaid(item.itemId);
-        }}
-      />
-      <ConfirmModal
-        visible={showBackfillConfirm}
-        title="Import 2-Year History"
-        message={`Fetch up to 2 years of transactions from ${item.bankName}? This may take 10–30 seconds. Duplicates are automatically skipped.`}
-        confirmLabel="Import"
-        confirmDestructive={false}
-        onCancel={() => setShowBackfillConfirm(false)}
-        onConfirm={() => {
-          setShowBackfillConfirm(false);
-          handleBackfill();
         }}
       />
     </View>
