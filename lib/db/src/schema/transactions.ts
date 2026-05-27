@@ -1,4 +1,5 @@
-import { pgTable, text, real, boolean, timestamp } from "drizzle-orm/pg-core";
+import { pgTable, text, real, boolean, timestamp, uniqueIndex } from "drizzle-orm/pg-core";
+import { sql } from "drizzle-orm";
 import { z } from "zod";
 
 export const transactionsTable = pgTable("transactions", {
@@ -18,11 +19,16 @@ export const transactionsTable = pgTable("transactions", {
   fromEmail: boolean("from_email").default(false),
   bank: text("bank"),
   note: text("note"),
+  plaidTransactionId: text("plaid_transaction_id"),
   pending: boolean("pending").default(false),
   pendingTransactionId: text("pending_transaction_id"),
   createdAt: timestamp("created_at").defaultNow().notNull(),
   updatedAt: timestamp("updated_at").defaultNow().notNull(),
-});
+}, (table) => ({
+  plaidTxIdUniqueIdx: uniqueIndex("idx_transactions_plaid_tx_id")
+    .on(table.plaidTransactionId)
+    .where(sql`plaid_transaction_id IS NOT NULL`),
+}));
 
 export const insertTransactionSchema = z.object({
   id: z.string(),
@@ -41,6 +47,7 @@ export const insertTransactionSchema = z.object({
   fromEmail: z.boolean().optional().default(false),
   bank: z.string().nullable().optional(),
   note: z.string().nullable().optional(),
+  plaidTransactionId: z.string().nullable().optional(),
   pending: z.boolean().optional().default(false),
   pendingTransactionId: z.string().nullable().optional(),
 });

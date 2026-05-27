@@ -359,7 +359,8 @@ interface AppContextType {
     filters?: { startDate?: string; endDate?: string; accountIds?: string[] }
   ) => Promise<void>;
   connectPlaid: (item: PlaidItem, newAccounts: Omit<Account, "id">[], initialTransactions: Omit<Transaction, "id">[], rawHoldingsData?: any[], rawInvTxsData?: any[]) => Promise<{ imported: number }>;
-  syncPlaidTransactions: (itemId: string, forceFullSync?: boolean) => Promise<{ imported: number; error?: string }>;
+  syncPlaidTransactions: (itemId: string, forceFullSync?: boolean, backfill?: boolean) => Promise<{ imported: number; error?: string }>;
+  backfillAllHistory: () => Promise<{ totalImported: number }>;
   delinkPlaid: (itemId: string) => void;
   disconnectPlaid: (itemId: string) => void;
   isSyncing: boolean;
@@ -537,12 +538,16 @@ function bgCall(
 const SOURCE_PRIORITY: Record<string, number> = { plaid: 3, manual: 2, email: 1 };
 
 /**
- * Dedup key: accountId + amount + date (day-precision).
+ * Dedup key: accountId + amount (cents) + date (day-precision).
  * Intentionally excludes title/bank — Gmail parses "Transaction at X" while Plaid
  * returns "X"; the three stable fields catch cross-source duplicates cleanly.
+ *
+ * Amount is normalised to integer cents via Math.round(amount * 100) so that
+ * float4 (PostgreSQL `real`) round-trip precision drift (e.g. 49.99 → 49.9900016784668)
+ * never causes a false-negative during dedup.
  */
 function dedupKey(t: { amount: number; date: string; accountId?: string }): string {
-  return `${(t.accountId ?? "").toLowerCase()}|${t.amount}|${t.date.slice(0, 10)}`;
+  return `${(t.accountId ?? "").toLowerCase()}|${Math.round((t.amount ?? 0) * 100)}|${t.date.slice(0, 10)}`;
 }
 
 /**
@@ -552,111 +557,137 @@ function dedupKey(t: { amount: number; date: string; accountId?: string }): stri
  * Higher-priority sources (plaid > manual > email) win on collision.
  */
 function upsertTransactions(prev: Transaction[], incoming: Transaction[]): Transaction[] {
-  const byContent = new Map<string, Transaction>(); // dedupKey → tx
-  const byId = new Map<string, Transaction>();      // id → winning tx
+  // To avoid mutating input parameters, perform deep clone of both arrays
+  const allTxs = [
+    ...prev.map((t) => ({ ...t })),
+    ...incoming.map((t) => ({ ...t })),
+  ];
 
-  // Capture pending transaction dates for preservation when posted settlements arrive
+  // Helper score to prioritize source and status: Plaid > Manual > Email, Posted > Pending
+  const getPriorityScore = (t: Transaction) => {
+    const srcScore = SOURCE_PRIORITY[t.source ?? ""] ?? 0;
+    const pendingScore = t.pending ? 0 : 1;
+    return srcScore * 10 + pendingScore;
+  };
+
+  // Sort: higher priority score transactions first
+  allTxs.sort((a, b) => getPriorityScore(b) - getPriorityScore(a));
+
+  // Pass A: Strict exact ID, plaidTransactionId, and content deduplication based on priority score.
+  // This collapses exact duplicates from overlapping sync sources.
+  const uniqueTxs: Transaction[] = [];
+  const byId = new Map<string, Transaction>();
+  const byContent = new Map<string, Transaction>();
+  const byPlaidTxId = new Map<string, Transaction>();
+
+  for (const t of allTxs) {
+    const key = dedupKey(t);
+    const existingById = t.id ? byId.get(t.id) : null;
+    const existingByContent = byContent.get(key);
+    const existingByPlaidTxId = t.plaidTransactionId ? byPlaidTxId.get(t.plaidTransactionId) : null;
+
+    if (existingById || existingByContent || existingByPlaidTxId) {
+      // Re-attribution or duplicate: skip since we already have a higher/equal priority version
+      continue;
+    }
+
+    uniqueTxs.push(t);
+    if (t.id) byId.set(t.id, t);
+    byContent.set(key, t);
+    if (t.plaidTransactionId) byPlaidTxId.set(t.plaidTransactionId, t);
+  }
+
+  // Pass B: Fuzzy Pending-Posted Collapsing across the combined list.
+  // 1. Gather all pending transaction dates by ID and Plaid ID so we can preserve them.
   const pendingDatesMap = new Map<string, string>();
-  prev.forEach((t) => {
+  uniqueTxs.forEach((t) => {
     if (t.pending && t.date) {
       if (t.id) pendingDatesMap.set(t.id, t.date);
       if (t.plaidTransactionId) pendingDatesMap.set(t.plaidTransactionId, t.date);
     }
   });
 
-  // Collect pending transaction IDs to evict
+  // 2. Direct ID-based pending eviction: remove matching pending transactions when a posted
+  // transaction references its pending transaction ID.
   const pendingTxIdsToEvict = new Set<string>();
-  incoming.forEach((t: any) => {
-    if (t.pendingTransactionId) {
+  uniqueTxs.forEach((t) => {
+    if (!t.pending && t.pendingTransactionId) {
       pendingTxIdsToEvict.add(t.pendingTransactionId);
+      // Do NOT copy the pending date — the posted transaction already has the correct
+      // authorized_date (purchase date as shown in the bank app) from mapPlaidTransaction.
+      // Overwriting it caused 1-3 day mismatches vs what the bank displays.
     }
   });
 
-  // Filter out any matching pending transactions from existing state
-  let filteredPrev = prev;
+  let remainingTxs = uniqueTxs;
   if (pendingTxIdsToEvict.size > 0) {
-    filteredPrev = filteredPrev.filter((t) => {
+    remainingTxs = remainingTxs.filter((t) => {
+      if (!t.pending) return true; // keep all posted
       const matchesId = t.id && pendingTxIdsToEvict.has(t.id);
       const matchesPlaidId = t.plaidTransactionId && pendingTxIdsToEvict.has(t.plaidTransactionId);
       return !matchesId && !matchesPlaidId;
     });
   }
 
-  // Smart fallback eviction: a posted transaction replaces an older pending one
-  // within +/- 3 days window, having exact same amount and account and fuzzy title match.
-  // Overrides the posted transaction's date to retain the original pending transaction's date.
-  const incomingPosted = incoming.filter((t) => !t.pending);
-  if (incomingPosted.length > 0) {
-    incomingPosted.forEach((newTx) => {
-      // Direct pendingTransactionId match
-      if (newTx.pendingTransactionId) {
-        const origDate = pendingDatesMap.get(newTx.pendingTransactionId);
-        if (origDate) {
-          newTx.date = origDate;
+  // 3. Smart fuzzy matching: a posted transaction replaces an older pending transaction
+  // within a +/- 3 days window, having exact same amount, account, and fuzzy title match.
+  const postedTxs = remainingTxs.filter((t) => !t.pending);
+  const pendingTxsToEvictFuzzy = new Set<string>();
+
+  postedTxs.forEach((postedTx) => {
+    remainingTxs.forEach((pendingTx) => {
+      if (!pendingTx.pending) return;
+      if (pendingTxsToEvictFuzzy.has(pendingTx.id)) return; // already marked for eviction
+
+      const isReplaced = (
+        pendingTx.accountId === postedTx.accountId &&
+        Math.abs(pendingTx.amount - postedTx.amount) < 0.001 &&
+        Math.abs(new Date(pendingTx.date).getTime() - new Date(postedTx.date).getTime()) / (1000 * 60 * 60 * 24) <= 3
+      );
+
+      if (isReplaced) {
+        const oldTitle = (pendingTx.merchant || pendingTx.title || "").toLowerCase().trim();
+        const newTitle = (postedTx.merchant || postedTx.title || "").toLowerCase().trim();
+        const firstWord = (str: string) => str.split(/[^a-zA-Z0-9]/)[0] || "";
+
+        const isTitleMatch =
+          oldTitle.includes(newTitle) ||
+          newTitle.includes(oldTitle) ||
+          (firstWord(oldTitle).length >= 4 && firstWord(oldTitle) === firstWord(newTitle));
+
+        if (isTitleMatch) {
+          // Do NOT copy pending date — posted tx already has authorized_date (correct bank date).
+          pendingTxsToEvictFuzzy.add(pendingTx.id); // evict old pending transaction
         }
       }
-
-      // Fuzzy matching fallback
-      filteredPrev = filteredPrev.filter((oldTx) => {
-        if (!oldTx.pending) return true; // keep all posted/manual transactions
-
-        const isReplaced = (
-          oldTx.accountId === newTx.accountId &&
-          Math.abs(oldTx.amount - newTx.amount) < 0.001 &&
-          Math.abs(new Date(oldTx.date).getTime() - new Date(newTx.date).getTime()) / (1000 * 60 * 60 * 24) <= 3
-        );
-
-        if (isReplaced) {
-          const oldTitle = (oldTx.merchant || oldTx.title || "").toLowerCase().trim();
-          const newTitle = (newTx.merchant || newTx.title || "").toLowerCase().trim();
-          const firstWord = (str: string) => str.split(/[^a-zA-Z0-9]/)[0] || "";
-
-          const isTitleMatch =
-            oldTitle.includes(newTitle) ||
-            newTitle.includes(oldTitle) ||
-            (firstWord(oldTitle).length >= 4 && firstWord(oldTitle) === firstWord(newTitle));
-
-          if (isTitleMatch) {
-            newTx.date = oldTx.date; // copy original pending date to posted transaction
-            return false; // evict old pending transaction
-          }
-        }
-
-        return true;
-      });
     });
+  });
+
+  if (pendingTxsToEvictFuzzy.size > 0) {
+    remainingTxs = remainingTxs.filter((t) => !pendingTxsToEvictFuzzy.has(t.id));
   }
 
-  const addTx = (t: Transaction) => {
+  // Final Pass: Re-deduplicate remaining transactions by content key to ensure that any date-modified
+  // posted transactions (which copied a pending date and might now collide) are cleanly collapsed.
+  const finalUnique = new Map<string, Transaction>();
+  remainingTxs.forEach((t) => {
     const key = dedupKey(t);
-    const tp = SOURCE_PRIORITY[t.source ?? ""] ?? 0;
-
-    // Same-id conflict: same logical tx but different accountId (remapping artefact)
-    const sameId = t.id ? byId.get(t.id) : undefined;
-    if (sameId) {
-      const sp = SOURCE_PRIORITY[sameId.source ?? ""] ?? 0;
-      if (tp <= sp) return; // keep existing higher-priority version
-      // Incoming wins — evict old entry from content map
-      byContent.delete(dedupKey(sameId));
+    const existing = finalUnique.get(key);
+    if (!existing) {
+      finalUnique.set(key, t);
+    } else {
+      // Collision due to date update: keep the one with higher priority score
+      const existingScore = getPriorityScore(existing);
+      const currentScore = getPriorityScore(t);
+      if (currentScore > existingScore) {
+        finalUnique.set(key, t);
+      }
     }
+  });
 
-    // Same-content conflict: different source for same transaction
-    const sameContent = byContent.get(key);
-    if (sameContent) {
-      const sp = SOURCE_PRIORITY[sameContent.source ?? ""] ?? 0;
-      if (tp <= sp) return;
-      if (sameContent.id) byId.delete(sameContent.id);
-    }
-
-    byContent.set(key, t);
-    if (t.id) byId.set(t.id, t);
-  };
-
-  filteredPrev.forEach(addTx);
-  incoming.forEach(addTx);
-
-  return Array.from(byContent.values()).sort((a, b) => b.date.localeCompare(a.date));
+  return Array.from(finalUnique.values()).sort((a, b) => b.date.localeCompare(a.date));
 }
+
 
 /** Find the best matching account for a bank name and optional last-4 digits */
 function findAccountMatch(
@@ -1289,27 +1320,67 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
           }
         } catch {}
 
-        // ── Background: push local transactions to server ─────────────────────
-        if (dedupedLocalTxs.length > 0) {
-          fetch(`${getApiBase()}/api/transactions/bulk`, {
-            method: "POST",
-            headers: { "Content-Type": "application/json", "X-Household-ID": hId, "X-Device-ID": dId },
-            body: JSON.stringify({ transactions: dedupedLocalTxs }),
-          }).catch(() => {});
-        }
+        // ── Sequenced sync: pull server → merge → push diff ─────────────────
+        // Pull FIRST so we know what the server already has, then only push
+        // truly local-only transactions. This eliminates the race condition
+        // that previously caused duplicates when push and pull ran concurrently.
+        (async () => {
+          try {
+            const serverRes = await fetch(`${getApiBase()}/api/transactions`, {
+              headers: { "X-Household-ID": hId, "X-Device-ID": dId },
+              signal: AbortSignal.timeout(10000),
+            });
+            if (serverRes.ok) {
+              const serverTxs: Transaction[] = await serverRes.json();
+              // Build a set of server-known keys for fast lookup
+              const serverIdSet = new Set(serverTxs.map((t) => t.id));
+              const serverContentKeys = new Set(serverTxs.map(dedupKey));
+              const serverPlaidIds = new Set(
+                serverTxs.map((t) => t.plaidTransactionId).filter(Boolean)
+              );
 
-        // ── Background: pull server transactions and merge via upsertTransactions ──
-        // upsertTransactions handles dedup by accountId|amount|date and prefers
-        // plaid > manual > email, so cross-source duplicates are always collapsed.
-        fetch(`${getApiBase()}/api/transactions`, {
-          headers: { "X-Household-ID": hId, "X-Device-ID": dId },
-        }).then(async (r) => {
-          if (!r.ok) return;
-          const serverTxs: Transaction[] = await r.json();
-          if (serverTxs.length > 0) {
-            setTransactions((prev) => upsertTransactions(prev, serverTxs));
+              // Merge server txs into local state
+              if (serverTxs.length > 0) {
+                setTransactions((prev) => upsertTransactions(prev, serverTxs));
+              }
+
+              // Compute the local-only diff: txs that the server doesn't have by any key
+              const localOnly = dedupedLocalTxs.filter(
+                (t) =>
+                  !serverIdSet.has(t.id) &&
+                  !serverContentKeys.has(dedupKey(t)) &&
+                  !(t.plaidTransactionId && serverPlaidIds.has(t.plaidTransactionId))
+              );
+
+              // Push only the diff
+              if (localOnly.length > 0) {
+                fetch(`${getApiBase()}/api/transactions/bulk`, {
+                  method: "POST",
+                  headers: { "Content-Type": "application/json", "X-Household-ID": hId, "X-Device-ID": dId },
+                  body: JSON.stringify({ transactions: localOnly }),
+                }).catch(() => {});
+              }
+            } else {
+              // Server unreachable — push all local txs as fallback (server dedup will handle it)
+              if (dedupedLocalTxs.length > 0) {
+                fetch(`${getApiBase()}/api/transactions/bulk`, {
+                  method: "POST",
+                  headers: { "Content-Type": "application/json", "X-Household-ID": hId, "X-Device-ID": dId },
+                  body: JSON.stringify({ transactions: dedupedLocalTxs }),
+                }).catch(() => {});
+              }
+            }
+          } catch {
+            // Network error — push all local as fallback
+            if (dedupedLocalTxs.length > 0) {
+              fetch(`${getApiBase()}/api/transactions/bulk`, {
+                method: "POST",
+                headers: { "Content-Type": "application/json", "X-Household-ID": hId, "X-Device-ID": dId },
+                body: JSON.stringify({ transactions: dedupedLocalTxs }),
+              }).catch(() => {});
+            }
           }
-        }).catch(() => {});
+        })();
 
         // ── Background: pull server accounts (always authoritative for account list) ──
         fetch(`${getApiBase()}/api/accounts`, {
@@ -2535,7 +2606,7 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
   );
 
   const syncPlaidTransactions = useCallback(
-    async (itemId: string, forceFullSync = false): Promise<{ imported: number; importedTransactions?: Transaction[]; error?: string }> => {
+    async (itemId: string, forceFullSync = false, backfill = false): Promise<{ imported: number; importedTransactions?: Transaction[]; error?: string }> => {
       const item = plaidSync.items.find((i) => i.itemId === itemId);
       if (!item) return { imported: 0, error: "Bank not found" };
 
@@ -2581,7 +2652,7 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
           "POST",
           householdIdRef.current,
           deviceIdRef.current,
-          (hasMismatched || forceFullSync || neverImported) ? { force: true } : undefined
+          (hasMismatched || forceFullSync || neverImported || backfill) ? { force: true, ...(backfill ? { backfill: true } : {}) } : undefined
         );
 
         if (!res) {
@@ -2901,6 +2972,20 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
     [plaidSync, accounts]
   );
 
+  // ── One-time 2-year history backfill for all connected Plaid items ────────
+  const backfillAllHistory = useCallback(async (): Promise<{ totalImported: number }> => {
+    const items = plaidSync.items;
+    if (items.length === 0) return { totalImported: 0 };
+    let totalImported = 0;
+    for (const item of items) {
+      try {
+        const result = await syncPlaidTransactions(item.itemId, true, true);
+        totalImported += result.imported ?? 0;
+      } catch {}
+    }
+    return { totalImported };
+  }, [plaidSync.items, syncPlaidTransactions]);
+
   // ── Auto-sync ref (always latest version) ─────────────────────────────────
   const syncPlaidTransactionsRef = useRef(syncPlaidTransactions);
   useEffect(() => { syncPlaidTransactionsRef.current = syncPlaidTransactions; }, [syncPlaidTransactions]);
@@ -3072,7 +3157,7 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
         addCategory, updateCategory, deleteCategory, seedCategories,
         learnCategoryRule, autoCategorize, addCategoryMappingRule, deleteCategoryRule,
         connectEmail, updateEmailSyncSettings, disconnectEmail, resetEmailTransactions, syncEmailTransactions, wipeAllTransactions, wipePortfolio, wipeData,
-        connectPlaid, syncPlaidTransactions, delinkPlaid, disconnectPlaid,
+        connectPlaid, syncPlaidTransactions, backfillAllHistory, delinkPlaid, disconnectPlaid,
         // investmentTransactions + holdings already exposed above
         isSyncing, totalBalance, monthlyIncome, monthlyExpense,
         deviceId, householdId, changeHouseholdId,

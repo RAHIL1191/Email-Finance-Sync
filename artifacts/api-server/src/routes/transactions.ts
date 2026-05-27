@@ -165,36 +165,203 @@ router.post("/transactions/bulk", async (req, res) => {
         return {
           ...rest,
           category: mappedCategory,
-          householdId: res.locals.householdId,
-          deviceId: res.locals.deviceId,
+          householdId: householdId,
+          deviceId: res.locals.deviceId || t.deviceId || "",
           updatedAt: now,
         };
       });
+
     if (payload.length === 0) {
       res.status(201).json({ synced: 0 });
       return;
     }
 
-    // 1. Detect and delete pending transactions that are now being replaced by posted ones
-    const pendingIdsToDelete = transactions
-      .map((t) => t.pendingTransactionId)
-      .filter((id): id is string => typeof id === "string" && id.length > 0);
+    // Fetch existing transactions for this household to perform combined de-duplication
+    const existing = await db
+      .select()
+      .from(transactionsTable)
+      .where(eq(transactionsTable.householdId, householdId));
 
-    if (pendingIdsToDelete.length > 0) {
+    const SOURCE_PRIORITY: Record<string, number> = { plaid: 3, manual: 2, email: 1 };
+
+    const dedupKey = (t: any): string => {
+      const accountId = t.accountId ?? "";
+      const date = t.date ?? "";
+      return `${accountId.toLowerCase()}|${Math.round((t.amount ?? 0) * 100)}|${date.slice(0, 10)}`;
+    };
+
+    // To avoid mutating inputs, clone both lists into a single merged array
+    const allTxs = [
+      ...existing.map((t) => ({ ...t })),
+      ...payload.map((t) => ({ ...t })),
+    ];
+
+    // Score based on source priority and status: Plaid > Manual > Email, Posted > Pending
+    const getPriorityScore = (t: any) => {
+      const srcScore = SOURCE_PRIORITY[t.source ?? ""] ?? 0;
+      const pendingScore = t.pending ? 0 : 1;
+      return srcScore * 10 + pendingScore;
+    };
+
+    // Sort: higher priority transactions first
+    allTxs.sort((a, b) => getPriorityScore(b) - getPriorityScore(a));
+
+    // Pass A: Strict exact ID, plaidTransactionId, and content deduplication based on priority score.
+    const uniqueTxs: any[] = [];
+    const byId = new Map<string, any>();
+    const byContent = new Map<string, any>();
+    const byPlaidTxId = new Map<string, any>();
+
+    for (const t of allTxs) {
+      const key = dedupKey(t);
+      const existingById = t.id ? byId.get(t.id) : null;
+      const existingByContent = byContent.get(key);
+      const existingByPlaidTxId = t.plaidTransactionId ? byPlaidTxId.get(t.plaidTransactionId) : null;
+
+      if (existingById || existingByContent || existingByPlaidTxId) {
+        // Skip exact duplicate
+        continue;
+      }
+
+      uniqueTxs.push(t);
+      if (t.id) byId.set(t.id, t);
+      byContent.set(key, t);
+      if (t.plaidTransactionId) byPlaidTxId.set(t.plaidTransactionId, t);
+    }
+
+    // Pass B: Fuzzy Pending-Posted Collapsing across the combined list.
+    // 1. Gather all pending transaction dates by ID and Plaid ID so we can preserve them.
+    const pendingDatesMap = new Map<string, string>();
+    uniqueTxs.forEach((t) => {
+      if (t.pending && t.date) {
+        if (t.id) pendingDatesMap.set(t.id, t.date);
+        if (t.plaidTransactionId) pendingDatesMap.set(t.plaidTransactionId, t.date);
+      }
+    });
+
+    // 2. Direct ID-based pending eviction: remove matching pending transactions when a posted
+    // transaction references its pending transaction ID.
+    const pendingTxIdsToEvict = new Set<string>();
+    uniqueTxs.forEach((t) => {
+      if (!t.pending && t.pendingTransactionId) {
+        pendingTxIdsToEvict.add(t.pendingTransactionId);
+        // Do NOT copy the pending date — the posted transaction already has the correct
+        // authorized_date (purchase date as shown in the bank app) from mapPlaidTransaction.
+        // Overwriting it caused 1-3 day mismatches vs what the bank displays.
+      }
+    });
+
+    let remainingTxs = uniqueTxs;
+    if (pendingTxIdsToEvict.size > 0) {
+      remainingTxs = remainingTxs.filter((t) => {
+        if (!t.pending) return true; // keep all posted
+        const matchesId = t.id && pendingTxIdsToEvict.has(t.id);
+        const matchesPlaidId = t.plaidTransactionId && pendingTxIdsToEvict.has(t.plaidTransactionId);
+        return !matchesId && !matchesPlaidId;
+      });
+    }
+
+    // 3. Smart fuzzy matching: a posted transaction replaces an older pending transaction
+    // within a +/- 3 days window, having exact same amount, account, and fuzzy title match.
+    const postedTxs = remainingTxs.filter((t) => !t.pending);
+    const pendingTxsToEvictFuzzy = new Set<string>();
+
+    postedTxs.forEach((postedTx) => {
+      remainingTxs.forEach((pendingTx) => {
+        if (!pendingTx.pending) return;
+        if (pendingTxsToEvictFuzzy.has(pendingTx.id)) return; // already marked for eviction
+
+        const isReplaced = (
+          pendingTx.accountId === postedTx.accountId &&
+          Math.abs(pendingTx.amount - postedTx.amount) < 0.001 &&
+          Math.abs(new Date(pendingTx.date).getTime() - new Date(postedTx.date).getTime()) / (1000 * 60 * 60 * 24) <= 3
+        );
+
+        if (isReplaced) {
+          const oldTitle = (pendingTx.merchant || pendingTx.title || "").toLowerCase().trim();
+          const newTitle = (postedTx.merchant || postedTx.title || "").toLowerCase().trim();
+          const firstWord = (str: string) => str.split(/[^a-zA-Z0-9]/)[0] || "";
+
+          const isTitleMatch =
+            oldTitle.includes(newTitle) ||
+            newTitle.includes(oldTitle) ||
+            (firstWord(oldTitle).length >= 4 && firstWord(oldTitle) === firstWord(newTitle));
+
+          if (isTitleMatch) {
+            // Do NOT copy pending date — posted tx already has authorized_date (correct bank date).
+            pendingTxsToEvictFuzzy.add(pendingTx.id); // evict old pending transaction
+          }
+        }
+      });
+    });
+
+    if (pendingTxsToEvictFuzzy.size > 0) {
+      remainingTxs = remainingTxs.filter((t) => !pendingTxsToEvictFuzzy.has(t.id));
+    }
+
+    // 4. Find which pending transactions exist in the database and need to be deleted
+    const idsToDelete = new Set([...pendingTxIdsToEvict, ...pendingTxsToEvictFuzzy]);
+    const existingIds = new Set(existing.map((e) => e.id));
+    const dbPendingIdsToDelete = Array.from(idsToDelete).filter((id) => existingIds.has(id));
+
+    if (dbPendingIdsToDelete.length > 0) {
       await db
         .delete(transactionsTable)
         .where(
           and(
             eq(transactionsTable.householdId, householdId),
-            inArray(transactionsTable.id, pendingIdsToDelete)
+            inArray(transactionsTable.id, dbPendingIdsToDelete)
           )
         );
     }
 
-    // 2. Insert or update transactions using correct sql excluded references
+    // 5. Clean and prepare final payload for database upsert
+    // Keep only the incoming transactions that were NOT evicted and are unique
+    const finalUniquePayloadIds = new Set(remainingTxs.map((u) => u.id));
+    const finalPayload = payload
+      .filter((t) => finalUniquePayloadIds.has(t.id) && !idsToDelete.has(t.id))
+      .map((t) => {
+        // Find the winning transaction in remainingTxs to get its potentially updated date
+        const winner = remainingTxs.find((w) => w.id === t.id);
+        return {
+          ...t,
+          date: winner ? winner.date : t.date,
+        };
+      });
+
+    if (finalPayload.length === 0) {
+      res.status(201).json({ synced: 0 });
+      return;
+    }
+
+    // 6. Delete any existing DB rows whose plaidTransactionId matches an incoming tx
+    //    but has a different id (handles id divergence from migration scripts, etc.)
+    const incomingPlaidTxIds = finalPayload
+      .map((t: any) => t.plaidTransactionId)
+      .filter((id: any): id is string => !!id);
+    if (incomingPlaidTxIds.length > 0) {
+      const existingByPlaid = existing.filter(
+        (e) => e.plaidTransactionId && incomingPlaidTxIds.includes(e.plaidTransactionId)
+      );
+      const conflictIds = existingByPlaid
+        .filter((e) => !finalPayload.some((p: any) => p.id === e.id))
+        .map((e) => e.id);
+      if (conflictIds.length > 0) {
+        await db
+          .delete(transactionsTable)
+          .where(
+            and(
+              eq(transactionsTable.householdId, householdId),
+              inArray(transactionsTable.id, conflictIds)
+            )
+          );
+      }
+    }
+
+    // 7. Insert or update transactions using correct sql excluded references
     const rows = await db
       .insert(transactionsTable)
-      .values(payload)
+      .values(finalPayload)
       .onConflictDoUpdate({
         target: transactionsTable.id,
         set: {
@@ -208,6 +375,7 @@ router.post("/transactions/bulk", async (req, res) => {
           merchant: sql`excluded.merchant`,
           plaidItemId: sql`excluded.plaid_item_id`,
           plaidAccountId: sql`excluded.plaid_account_id`,
+          plaidTransactionId: sql`excluded.plaid_transaction_id`,
           bank: sql`excluded.bank`,
           note: sql`excluded.note`,
           pending: sql`excluded.pending`,
