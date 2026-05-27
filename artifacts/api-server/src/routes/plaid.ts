@@ -365,14 +365,16 @@ router.post("/plaid/sync/:itemId", async (req, res) => {
     const plaidAccounts = accountsRes.data.accounts;
 
     let hasMore = true;
+    const syncOptions = {
+      include_personal_finance_category: true,
+      ...(backfill ? { days_requested: 730 } : {}),
+    };
+    req.log.info({ cursor: cursor ?? null, options: syncOptions, force, backfill }, "transactionsSync request params");
     while (hasMore) {
       const syncRes = await client.transactionsSync({
         access_token: record.accessToken,
         cursor,
-        options: {
-          include_personal_finance_category: true,
-          ...(backfill ? { days_requested: 730 } : {}),
-        },
+        options: syncOptions,
       });
       transactions = [...transactions, ...syncRes.data.added];
       cursor = syncRes.data.next_cursor;
