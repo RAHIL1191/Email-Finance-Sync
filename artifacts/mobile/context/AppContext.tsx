@@ -552,111 +552,136 @@ function dedupKey(t: { amount: number; date: string; accountId?: string }): stri
  * Higher-priority sources (plaid > manual > email) win on collision.
  */
 function upsertTransactions(prev: Transaction[], incoming: Transaction[]): Transaction[] {
-  const byContent = new Map<string, Transaction>(); // dedupKey → tx
-  const byId = new Map<string, Transaction>();      // id → winning tx
+  // To avoid mutating input parameters, perform deep clone of both arrays
+  const allTxs = [
+    ...prev.map((t) => ({ ...t })),
+    ...incoming.map((t) => ({ ...t })),
+  ];
 
-  // Capture pending transaction dates for preservation when posted settlements arrive
+  // Helper score to prioritize source and status: Plaid > Manual > Email, Posted > Pending
+  const getPriorityScore = (t: Transaction) => {
+    const srcScore = SOURCE_PRIORITY[t.source ?? ""] ?? 0;
+    const pendingScore = t.pending ? 0 : 1;
+    return srcScore * 10 + pendingScore;
+  };
+
+  // Sort: higher priority score transactions first
+  allTxs.sort((a, b) => getPriorityScore(b) - getPriorityScore(a));
+
+  // Pass A: Strict exact ID and content deduplication based on priority score.
+  // This collapses exact duplicates from overlapping sync sources.
+  const uniqueTxs: Transaction[] = [];
+  const byId = new Map<string, Transaction>();
+  const byContent = new Map<string, Transaction>();
+
+  for (const t of allTxs) {
+    const key = dedupKey(t);
+    const existingById = t.id ? byId.get(t.id) : null;
+    const existingByContent = byContent.get(key);
+
+    if (existingById || existingByContent) {
+      // Re-attribution or duplicate: skip since we already have a higher/equal priority version
+      continue;
+    }
+
+    uniqueTxs.push(t);
+    if (t.id) byId.set(t.id, t);
+    byContent.set(key, t);
+  }
+
+  // Pass B: Fuzzy Pending-Posted Collapsing across the combined list.
+  // 1. Gather all pending transaction dates by ID and Plaid ID so we can preserve them.
   const pendingDatesMap = new Map<string, string>();
-  prev.forEach((t) => {
+  uniqueTxs.forEach((t) => {
     if (t.pending && t.date) {
       if (t.id) pendingDatesMap.set(t.id, t.date);
       if (t.plaidTransactionId) pendingDatesMap.set(t.plaidTransactionId, t.date);
     }
   });
 
-  // Collect pending transaction IDs to evict
+  // 2. Direct ID-based pending eviction: remove matching pending transactions when a posted
+  // transaction references its pending transaction ID.
   const pendingTxIdsToEvict = new Set<string>();
-  incoming.forEach((t: any) => {
-    if (t.pendingTransactionId) {
+  uniqueTxs.forEach((t) => {
+    if (!t.pending && t.pendingTransactionId) {
       pendingTxIdsToEvict.add(t.pendingTransactionId);
+      // Transfer the original authorization date if available
+      const origDate = pendingDatesMap.get(t.pendingTransactionId);
+      if (origDate) {
+        t.date = origDate;
+      }
     }
   });
 
-  // Filter out any matching pending transactions from existing state
-  let filteredPrev = prev;
+  let remainingTxs = uniqueTxs;
   if (pendingTxIdsToEvict.size > 0) {
-    filteredPrev = filteredPrev.filter((t) => {
+    remainingTxs = remainingTxs.filter((t) => {
+      if (!t.pending) return true; // keep all posted
       const matchesId = t.id && pendingTxIdsToEvict.has(t.id);
       const matchesPlaidId = t.plaidTransactionId && pendingTxIdsToEvict.has(t.plaidTransactionId);
       return !matchesId && !matchesPlaidId;
     });
   }
 
-  // Smart fallback eviction: a posted transaction replaces an older pending one
-  // within +/- 3 days window, having exact same amount and account and fuzzy title match.
-  // Overrides the posted transaction's date to retain the original pending transaction's date.
-  const incomingPosted = incoming.filter((t) => !t.pending);
-  if (incomingPosted.length > 0) {
-    incomingPosted.forEach((newTx) => {
-      // Direct pendingTransactionId match
-      if (newTx.pendingTransactionId) {
-        const origDate = pendingDatesMap.get(newTx.pendingTransactionId);
-        if (origDate) {
-          newTx.date = origDate;
+  // 3. Smart fuzzy matching: a posted transaction replaces an older pending transaction
+  // within a +/- 3 days window, having exact same amount, account, and fuzzy title match.
+  const postedTxs = remainingTxs.filter((t) => !t.pending);
+  const pendingTxsToEvictFuzzy = new Set<string>();
+
+  postedTxs.forEach((postedTx) => {
+    remainingTxs.forEach((pendingTx) => {
+      if (!pendingTx.pending) return;
+      if (pendingTxsToEvictFuzzy.has(pendingTx.id)) return; // already marked for eviction
+
+      const isReplaced = (
+        pendingTx.accountId === postedTx.accountId &&
+        Math.abs(pendingTx.amount - postedTx.amount) < 0.001 &&
+        Math.abs(new Date(pendingTx.date).getTime() - new Date(postedTx.date).getTime()) / (1000 * 60 * 60 * 24) <= 3
+      );
+
+      if (isReplaced) {
+        const oldTitle = (pendingTx.merchant || pendingTx.title || "").toLowerCase().trim();
+        const newTitle = (postedTx.merchant || postedTx.title || "").toLowerCase().trim();
+        const firstWord = (str: string) => str.split(/[^a-zA-Z0-9]/)[0] || "";
+
+        const isTitleMatch =
+          oldTitle.includes(newTitle) ||
+          newTitle.includes(oldTitle) ||
+          (firstWord(oldTitle).length >= 4 && firstWord(oldTitle) === firstWord(newTitle));
+
+        if (isTitleMatch) {
+          postedTx.date = pendingTx.date; // copy original pending date to posted transaction
+          pendingTxsToEvictFuzzy.add(pendingTx.id); // evict old pending transaction
         }
       }
-
-      // Fuzzy matching fallback
-      filteredPrev = filteredPrev.filter((oldTx) => {
-        if (!oldTx.pending) return true; // keep all posted/manual transactions
-
-        const isReplaced = (
-          oldTx.accountId === newTx.accountId &&
-          Math.abs(oldTx.amount - newTx.amount) < 0.001 &&
-          Math.abs(new Date(oldTx.date).getTime() - new Date(newTx.date).getTime()) / (1000 * 60 * 60 * 24) <= 3
-        );
-
-        if (isReplaced) {
-          const oldTitle = (oldTx.merchant || oldTx.title || "").toLowerCase().trim();
-          const newTitle = (newTx.merchant || newTx.title || "").toLowerCase().trim();
-          const firstWord = (str: string) => str.split(/[^a-zA-Z0-9]/)[0] || "";
-
-          const isTitleMatch =
-            oldTitle.includes(newTitle) ||
-            newTitle.includes(oldTitle) ||
-            (firstWord(oldTitle).length >= 4 && firstWord(oldTitle) === firstWord(newTitle));
-
-          if (isTitleMatch) {
-            newTx.date = oldTx.date; // copy original pending date to posted transaction
-            return false; // evict old pending transaction
-          }
-        }
-
-        return true;
-      });
     });
+  });
+
+  if (pendingTxsToEvictFuzzy.size > 0) {
+    remainingTxs = remainingTxs.filter((t) => !pendingTxsToEvictFuzzy.has(t.id));
   }
 
-  const addTx = (t: Transaction) => {
+  // Final Pass: Re-deduplicate remaining transactions by content key to ensure that any date-modified
+  // posted transactions (which copied a pending date and might now collide) are cleanly collapsed.
+  const finalUnique = new Map<string, Transaction>();
+  remainingTxs.forEach((t) => {
     const key = dedupKey(t);
-    const tp = SOURCE_PRIORITY[t.source ?? ""] ?? 0;
-
-    // Same-id conflict: same logical tx but different accountId (remapping artefact)
-    const sameId = t.id ? byId.get(t.id) : undefined;
-    if (sameId) {
-      const sp = SOURCE_PRIORITY[sameId.source ?? ""] ?? 0;
-      if (tp <= sp) return; // keep existing higher-priority version
-      // Incoming wins — evict old entry from content map
-      byContent.delete(dedupKey(sameId));
+    const existing = finalUnique.get(key);
+    if (!existing) {
+      finalUnique.set(key, t);
+    } else {
+      // Collision due to date update: keep the one with higher priority score
+      const existingScore = getPriorityScore(existing);
+      const currentScore = getPriorityScore(t);
+      if (currentScore > existingScore) {
+        finalUnique.set(key, t);
+      }
     }
+  });
 
-    // Same-content conflict: different source for same transaction
-    const sameContent = byContent.get(key);
-    if (sameContent) {
-      const sp = SOURCE_PRIORITY[sameContent.source ?? ""] ?? 0;
-      if (tp <= sp) return;
-      if (sameContent.id) byId.delete(sameContent.id);
-    }
-
-    byContent.set(key, t);
-    if (t.id) byId.set(t.id, t);
-  };
-
-  filteredPrev.forEach(addTx);
-  incoming.forEach(addTx);
-
-  return Array.from(byContent.values()).sort((a, b) => b.date.localeCompare(a.date));
+  return Array.from(finalUnique.values()).sort((a, b) => b.date.localeCompare(a.date));
 }
+
 
 /** Find the best matching account for a bank name and optional last-4 digits */
 function findAccountMatch(
