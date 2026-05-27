@@ -18,6 +18,8 @@ export const transactionsTable = pgTable("transactions", {
   fromEmail: boolean("from_email").default(false),
   bank: text("bank"),
   note: text("note"),
+  pending: boolean("pending").default(false),
+  pendingTransactionId: text("pending_transaction_id"),
   createdAt: timestamp("created_at").defaultNow().notNull(),
   updatedAt: timestamp("updated_at").defaultNow().notNull(),
 });
@@ -39,6 +41,8 @@ export const insertTransactionSchema = z.object({
   fromEmail: z.boolean().optional().default(false),
   bank: z.string().nullable().optional(),
   note: z.string().nullable().optional(),
+  pending: z.boolean().optional().default(false),
+  pendingTransactionId: z.string().nullable().optional(),
 });
 
 export const updateTransactionSchema = insertTransactionSchema

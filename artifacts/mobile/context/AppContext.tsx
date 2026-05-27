@@ -566,10 +566,43 @@ function upsertTransactions(prev: Transaction[], incoming: Transaction[]): Trans
   // Filter out any matching pending transactions from existing state
   let filteredPrev = prev;
   if (pendingTxIdsToEvict.size > 0) {
-    filteredPrev = prev.filter((t) => {
+    filteredPrev = filteredPrev.filter((t) => {
       const matchesId = t.id && pendingTxIdsToEvict.has(t.id);
       const matchesPlaidId = t.plaidTransactionId && pendingTxIdsToEvict.has(t.plaidTransactionId);
       return !matchesId && !matchesPlaidId;
+    });
+  }
+
+  // Smart fallback eviction: a posted transaction replaces an older pending one
+  // within +/- 3 days window, having exact same amount and account and fuzzy title match
+  const incomingPosted = incoming.filter((t) => !t.pending);
+  if (incomingPosted.length > 0) {
+    filteredPrev = filteredPrev.filter((oldTx) => {
+      if (!oldTx.pending) return true; // keep all posted/manual transactions
+
+      const isReplaced = incomingPosted.some((newTx) => {
+        if (oldTx.accountId !== newTx.accountId) return false;
+        if (Math.abs(oldTx.amount - newTx.amount) > 0.001) return false;
+
+        const oldDate = new Date(oldTx.date);
+        const newDate = new Date(newTx.date);
+        const diffMs = Math.abs(newDate.getTime() - oldDate.getTime());
+        const diffDays = diffMs / (1000 * 60 * 60 * 24);
+        if (diffDays > 3) return false;
+
+        const oldTitle = (oldTx.merchant || oldTx.title || "").toLowerCase().trim();
+        const newTitle = (newTx.merchant || newTx.title || "").toLowerCase().trim();
+        const firstWord = (str: string) => str.split(/[^a-zA-Z0-9]/)[0] || "";
+
+        const isTitleMatch =
+          oldTitle.includes(newTitle) ||
+          newTitle.includes(oldTitle) ||
+          (firstWord(oldTitle).length >= 4 && firstWord(oldTitle) === firstWord(newTitle));
+
+        return isTitleMatch;
+      });
+
+      return !isReplaced;
     });
   }
 
@@ -1070,6 +1103,7 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
   const householdIdRef = useRef<string>("");
   const accountsRef = useRef<Account[]>([]);
   const transactionsRef = useRef<Transaction[]>([]);
+  const syncLockRef = useRef(false);
   const billsRef = useRef<Bill[]>([]);
   const budgetsRef = useRef<Budget[]>([]);
   const goalsRef = useRef<Goal[]>([]);
@@ -2198,6 +2232,10 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
     if (!emailSync.isConnected || !emailSync.email || !emailSync.appPassword) {
       return { imported: 0, error: "Email not connected" };
     }
+    if (syncLockRef.current) {
+      return { imported: 0, error: "Sync already in progress..." };
+    }
+    syncLockRef.current = true;
     setIsSyncing(true);
     try {
       const res = await fetch(`${getApiBase()}/api/email/sync`, {
@@ -2300,9 +2338,11 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
         lastParsed: Array.isArray(data.parsed) ? data.parsed : [],
       }));
       setIsSyncing(false);
+      syncLockRef.current = false;
       return { imported: actuallyNew, parsed: Array.isArray(data.parsed) ? data.parsed : [] };
     } catch {
       setIsSyncing(false);
+      syncLockRef.current = false;
       return { imported: 0, error: "Network error during sync" };
     }
   }, [emailSync]);
@@ -2471,10 +2511,14 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
   );
 
   const syncPlaidTransactions = useCallback(
-    async (itemId: string, forceFullSync = false): Promise<{ imported: number; error?: string }> => {
+    async (itemId: string, forceFullSync = false): Promise<{ imported: number; importedTransactions?: Transaction[]; error?: string }> => {
       const item = plaidSync.items.find((i) => i.itemId === itemId);
       if (!item) return { imported: 0, error: "Bank not found" };
 
+      if (syncLockRef.current) {
+        return { imported: 0, error: "Sync already in progress..." };
+      }
+      syncLockRef.current = true;
       setIsSyncing(true);
 
       try {
@@ -2517,6 +2561,7 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
 
         if (!res) {
           setIsSyncing(false);
+          syncLockRef.current = false;
           const netErr = "Network error. Could not reach server.";
           setPlaidSync((prev) => ({
             items: prev.items.map((i) =>
@@ -2530,6 +2575,7 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
 
         if (!res.ok) {
           setIsSyncing(false);
+          syncLockRef.current = false;
           const errMsg: string = data.error ?? "Sync failed";
           const loginRequired = /login.required|item.login|ITEM_LOGIN_REQUIRED/i.test(errMsg);
           setPlaidSync((prev) => ({
@@ -2636,7 +2682,7 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
           const fallbackId = Object.values(plaidAccMap)[0] ?? "";
           const candidates = (data.transactions as any[]).flatMap((t) =>
             normalizeImportedTxs(
-              { ...t, id: t.plaidTransactionId || genId() },
+              { ...t, id: t.plaidTransactionId || undefined },
               "plaid",
               plaidAccounts,
               rules,
@@ -2645,7 +2691,15 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
             )
           );
           const currentKeys = new Set(transactionsRef.current.map(dedupKey));
-          precomputedFresh = candidates.filter((t) => !currentKeys.has(dedupKey(t)));
+          const currentIds = new Set(transactionsRef.current.map((t) => t.id).filter(Boolean));
+          const currentPlaidIds = new Set(transactionsRef.current.map((t) => t.plaidTransactionId).filter(Boolean));
+
+          precomputedFresh = candidates.filter(
+            (t) =>
+              !currentKeys.has(dedupKey(t)) &&
+              !currentIds.has(t.id) &&
+              !(t.plaidTransactionId && currentPlaidIds.has(t.plaidTransactionId))
+          );
           imported = precomputedFresh.length;
           if (precomputedFresh.length > 0) {
             bgCall("/api/transactions/bulk", "POST", householdIdRef.current, deviceIdRef.current, { transactions: precomputedFresh });
@@ -2761,9 +2815,11 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
           ),
         }));
         setIsSyncing(false);
-        return { imported };
+        syncLockRef.current = false;
+        return { imported, importedTransactions: precomputedFresh };
       } catch {
         setIsSyncing(false);
+        syncLockRef.current = false;
         const errMsg = "Sync failed unexpectedly";
         setPlaidSync((prev) => ({
           items: prev.items.map((i) =>
