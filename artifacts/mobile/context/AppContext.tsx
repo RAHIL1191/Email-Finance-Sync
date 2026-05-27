@@ -612,11 +612,9 @@ function upsertTransactions(prev: Transaction[], incoming: Transaction[]): Trans
   uniqueTxs.forEach((t) => {
     if (!t.pending && t.pendingTransactionId) {
       pendingTxIdsToEvict.add(t.pendingTransactionId);
-      // Transfer the original authorization date if available
-      const origDate = pendingDatesMap.get(t.pendingTransactionId);
-      if (origDate) {
-        t.date = origDate;
-      }
+      // Do NOT copy the pending date — the posted transaction already has the correct
+      // authorized_date (purchase date as shown in the bank app) from mapPlaidTransaction.
+      // Overwriting it caused 1-3 day mismatches vs what the bank displays.
     }
   });
 
@@ -657,7 +655,7 @@ function upsertTransactions(prev: Transaction[], incoming: Transaction[]): Trans
           (firstWord(oldTitle).length >= 4 && firstWord(oldTitle) === firstWord(newTitle));
 
         if (isTitleMatch) {
-          postedTx.date = pendingTx.date; // copy original pending date to posted transaction
+          // Do NOT copy pending date — posted tx already has authorized_date (correct bank date).
           pendingTxsToEvictFuzzy.add(pendingTx.id); // evict old pending transaction
         }
       }
