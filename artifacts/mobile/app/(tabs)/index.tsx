@@ -269,9 +269,36 @@ export default function HomeScreen() {
   }, [accounts, transactions, colors.primary]);
 
   // Bills derived
-  const overdueBills  = useMemo(() => bills.filter(b => !b.isPaid && new Date(b.dueDate).getTime() < now2), [bills, now2]);
-  const pendingBills  = useMemo(() => bills.filter(b => !b.isPaid && new Date(b.dueDate).getTime() >= now2), [bills, now2]);
-  const paidBills     = useMemo(() => bills.filter(b => b.isPaid), [bills]);
+  const overdueBills = useMemo(() => {
+    return bills.filter(b => {
+      if (b.isPaid) return false;
+      const d = parseLocalDate(b.dueDate);
+      const todayLocal = new Date(now.getFullYear(), now.getMonth(), now.getDate());
+      const dueLocal = new Date(d.getFullYear(), d.getMonth(), d.getDate());
+      return dueLocal < todayLocal;
+    });
+  }, [bills, now]);
+
+  const pendingBills = useMemo(() => {
+    return bills.filter(b => {
+      if (b.isPaid) return false;
+      const d = parseLocalDate(b.dueDate);
+      const todayLocal = new Date(now.getFullYear(), now.getMonth(), now.getDate());
+      const dueLocal = new Date(d.getFullYear(), d.getMonth(), d.getDate());
+      // Due today or in the future AND must be in the current month/year
+      return dueLocal >= todayLocal && d.getFullYear() === now.getFullYear() && d.getMonth() === now.getMonth();
+    });
+  }, [bills, now]);
+
+  const paidBills = useMemo(() => {
+    return bills.filter(b => {
+      if (!b.isPaid) return false;
+      const d = parseLocalDate(b.dueDate);
+      // Paid bill due in the current month/year
+      return d.getFullYear() === now.getFullYear() && d.getMonth() === now.getMonth();
+    });
+  }, [bills, now]);
+
   const overdueTotal  = useMemo(() => overdueBills.reduce((s, b) => s + b.amount, 0), [overdueBills]);
   const upcomingTotal = useMemo(() => pendingBills.reduce((s, b) => s + b.amount, 0), [pendingBills]);
   const paidTotal     = useMemo(() => paidBills.reduce((s, b) => s + b.amount, 0), [paidBills]);
@@ -282,18 +309,22 @@ export default function HomeScreen() {
     if (overdueBills.length > 0)
       items.push({ text: `${overdueBills.length} overdue bill${overdueBills.length > 1 ? "s" : ""}`, sub: "Tap to view", color: "#ef4444" });
     pendingBills.slice(0, 3).forEach(b => {
-      const days = Math.ceil((new Date(b.dueDate).getTime() - now2) / 86400000);
-      const label = days === 0 ? "Due today" : days <= 3 ? `Due in ${days}d` : new Date(b.dueDate).toLocaleDateString("en-US", { month: "short", day: "numeric" });
+      const d = parseLocalDate(b.dueDate);
+      const todayLocal = new Date(now.getFullYear(), now.getMonth(), now.getDate());
+      const dueLocal = new Date(d.getFullYear(), d.getMonth(), d.getDate());
+      const diffMs = dueLocal.getTime() - todayLocal.getTime();
+      const days = Math.round(diffMs / 86400000);
+      const label = days === 0 ? "Due today" : days <= 3 ? `Due in ${days}d` : d.toLocaleDateString("en-US", { month: "short", day: "numeric" });
       items.push({ text: `Upcoming: ${b.title}`, sub: label, color: days <= 3 ? "#f59e0b" : "#22c55e" });
     });
     return items.slice(0, 4);
-  }, [overdueBills, pendingBills, now2]);
+  }, [overdueBills, pendingBills, now]);
 
   const upcomingBills = useMemo(
     () =>
       bills
         .filter((b) => !b.isPaid)
-        .sort((a, b) => new Date(a.dueDate).getTime() - new Date(b.dueDate).getTime())
+        .sort((a, b) => parseLocalDate(a.dueDate).getTime() - parseLocalDate(b.dueDate).getTime())
         .slice(0, 3),
     [bills]
   );
@@ -302,7 +333,7 @@ export default function HomeScreen() {
     () =>
       tasks
         .filter((t) => !t.isCompleted)
-        .sort((a, b) => new Date(a.dueDate).getTime() - new Date(b.dueDate).getTime())
+        .sort((a, b) => parseLocalDate(a.dueDate).getTime() - parseLocalDate(b.dueDate).getTime())
         .slice(0, 3),
     [tasks]
   );
@@ -717,8 +748,12 @@ export default function HomeScreen() {
           ) : (
             <View style={{ gap: 10 }}>
               {upcomingTasks.map((t) => {
-                const due      = new Date(t.dueDate);
-                const daysLeft = Math.ceil((due.getTime() - Date.now()) / 86400000);
+                const due      = parseLocalDate(t.dueDate);
+                const todayStart = new Date();
+                todayStart.setHours(0, 0, 0, 0);
+                const dueStart = new Date(due);
+                dueStart.setHours(0, 0, 0, 0);
+                const daysLeft = Math.round((dueStart.getTime() - todayStart.getTime()) / 86400000);
                 const isOver   = daysLeft < 0;
                 const isSoon   = !isOver && daysLeft <= 3;
                 const PRIORITY_COLORS: Record<string, string> = { low: "#22c55e", medium: "#f59e0b", high: "#ef4444" };
