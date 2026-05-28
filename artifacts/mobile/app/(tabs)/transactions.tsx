@@ -3021,7 +3021,7 @@ const styles = StyleSheet.create({
     fontFamily: "Inter_600SemiBold",
   },
   txItemWrap: {
-    borderBottomWidth: 1,
+    borderBottomWidth: 0,
   },
   dateHeader: {
     fontSize: 12,

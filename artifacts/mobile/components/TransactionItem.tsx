@@ -5,6 +5,7 @@ import { StyleSheet, Text, TouchableOpacity, View } from "react-native";
 
 import { Transaction, useApp } from "@/context/AppContext";
 import { useColors } from "@/hooks/useColors";
+import { useTheme } from "@/context/ThemeContext";
 
 export const CATEGORY_ICONS: Record<string, string> = {
   Income: "trending-up",
@@ -47,64 +48,84 @@ interface Props {
 
 export default function TransactionItem({ transaction, onPress }: Props) {
   const colors = useColors();
+  const { colorScheme } = useTheme();
+  const isDark = colorScheme === "dark";
   const { accounts } = useApp();
   const isIncome = transaction.type === "income";
-  const icon = (CATEGORY_ICONS[transaction.category] || "circle") as any;
-  const catColor = CATEGORY_COLORS[transaction.category] || colors.primary;
   const account = accounts.find((a) => a.id === transaction.accountId);
+
+  // Format date as "MMM DD" (e.g. "May 27")
+  const dateStr = React.useMemo(() => {
+    try {
+      const dt = new Date(transaction.date + "T00:00:00");
+      return dt.toLocaleDateString("en-US", { month: "short", day: "numeric" });
+    } catch {
+      return transaction.date;
+    }
+  }, [transaction.date]);
 
   return (
     <TouchableOpacity
-      style={styles.container}
+      style={[
+        styles.container,
+        {
+          backgroundColor: isDark ? "#1e1e1f" : "#f5f5f7",
+          borderColor: isDark ? "#2c2c2e" : "#e5e5ea",
+          shadowColor: isDark ? "#000000" : "#00000010",
+        },
+      ]}
       onPress={() => {
         Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
         onPress?.();
       }}
-      activeOpacity={0.7}
+      activeOpacity={0.75}
     >
-      <View style={[styles.iconWrap, { backgroundColor: catColor + "20" }]}>
-        <Feather name={icon} size={20} color={catColor} />
-      </View>
-      <View style={styles.info}>
-        <Text style={[styles.title, { color: colors.foreground }]} numberOfLines={1}>
+      <View style={styles.leftCol}>
+        <Text style={[styles.title, { color: isDark ? "#ffffff" : "#111111" }]} numberOfLines={2}>
           {transaction.title}
         </Text>
-        {account && (
-          <View style={styles.metaRow}>
-            {account.accountHolder && (
-              <Text style={[styles.metaName, { color: colors.mutedForeground }]} numberOfLines={1}>
-                {account.accountHolder}
-              </Text>
-            )}
-            <View style={[styles.typePill, { backgroundColor: account.color + "18" }]}>
-              <Feather
-                name={
-                  account.type === "checking" ? "layers"
-                  : account.type === "savings" ? "shield"
-                  : account.type === "credit" ? "credit-card"
-                  : "trending-up"
-                }
-                size={9}
-                color={account.color}
-              />
-              <Text style={[styles.typePillText, { color: account.color }]}>
-                {account.type === "checking" ? "Chequing"
-                  : account.type === "savings" ? "Savings"
-                  : account.type === "credit" ? "Credit"
-                  : "Investment"}
-              </Text>
-            </View>
-            {account.bank ? (
-              <Text style={[styles.bankName, { color: colors.mutedForeground }]} numberOfLines={1}>
-                {account.bank}
-              </Text>
-            ) : null}
-          </View>
-        )}
+        <View style={styles.metaRow}>
+          <Text style={[styles.dateText, { color: colors.mutedForeground }]}>
+            {dateStr}
+          </Text>
+          {account && (
+            <>
+              <Text style={[styles.bullet, { color: colors.mutedForeground }]}>·</Text>
+              <View style={[styles.typePill, { backgroundColor: account.color + "18" }]}>
+                <Feather
+                  name={
+                    account.type === "checking" ? "layers"
+                    : account.type === "savings" ? "shield"
+                    : account.type === "credit" ? "credit-card"
+                    : "trending-up"
+                  }
+                  size={9}
+                  color={account.color}
+                />
+                <Text style={[styles.typePillText, { color: account.color }]}>
+                  {account.type === "checking" ? "Chequing"
+                    : account.type === "savings" ? "Savings"
+                    : account.type === "credit" ? "Credit"
+                    : "Investment"}
+                </Text>
+              </View>
+              {account.bank ? (
+                <>
+                  <Text style={[styles.bullet, { color: colors.mutedForeground }]}>·</Text>
+                  <Text style={[styles.bankName, { color: colors.mutedForeground }]} numberOfLines={1}>
+                    {account.bank}
+                  </Text>
+                </>
+              ) : null}
+            </>
+          )}
+        </View>
       </View>
-      <Text style={[styles.amount, { color: isIncome ? "#10b981" : colors.foreground }]}>
-        ${transaction.amount.toFixed(2)}
-      </Text>
+      <View style={styles.rightCol}>
+        <Text style={[styles.amount, { color: isIncome ? "#10b981" : (isDark ? "#ffffff" : "#111111") }]}>
+          {isIncome ? "+" : "-"}${transaction.amount.toFixed(2)}
+        </Text>
+      </View>
     </TouchableOpacity>
   );
 }
@@ -112,25 +133,28 @@ export default function TransactionItem({ transaction, onPress }: Props) {
 const styles = StyleSheet.create({
   container: {
     flexDirection: "row",
-    alignItems: "center",
-    paddingVertical: 12,
-    paddingHorizontal: 16,
-    gap: 12,
-  },
-  iconWrap: {
-    width: 44,
-    height: 44,
+    alignItems: "flex-start",
+    justifyContent: "space-between",
+    padding: 16,
+    marginHorizontal: 16,
+    marginVertical: 4,
     borderRadius: 12,
-    alignItems: "center",
-    justifyContent: "center",
+    borderWidth: 1,
+    shadowOffset: { width: 0, height: 1 },
+    shadowOpacity: 0.1,
+    shadowRadius: 3,
+    elevation: 2,
   },
-  info: {
+  leftCol: {
     flex: 1,
-    gap: 3,
+    gap: 4,
+    paddingRight: 12,
   },
   title: {
-    fontSize: 15,
-    fontFamily: "Inter_500Medium",
+    fontSize: 16,
+    fontFamily: "Inter_600SemiBold",
+    letterSpacing: -0.2,
+    lineHeight: 20,
   },
   metaRow: {
     flexDirection: "row",
@@ -138,9 +162,14 @@ const styles = StyleSheet.create({
     gap: 6,
     marginTop: 2,
   },
-  metaName: {
-    fontSize: 12,
+  dateText: {
+    fontSize: 13,
     fontFamily: "Inter_400Regular",
+  },
+  bullet: {
+    fontSize: 13,
+    fontFamily: "Inter_400Regular",
+    opacity: 0.7,
   },
   typePill: {
     flexDirection: "row",
@@ -155,11 +184,15 @@ const styles = StyleSheet.create({
     fontFamily: "Inter_500Medium",
   },
   bankName: {
-    fontSize: 11,
+    fontSize: 12,
     fontFamily: "Inter_400Regular",
   },
+  rightCol: {
+    alignItems: "flex-end",
+  },
   amount: {
-    fontSize: 15,
-    fontFamily: "Inter_600SemiBold",
+    fontSize: 16,
+    fontFamily: "Inter_700Bold",
+    lineHeight: 20,
   },
 });
