@@ -807,7 +807,7 @@ export default function AccountsScreen() {
   const periodStart = useMemo(() => {
     const d = new Date();
     if (period === "Week") d.setDate(d.getDate() - 7);
-    else if (period === "Month") d.setMonth(d.getMonth() - 1);
+    else if (period === "Month") { d.setDate(1); }  // start of current month, not rolling 30 days
     else d.setFullYear(d.getFullYear() - 1);
     const y = d.getFullYear();
     const m = String(d.getMonth() + 1).padStart(2, "0");
@@ -822,7 +822,12 @@ export default function AccountsScreen() {
 
   const periodChange = useMemo(() =>
     transactions
-      .filter((t) => t.date >= periodStart && networthAccountIds.has(t.accountId))
+      .filter((t) =>
+        t.date >= periodStart &&
+        networthAccountIds.has(t.accountId) &&
+        t.category !== "Transfer" &&
+        t.category?.toLowerCase() !== "transfer"
+      )
       .reduce((s, t) => s + (t.type === "income" ? t.amount : -t.amount), 0),
     [transactions, periodStart, networthAccountIds]
   );
