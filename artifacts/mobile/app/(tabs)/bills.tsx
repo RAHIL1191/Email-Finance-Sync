@@ -6,7 +6,7 @@ import * as FileSystem from "expo-file-system/src/legacy/FileSystem";
 import * as Sharing from "expo-sharing";
 import * as Print from "expo-print";
 import DateTimePicker from "@react-native-community/datetimepicker";
-import { toLocalYMD } from "@/hooks/useLocalDate";
+import { parseLocalDate, toLocalYMD } from "@/hooks/useLocalDate";
 import {
   Alert,
   Dimensions,
@@ -68,7 +68,7 @@ function OverdueBillsModal({ bills, visible, onClose, onMarkPaid, onDelete }: {
   const grouped = useMemo(() => {
     const map: Record<string, Bill[]> = {};
     bills.forEach(b => {
-      const key = new Date(b.dueDate).toLocaleString("default", { month: "long", year: "numeric" });
+      const key = parseLocalDate(b.dueDate).toLocaleString("default", { month: "long", year: "numeric" });
       if (!map[key]) map[key] = [];
       map[key].push(b);
     });
@@ -130,7 +130,7 @@ function OverdueBillsModal({ bills, visible, onClose, onMarkPaid, onDelete }: {
                     const cfg = catConfig(bill.category);
                     const daysLate = Math.abs(daysUntil(bill.dueDate));
                     const isSelected = selected.has(bill.id);
-                    const dueDateFmt = new Date(bill.dueDate).toLocaleDateString("en-US", { month: "short", day: "numeric" });
+                    const dueDateFmt = parseLocalDate(bill.dueDate).toLocaleDateString("en-US", { month: "short", day: "numeric" });
                     const daysAgoLabel = daysLate === 1 ? "Yesterday" : dueDateFmt;
                     return (
                       <TouchableOpacity
@@ -213,7 +213,7 @@ function catConfig(category: string) {
 
 // ─── Status helpers ───────────────────────────────────────────────────────────
 function daysUntil(dueDate: string) {
-  return Math.ceil((new Date(dueDate).getTime() - Date.now()) / 86400000);
+  return Math.ceil((parseLocalDate(dueDate).getTime() - Date.now()) / 86400000);
 }
 
 // ─── Recurring occurrence generator ──────────────────────────────────────────
@@ -245,12 +245,12 @@ function generateOccurrences(bill: Bill): Bill[] {
   if (!bill.isRecurring || !bill.frequency) return [];
   const result: Bill[] = [];
   const limit = occurrenceLimit(bill.frequency);
-  let next = addFreq(new Date(bill.dueDate), bill.frequency);
+  let next = addFreq(parseLocalDate(bill.dueDate), bill.frequency);
   while (next <= limit) {
     result.push({
       ...bill,
       id: `${bill.id}_occ_${next.getTime()}`,
-      dueDate: next.toISOString(),
+      dueDate: toLocalYMD(next),
       isPaid: false,
     });
     next = addFreq(next, bill.frequency);
@@ -263,15 +263,15 @@ function statusLabel(bill: Bill) {
   const d = daysUntil(bill.dueDate);
   if (d < 0)   return `${Math.abs(d)}d overdue`;
   if (d === 0) return "Due today";
-  return `Due ${new Date(bill.dueDate).toLocaleDateString("en-US", { month: "short", day: "numeric" })}`;
+  return `Due ${parseLocalDate(bill.dueDate).toLocaleDateString("en-US", { month: "short", day: "numeric" })}`;
 }
 
 // ─── Sort helper ──────────────────────────────────────────────────────────────
 function sortBills(list: Bill[], sortBy: BillFilterSettings["sortBy"]): Bill[] {
   const s = list.slice();
   switch (sortBy) {
-    case "date_asc":    return s.sort((a, b) => new Date(a.dueDate).getTime() - new Date(b.dueDate).getTime());
-    case "date_desc":   return s.sort((a, b) => new Date(b.dueDate).getTime() - new Date(a.dueDate).getTime());
+    case "date_asc":    return s.sort((a, b) => parseLocalDate(a.dueDate).getTime() - parseLocalDate(b.dueDate).getTime());
+    case "date_desc":   return s.sort((a, b) => parseLocalDate(b.dueDate).getTime() - parseLocalDate(a.dueDate).getTime());
     case "amount_high": return s.sort((a, b) => b.amount - a.amount);
     case "amount_low":  return s.sort((a, b) => a.amount - b.amount);
     case "title_asc":   return s.sort((a, b) => a.title.localeCompare(b.title));
@@ -288,7 +288,7 @@ function groupBills(
   const groups: Record<string, Bill[]> = {};
 
   list.forEach((b) => {
-    const d = new Date(b.dueDate);
+    const d = parseLocalDate(b.dueDate);
     let key: string;
 
     if (groupBy === "weekly") {
@@ -393,7 +393,7 @@ function BillRow({
             </>
           )}
           <Text style={[styles.rowSub, { color: colors.mutedForeground }]}>
-            {new Date(bill.dueDate).toLocaleDateString("en-US", { month: "short", day: "numeric" })}
+            {parseLocalDate(bill.dueDate).toLocaleDateString("en-US", { month: "short", day: "numeric" })}
           </Text>
         </View>
         {!bill.isPaid && isVirtual && (
@@ -522,7 +522,7 @@ function CalendarView({
 
   const byDay: Record<number, Bill[]> = {};
   bills.forEach((b) => {
-    const d = new Date(b.dueDate);
+    const d = parseLocalDate(b.dueDate);
     if (d.getMonth() === viewMonth && d.getFullYear() === viewYear) {
       const day = d.getDate();
       if (!byDay[day]) byDay[day] = [];
@@ -673,7 +673,7 @@ export default function BillsScreen() {
 
   const getBillsInDateRange = (start: Date, end: Date) => {
     const base = bills.filter((b) => {
-      const d = new Date(b.dueDate);
+      const d = parseLocalDate(b.dueDate);
       return d >= start && d <= end;
     });
 
@@ -681,18 +681,18 @@ export default function BillsScreen() {
     bills.forEach((b) => {
       if (!b.isRecurring || !b.frequency) return;
       
-      let next = new Date(b.dueDate);
+      let next = parseLocalDate(b.dueDate);
       while (next < start) {
         next = addFreq(next, b.frequency);
       }
       
       while (next <= end) {
-        const isParentDue = Math.abs(new Date(b.dueDate).getTime() - next.getTime()) < 1000;
+        const isParentDue = Math.abs(parseLocalDate(b.dueDate).getTime() - next.getTime()) < 1000;
         if (!isParentDue) {
           occurrences.push({
             ...b,
             id: `${b.id}_occ_${next.getTime()}`,
-            dueDate: next.toISOString(),
+            dueDate: toLocalYMD(next),
             isPaid: false,
           });
         }
@@ -700,7 +700,7 @@ export default function BillsScreen() {
       }
     });
 
-    return [...base, ...occurrences].sort((a, b) => new Date(a.dueDate).getTime() - new Date(b.dueDate).getTime());
+    return [...base, ...occurrences].sort((a, b) => parseLocalDate(a.dueDate).getTime() - parseLocalDate(b.dueDate).getTime());
   };
 
   const handleDownloadExcel = async (start: Date, end: Date) => {
@@ -708,7 +708,7 @@ export default function BillsScreen() {
     let csv = "Title,Category,Due Date,Due Amount,Paid Status,Paid Amount,Paid Date,Notes\n";
     
     periodBills.forEach(b => {
-      const dueDateStr = new Date(b.dueDate).toLocaleDateString("en-US", { month: "short", day: "numeric", year: "numeric" });
+      const dueDateStr = parseLocalDate(b.dueDate).toLocaleDateString("en-US", { month: "short", day: "numeric", year: "numeric" });
       const paidAmount = b.isPaid ? b.amount.toFixed(2) : "0.00";
       const paidDateStr = b.isPaid ? dueDateStr : ""; 
       const status = b.isPaid ? "Paid" : "Unpaid";
@@ -745,7 +745,7 @@ export default function BillsScreen() {
       const cfg = catConfig(b.category);
       
       // Format as "3 Jun 2025" style
-      const dueObj = new Date(b.dueDate);
+      const dueObj = parseLocalDate(b.dueDate);
       const dueDay = dueObj.getDate();
       const dueMonth = dueObj.toLocaleString("en-US", { month: "short" });
       const dueYear = dueObj.getFullYear();
@@ -1406,7 +1406,7 @@ export default function BillsScreen() {
                     if (reportFormat === "excel") {
                       let csv = "Title,Category,Due Date,Due Amount,Paid Status,Paid Amount,Paid Date,Notes\n";
                       periodBills.forEach(b => {
-                        const dueDateStr = new Date(b.dueDate).toLocaleDateString("en-US", { month: "short", day: "numeric", year: "numeric" });
+                        const dueDateStr = parseLocalDate(b.dueDate).toLocaleDateString("en-US", { month: "short", day: "numeric", year: "numeric" });
                         const paidAmount = b.isPaid ? b.amount.toFixed(2) : "0.00";
                         const paidDateStr = b.isPaid ? dueDateStr : ""; 
                         const status = b.isPaid ? "Paid" : "Unpaid";

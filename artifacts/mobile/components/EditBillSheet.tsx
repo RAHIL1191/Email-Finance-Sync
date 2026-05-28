@@ -20,7 +20,7 @@ import { useSafeAreaInsets } from "react-native-safe-area-context";
 
 import { Bill, useApp } from "@/context/AppContext";
 import { useColors } from "@/hooks/useColors";
-import { toLocalYMD } from "@/hooks/useLocalDate";
+import { parseLocalDate, toLocalYMD } from "@/hooks/useLocalDate";
 import CategoryPickerModal from "@/components/CategoryPickerModal";
 
 // ─── Constants ────────────────────────────────────────────────────────────────
@@ -275,7 +275,7 @@ export default function EditBillSheet({ bill, visible, onClose, onCreateBill }: 
       setAmount(String(bill.amount));
       setCategory(bill.category);
       setTitle(bill.title);
-      setDueDate(new Date(bill.dueDate));
+      setDueDate(parseLocalDate(bill.dueDate));
       setRepeat(freqToRepeat(bill.frequency, bill.isRecurring));
       setRemindDays(bill.remindDays ?? "5 days before");
       setAutoPaid(bill.autoPaid ?? false);

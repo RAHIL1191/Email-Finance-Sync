@@ -15,6 +15,7 @@ import { useSafeAreaInsets } from "react-native-safe-area-context";
 
 import { Bill, useApp } from "@/context/AppContext";
 import { useColors } from "@/hooks/useColors";
+import { parseLocalDate } from "@/hooks/useLocalDate";
 
 // ─── Category icon map ────────────────────────────────────────────────────────
 const CAT_ICON: Record<string, { icon: string; bg: string; fg: string }> = {
@@ -36,11 +37,11 @@ function catCfg(category: string) {
 }
 
 function daysUntil(dateStr: string) {
-  return Math.ceil((new Date(dateStr).getTime() - Date.now()) / 86400000);
+  return Math.ceil((parseLocalDate(dateStr).getTime() - Date.now()) / 86400000);
 }
 
 function fmtDate(dateStr: string) {
-  return new Date(dateStr).toLocaleDateString("en-US", {
+  return parseLocalDate(dateStr).toLocaleDateString("en-US", {
     month: "short",
     day: "numeric",
     year: "numeric",
@@ -48,7 +49,7 @@ function fmtDate(dateStr: string) {
 }
 
 function fmtDateTime(dateStr: string) {
-  return new Date(dateStr).toLocaleString("en-US", {
+  return parseLocalDate(dateStr).toLocaleString("en-US", {
     month: "short",
     day: "numeric",
     year: "numeric",
