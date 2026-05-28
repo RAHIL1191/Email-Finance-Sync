@@ -1,6 +1,5 @@
 import AsyncStorage from "@react-native-async-storage/async-storage";
 import { AppState } from "react-native";
-import { useDbSyncPrefs, SyncableType } from "./DbSyncPrefsContext";
 import {
   cancelBillNotifications,
   scheduleBillNotifications,
@@ -369,8 +368,6 @@ interface AppContextType {
   deviceId: string;
   householdId: string;
   changeHouseholdId: (code: string) => Promise<void>;
-  uploadToDb: (type: SyncableType, uploadExisting: boolean) => Promise<{ uploaded: number; error?: string }>;
-  pullFromDb: (type: SyncableType, since?: string) => Promise<{ pulled: number; error?: string }>;
 }
 
 const AppContext = createContext<AppContextType | null>(null);
@@ -1147,9 +1144,6 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
   const [householdId, setHouseholdId] = useState<string>("");
   const [userName, setUserNameState] = useState<string>("");
   const [reviewedTransactionIds, setReviewedTransactionIds] = useState<string[]>([]);
-  const { prefs: syncPrefs } = useDbSyncPrefs();
-  const syncPrefsRef = useRef(syncPrefs);
-  useEffect(() => { syncPrefsRef.current = syncPrefs; }, [syncPrefs]);
   const deviceIdRef = useRef<string>("");
   const householdIdRef = useRef<string>("");
   const accountsRef = useRef<Account[]>([]);
@@ -1415,6 +1409,34 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
             return [...next, ...localOnly];
           });
         }).catch(() => {});
+
+        // ── Background: pull all other data types from DB (ensures cross-device freshness) ──
+        const hdrs = { "X-Household-ID": hId, "X-Device-ID": dId };
+        const mergeById = <T extends { id: string }>(
+          setter: React.Dispatch<React.SetStateAction<T[]>>,
+          incoming: T[]
+        ) => {
+          if (!incoming.length) return;
+          setter((prev) => {
+            const byId = new Map(prev.map((r) => [r.id, r]));
+            incoming.forEach((r) => byId.set(r.id, { ...byId.get(r.id), ...r }));
+            return Array.from(byId.values());
+          });
+        };
+        Promise.allSettled([
+          fetch(`${getApiBase()}/api/plaid/items`, { headers: hdrs })
+            .then(async (r) => { if (r.ok) { const items: PlaidItem[] = await r.json(); setPlaidSync({ items }); } }),
+          fetch(`${getApiBase()}/api/bills`, { headers: hdrs })
+            .then(async (r) => { if (r.ok) mergeById(setBills, await r.json()); }),
+          fetch(`${getApiBase()}/api/budgets`, { headers: hdrs })
+            .then(async (r) => { if (r.ok) mergeById(setBudgets, await r.json()); }),
+          fetch(`${getApiBase()}/api/goals`, { headers: hdrs })
+            .then(async (r) => { if (r.ok) mergeById(setGoals, await r.json()); }),
+          fetch(`${getApiBase()}/api/tasks`, { headers: hdrs })
+            .then(async (r) => { if (r.ok) mergeById(setTasks, await r.json()); }),
+          fetch(`${getApiBase()}/api/projects`, { headers: hdrs })
+            .then(async (r) => { if (r.ok) mergeById(setProjects, await r.json()); }),
+        ]).catch(() => {});
       } catch {}
       setInitialized(true);
     })();
@@ -1509,26 +1531,48 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
     setTransactions([]);
     setAccounts([]);
     setBills([]);
+    setBudgets([]);
+    setGoals([]);
+    setTasks([]);
     setProjects([]);
     setPlaidSync({ items: [] });
     await Promise.all([
       AsyncStorage.removeItem(STORAGE_KEYS.transactions),
       AsyncStorage.removeItem(STORAGE_KEYS.accounts),
       AsyncStorage.removeItem(STORAGE_KEYS.bills),
+      AsyncStorage.removeItem(STORAGE_KEYS.budgets),
+      AsyncStorage.removeItem(STORAGE_KEYS.goals),
+      AsyncStorage.removeItem(STORAGE_KEYS.tasks),
       AsyncStorage.removeItem(STORAGE_KEYS.projects),
       AsyncStorage.removeItem(STORAGE_KEYS.plaidSync),
     ]);
 
-    // Fetch fresh data from server for the new household
+    // Fetch ALL data types fresh from server for the new household
     const hId = normalized;
     const dId = deviceIdRef.current;
     const base = getApiBase();
     const hdrs = { "X-Household-ID": hId, "X-Device-ID": dId };
+    const mergeById = <T extends { id: string }>(
+      setter: React.Dispatch<React.SetStateAction<T[]>>,
+      incoming: T[]
+    ) => {
+      if (!incoming.length) return;
+      setter((prev) => {
+        const byId = new Map(prev.map((r) => [r.id, r]));
+        incoming.forEach((r) => byId.set(r.id, { ...byId.get(r.id), ...r }));
+        return Array.from(byId.values());
+      });
+    };
     try {
-      const [txRes, acctRes, plaidRes] = await Promise.all([
+      const [txRes, acctRes, plaidRes, billsRes, budgetsRes, goalsRes, tasksRes, projectsRes] = await Promise.all([
         fetch(`${base}/api/transactions`, { headers: hdrs }),
         fetch(`${base}/api/accounts`, { headers: hdrs }),
         fetch(`${base}/api/plaid/items`, { headers: hdrs }),
+        fetch(`${base}/api/bills`, { headers: hdrs }),
+        fetch(`${base}/api/budgets`, { headers: hdrs }),
+        fetch(`${base}/api/goals`, { headers: hdrs }),
+        fetch(`${base}/api/tasks`, { headers: hdrs }),
+        fetch(`${base}/api/projects`, { headers: hdrs }),
       ]);
       if (txRes.ok) {
         const txs: Transaction[] = await txRes.json();
@@ -1545,6 +1589,11 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
         setPlaidSync({ items });
         AsyncStorage.setItem(STORAGE_KEYS.plaidSync, JSON.stringify({ items }));
       }
+      if (billsRes.ok) mergeById(setBills, await billsRes.json());
+      if (budgetsRes.ok) mergeById(setBudgets, await budgetsRes.json());
+      if (goalsRes.ok) mergeById(setGoals, await goalsRes.json());
+      if (tasksRes.ok) mergeById(setTasks, await tasksRes.json());
+      if (projectsRes.ok) mergeById(setProjects, await projectsRes.json());
     } catch {}
   }, []);
 
@@ -1659,22 +1708,19 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
     const newB: Budget = { ...b, id: genId(), createdAt: now, updatedAt: now };
     setBudgets((prev) => [...prev, newB]);
     checkBudgetAndNotify(transactionsRef.current, [...budgetsRef.current, newB]);
-    if (syncPrefsRef.current.budgets)
-      apiCall("/api/budgets", "POST", householdIdRef.current, deviceIdRef.current, { ...newB, householdId: householdIdRef.current, deviceId: deviceIdRef.current });
+    apiCall("/api/budgets", "POST", householdIdRef.current, deviceIdRef.current, { ...newB, householdId: householdIdRef.current, deviceId: deviceIdRef.current });
   }, []);
 
   const updateBudget = useCallback((id: string, updates: Partial<Budget>) => {
     const updatedBudgets = budgetsRef.current.map((b) => (b.id === id ? { ...b, ...updates } : b));
     setBudgets((prev) => prev.map((b) => (b.id === id ? { ...b, ...updates, updatedAt: new Date().toISOString() } : b)));
     checkBudgetAndNotify(transactionsRef.current, updatedBudgets);
-    if (syncPrefsRef.current.budgets)
-      apiCall(`/api/budgets/${id}`, "PUT", householdIdRef.current, deviceIdRef.current, updates);
+    apiCall(`/api/budgets/${id}`, "PUT", householdIdRef.current, deviceIdRef.current, updates);
   }, []);
 
   const deleteBudget = useCallback((id: string) => {
     setBudgets((prev) => prev.filter((b) => b.id !== id));
-    if (syncPrefsRef.current.budgets)
-      apiCall(`/api/budgets/${id}`, "DELETE", householdIdRef.current, deviceIdRef.current);
+    apiCall(`/api/budgets/${id}`, "DELETE", householdIdRef.current, deviceIdRef.current);
   }, []);
 
   // ── CRUD: Goals ───────────────────────────────────────────────────────────
@@ -1682,20 +1728,17 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
     const now = new Date().toISOString();
     const newG: Goal = { ...g, id: genId(), createdAt: now, updatedAt: now };
     setGoals((prev) => [...prev, newG]);
-    if (syncPrefsRef.current.goals)
-      apiCall("/api/goals", "POST", householdIdRef.current, deviceIdRef.current, { ...newG, householdId: householdIdRef.current, deviceId: deviceIdRef.current });
+    apiCall("/api/goals", "POST", householdIdRef.current, deviceIdRef.current, { ...newG, householdId: householdIdRef.current, deviceId: deviceIdRef.current });
   }, []);
 
   const updateGoal = useCallback((id: string, updates: Partial<Goal>) => {
     setGoals((prev) => prev.map((g) => (g.id === id ? { ...g, ...updates, updatedAt: new Date().toISOString() } : g)));
-    if (syncPrefsRef.current.goals)
-      apiCall(`/api/goals/${id}`, "PUT", householdIdRef.current, deviceIdRef.current, updates);
+    apiCall(`/api/goals/${id}`, "PUT", householdIdRef.current, deviceIdRef.current, updates);
   }, []);
 
   const deleteGoal = useCallback((id: string) => {
     setGoals((prev) => prev.filter((g) => g.id !== id));
-    if (syncPrefsRef.current.goals)
-      apiCall(`/api/goals/${id}`, "DELETE", householdIdRef.current, deviceIdRef.current);
+    apiCall(`/api/goals/${id}`, "DELETE", householdIdRef.current, deviceIdRef.current);
   }, []);
 
   // ── CRUD: Tasks ───────────────────────────────────────────────────────────
@@ -1706,8 +1749,7 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
     if (newT.reminderEnabled && newT.reminderDate)
       scheduleTaskReminder({ id: newT.id, title: newT.title, reminderDate: newT.reminderDate, notes: newT.notes });
     scheduleTaskDueNotification({ id: newT.id, title: newT.title, dueDate: newT.dueDate, notes: newT.notes });
-    if (syncPrefsRef.current.tasks)
-      apiCall("/api/tasks", "POST", householdIdRef.current, deviceIdRef.current, { ...newT, householdId: householdIdRef.current, deviceId: deviceIdRef.current });
+    apiCall("/api/tasks", "POST", householdIdRef.current, deviceIdRef.current, { ...newT, householdId: householdIdRef.current, deviceId: deviceIdRef.current });
   }, []);
 
   const updateTask = useCallback((id: string, updates: Partial<Task>) => {
@@ -1720,16 +1762,14 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
       scheduleTaskDueNotification({ id: updated.id, title: updated.title, dueDate: updated.dueDate, notes: updated.notes });
       return updated;
     }));
-    if (syncPrefsRef.current.tasks)
-      apiCall(`/api/tasks/${id}`, "PUT", householdIdRef.current, deviceIdRef.current, updates);
+    apiCall(`/api/tasks/${id}`, "PUT", householdIdRef.current, deviceIdRef.current, updates);
   }, []);
 
   const deleteTask = useCallback((id: string) => {
     setTasks((prev) => prev.filter((t) => t.id !== id));
     cancelTaskReminder(id);
     cancelTaskDueNotification(id);
-    if (syncPrefsRef.current.tasks)
-      apiCall(`/api/tasks/${id}`, "DELETE", householdIdRef.current, deviceIdRef.current);
+    apiCall(`/api/tasks/${id}`, "DELETE", householdIdRef.current, deviceIdRef.current);
   }, []);
 
   // ── CRUD: Bills ───────────────────────────────────────────────────────────
@@ -1737,45 +1777,39 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
     const now = new Date().toISOString();
     const newB: Bill = { ...b, id: genId(), createdAt: now, updatedAt: now };
     setBills((prev) => [...prev, newB]);
-    if (syncPrefsRef.current.bills)
-      apiCall("/api/bills", "POST", householdIdRef.current, deviceIdRef.current, newB);
+    apiCall("/api/bills", "POST", householdIdRef.current, deviceIdRef.current, newB);
     scheduleBillNotifications(newB);
   }, []);
 
   const updateBill = useCallback((id: string, updates: Partial<Bill>) => {
     setBills((prev) => prev.map((b) => (b.id === id ? { ...b, ...updates, updatedAt: new Date().toISOString() } : b)));
-    if (syncPrefsRef.current.bills)
-      apiCall(`/api/bills/${id}`, "PUT", householdIdRef.current, deviceIdRef.current, updates);
+    apiCall(`/api/bills/${id}`, "PUT", householdIdRef.current, deviceIdRef.current, updates);
     const existing = billsRef.current.find((b) => b.id === id);
     if (existing) scheduleBillNotifications({ ...existing, ...updates });
   }, []);
 
   const deleteBill = useCallback((id: string) => {
     setBills((prev) => prev.filter((b) => b.id !== id));
-    if (syncPrefsRef.current.bills)
-      apiCall(`/api/bills/${id}`, "DELETE", householdIdRef.current, deviceIdRef.current);
+    apiCall(`/api/bills/${id}`, "DELETE", householdIdRef.current, deviceIdRef.current);
     cancelBillNotifications(id);
   }, []);
 
   const addProject = useCallback((p: Omit<Project, "id" | "createdAt">): string => {
     const created: Project = { ...p, id: genId(), createdAt: new Date().toISOString() };
     setProjects((prev) => [...prev, created]);
-    if (syncPrefsRef.current.projects)
-      apiCall("/api/projects", "POST", householdIdRef.current, deviceIdRef.current, { ...created, householdId: householdIdRef.current, deviceId: deviceIdRef.current });
+    apiCall("/api/projects", "POST", householdIdRef.current, deviceIdRef.current, { ...created, householdId: householdIdRef.current, deviceId: deviceIdRef.current });
     return created.id;
   }, []);
 
   const updateProject = useCallback((id: string, updates: Partial<Project>) => {
     setProjects((prev) => prev.map((p) => (p.id === id ? { ...p, ...updates } : p)));
-    if (syncPrefsRef.current.projects)
-      apiCall(`/api/projects/${id}`, "PUT", householdIdRef.current, deviceIdRef.current, updates);
+    apiCall(`/api/projects/${id}`, "PUT", householdIdRef.current, deviceIdRef.current, updates);
   }, []);
 
   const deleteProject = useCallback((id: string) => {
     setProjects((prev) => prev.filter((p) => p.id !== id));
     setTransactions((prev) => prev.map((t) => (t.projectId === id ? { ...t, projectId: undefined, projectName: undefined } : t)));
-    if (syncPrefsRef.current.projects)
-      apiCall(`/api/projects/${id}`, "DELETE", householdIdRef.current, deviceIdRef.current);
+    apiCall(`/api/projects/${id}`, "DELETE", householdIdRef.current, deviceIdRef.current);
   }, []);
 
   const addCategory = useCallback((c: Omit<Category, "id" | "householdId" | "createdAt" | "updatedAt">) => {
@@ -2003,73 +2037,6 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
     });
   }, []);
 
-  // ── DB sync helpers (called by data-storage screen) ──────────────────────
-  const uploadToDb = useCallback(async (type: SyncableType, uploadExisting: boolean): Promise<{ uploaded: number; error?: string }> => {
-    if (!uploadExisting) return { uploaded: 0 };
-    const hId = householdIdRef.current;
-    const dId = deviceIdRef.current;
-    const endpointMap: Record<SyncableType, string> = {
-      budgets: "/api/budgets",
-      goals: "/api/goals",
-      tasks: "/api/tasks",
-      projects: "/api/projects",
-      bills: "/api/bills",
-      holdings: "/api/holdings",
-      investmentTransactions: "/api/investment-transactions",
-    };
-    const recordsMap: Record<SyncableType, any[]> = {
-      budgets: budgetsRef.current.map((b) => ({ ...b, householdId: hId, deviceId: dId })),
-      goals: goalsRef.current.map((g) => ({ ...g, householdId: hId, deviceId: dId })),
-      tasks: tasksRef.current.map((t) => ({ ...t, householdId: hId, deviceId: dId })),
-      projects: projectsRef.current.map((p) => ({ ...p, householdId: hId, deviceId: dId })),
-      bills: billsRef.current.map((b) => ({ ...b, householdId: hId, deviceId: dId })),
-      holdings: holdingsRef.current.map((h) => ({ ...h, householdId: hId, deviceId: dId })),
-      investmentTransactions: investmentTransactionsRef.current.map((t) => ({ ...t, householdId: hId, deviceId: dId })),
-    };
-    const records = recordsMap[type];
-    const endpoint = endpointMap[type];
-    let uploaded = 0;
-    for (const record of records) {
-      const res = await apiCall(endpoint, "POST", hId, dId, record);
-      if (res?.ok) uploaded++;
-    }
-    return { uploaded };
-  }, []);
-
-  const pullFromDb = useCallback(async (type: SyncableType, since?: string): Promise<{ pulled: number; error?: string }> => {
-    const hId = householdIdRef.current;
-    const dId = deviceIdRef.current;
-    const endpointMap: Record<SyncableType, string> = {
-      budgets: "/api/budgets",
-      goals: "/api/goals",
-      tasks: "/api/tasks",
-      projects: "/api/projects",
-      bills: "/api/bills",
-      holdings: "/api/holdings",
-      investmentTransactions: "/api/investment-transactions",
-    };
-    const endpoint = endpointMap[type];
-    const url = `${endpoint}${since ? `?since=${encodeURIComponent(since)}` : ""}`;
-    const res = await apiCall(url, "GET", hId, dId);
-    if (!res?.ok) return { pulled: 0, error: "Fetch failed" };
-    const data: any[] = await res.json();
-    if (!Array.isArray(data) || data.length === 0) return { pulled: 0 };
-    const merge = <T extends { id: string }>(setter: React.Dispatch<React.SetStateAction<T[]>>, incoming: T[]) => {
-      setter((prev) => {
-        const byId = new Map(prev.map((r) => [r.id, r]));
-        incoming.forEach((r) => byId.set(r.id, { ...byId.get(r.id), ...r }));
-        return Array.from(byId.values());
-      });
-    };
-    if (type === "budgets") merge(setBudgets, data as Budget[]);
-    else if (type === "goals") merge(setGoals, data as Goal[]);
-    else if (type === "tasks") merge(setTasks, data as Task[]);
-    else if (type === "projects") merge(setProjects, data as Project[]);
-    else if (type === "bills") merge(setBills, data as Bill[]);
-    else if (type === "holdings") merge(setHoldings, data as Holding[]);
-    else if (type === "investmentTransactions") merge(setInvestmentTransactions, data as InvestmentTransaction[]);
-    return { pulled: data.length };
-  }, []);
 
   const seedCategories = useCallback(async () => {
     setIsSyncing(true);
@@ -2970,6 +2937,7 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
   const isAutoSyncingRef = useRef(false);
   const lastAutoSyncRef = useRef<number>(0);
   const lastBillCheckRef = useRef<number>(0);
+  const lastDbPullRef = useRef<number>(0);
   useEffect(() => {
     const THREE_HOURS = 3 * 60 * 60 * 1000;
     const ONE_HOUR = 60 * 60 * 1000;
@@ -3048,9 +3016,47 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
       isAutoSyncingRef.current = false;
     };
 
+    const FIVE_MINUTES = 5 * 60 * 1000;
+    const pullAllFromDb = () => {
+      const now = Date.now();
+      if (now - lastDbPullRef.current < FIVE_MINUTES) return;
+      lastDbPullRef.current = now;
+      const hId = householdIdRef.current;
+      const dId = deviceIdRef.current;
+      if (!hId) return;
+      const hdrs = { "X-Household-ID": hId, "X-Device-ID": dId };
+      const merge = <T extends { id: string }>(
+        setter: React.Dispatch<React.SetStateAction<T[]>>,
+        incoming: T[]
+      ) => {
+        if (!incoming.length) return;
+        setter((prev) => {
+          const byId = new Map(prev.map((r) => [r.id, r]));
+          incoming.forEach((r) => byId.set(r.id, { ...byId.get(r.id), ...r }));
+          return Array.from(byId.values());
+        });
+      };
+      const base = getApiBase();
+      Promise.allSettled([
+        fetch(`${base}/api/plaid/items`, { headers: hdrs })
+          .then(async (r) => { if (r.ok) { const items: PlaidItem[] = await r.json(); setPlaidSync({ items }); } }),
+        fetch(`${base}/api/bills`, { headers: hdrs })
+          .then(async (r) => { if (r.ok) merge(setBills, await r.json()); }),
+        fetch(`${base}/api/budgets`, { headers: hdrs })
+          .then(async (r) => { if (r.ok) merge(setBudgets, await r.json()); }),
+        fetch(`${base}/api/goals`, { headers: hdrs })
+          .then(async (r) => { if (r.ok) merge(setGoals, await r.json()); }),
+        fetch(`${base}/api/tasks`, { headers: hdrs })
+          .then(async (r) => { if (r.ok) merge(setTasks, await r.json()); }),
+        fetch(`${base}/api/projects`, { headers: hdrs })
+          .then(async (r) => { if (r.ok) merge(setProjects, await r.json()); }),
+      ]).catch(() => {});
+    };
+
     const onForeground = () => {
       checkBills();
       doAutoSync();
+      pullAllFromDb();
     };
 
     const sub = AppState.addEventListener("change", (state) => {
@@ -3135,7 +3141,6 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
         // investmentTransactions + holdings already exposed above
         isSyncing, totalBalance, monthlyIncome, monthlyExpense,
         deviceId, householdId, changeHouseholdId,
-        uploadToDb, pullFromDb,
       }}
     >
       {children}
