@@ -3104,7 +3104,11 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
 
   // ── Computed values ───────────────────────────────────────────────────────
   const now = new Date();
-  const monthStart = new Date(now.getFullYear(), now.getMonth(), 1).toISOString();
+  // Use plain YYYY-MM-DD so string comparison works with stored transaction dates.
+  // new Date(...).toISOString() gives "2026-05-01T04:00:00.000Z" (UTC offset),
+  // which makes "2026-05-01" < "2026-05-01T04:..." causing 1st-of-month transactions
+  // to be silently excluded.
+  const monthStart = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, "0")}-01`;
   const thisMonthTx = transactions.filter((t) => t.date >= monthStart);
   const monthlyIncome = thisMonthTx.filter((t) => t.type === "income" && t.category !== "Transfer" && t.category?.toLowerCase() !== "transfer").reduce((s, t) => s + t.amount, 0);
   const monthlyExpense = thisMonthTx.filter((t) => t.type === "expense" && t.category !== "Transfer" && t.category?.toLowerCase() !== "transfer").reduce((s, t) => s + t.amount, 0);
