@@ -3074,6 +3074,7 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
       const now = Date.now();
       if (now - lastAutoSyncRef.current < THREE_HOURS) return;
       const items = plaidSyncRef.current.items;
+      if (items.length === 0) return; // Wait until Plaid bank items are loaded from the database!
       isAutoSyncingRef.current = true;
       lastAutoSyncRef.current = now;
       for (const item of items) {
@@ -3105,7 +3106,16 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
       const base = getApiBase();
       Promise.allSettled([
         fetch(`${base}/api/plaid/items`, { headers: hdrs })
-          .then(async (r) => { if (r.ok) { const items: PlaidItem[] = await r.json(); setPlaidSync({ items }); } }),
+          .then(async (r) => {
+            if (r.ok) {
+              const items: PlaidItem[] = await r.json();
+              setPlaidSync({ items });
+              // Trigger auto sync immediately after items load if it hasn't run yet!
+              if (items.length > 0 && lastAutoSyncRef.current === 0) {
+                setTimeout(() => { doAutoSync(); }, 100);
+              }
+            }
+          }),
         fetch(`${base}/api/bills`, { headers: hdrs })
           .then(async (r) => { if (r.ok) merge(setBills, await r.json()); }),
         fetch(`${base}/api/budgets`, { headers: hdrs })
