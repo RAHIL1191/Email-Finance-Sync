@@ -65,6 +65,7 @@ function TaskFormSheet({
   const [priority,        setPriority]        = useState<Task["priority"]>("medium");
   const [reminderEnabled,    setReminderEnabled]    = useState(false);
   const [reminderDate,       setReminderDate]       = useState(new Date());
+  const [reminderFrequency,  setReminderFrequency]  = useState<"once" | "daily" | "weekly" | "monthly">("once");
   const [showRemDatePicker,  setShowRemDatePicker]  = useState(false);
   const [showRemTimePicker,  setShowRemTimePicker]  = useState(false);
   const [notes,           setNotes]           = useState("");
@@ -96,6 +97,7 @@ function TaskFormSheet({
       setPriority(initial.priority);
       setReminderEnabled(initial.reminderEnabled);
       setReminderDate(initial.reminderDate ? new Date(initial.reminderDate) : new Date());
+      setReminderFrequency(initial.reminderFrequency ?? "once");
       setShowRemDatePicker(false); setShowRemTimePicker(false);
       setNotes(initial.notes ?? "");
       setChecklistItems(initial.checklistItems ?? []);
@@ -103,6 +105,7 @@ function TaskFormSheet({
       setTitle(""); setCategory("Subscription"); setEmail(""); setPaymentMode("");
       setDueDate(new Date()); setPriority("medium");
       setReminderEnabled(false); setReminderDate(new Date());
+      setReminderFrequency("once");
       setShowRemDatePicker(false); setShowRemTimePicker(false);
       setNotes(""); setChecklistItems([]); setNewItemText("");
       setNotesHeight(80);
@@ -121,6 +124,7 @@ function TaskFormSheet({
       priority,
       reminderEnabled,
       reminderDate:    reminderEnabled ? reminderDate.toISOString() : undefined,
+      reminderFrequency: reminderEnabled ? reminderFrequency : undefined,
       notes:           notes.trim() || undefined,
       checklistItems:  checklistItems.length > 0 ? checklistItems : undefined,
       isCompleted:     initial?.isCompleted ?? false,
@@ -287,6 +291,7 @@ function TaskFormSheet({
                   {reminderDate.toLocaleDateString("en-US", { month: "short", day: "numeric", year: "numeric" })}
                   {"  ·  "}
                   {reminderDate.toLocaleTimeString("en-US", { hour: "2-digit", minute: "2-digit" })}
+                  {reminderFrequency && reminderFrequency !== "once" ? `  ·  ${reminderFrequency.charAt(0).toUpperCase() + reminderFrequency.slice(1)}` : ""}
                 </Text>
               )}
             </View>
@@ -343,6 +348,24 @@ function TaskFormSheet({
                   }}
                 />
               )}
+              {/* Frequency chips */}
+              <Text style={[f.label, { color: colors.mutedForeground, marginTop: 8, marginBottom: 4 }]}>Frequency</Text>
+              <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={f.chipRow}>
+                {(["once", "daily", "weekly", "monthly"] as const).map((freq) => {
+                  const on = reminderFrequency === freq;
+                  return (
+                    <TouchableOpacity
+                      key={freq}
+                      style={[f.chip, { backgroundColor: on ? colors.primary + "22" : colors.background, borderColor: on ? colors.primary : colors.border }]}
+                      onPress={() => { Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light); setReminderFrequency(freq); }}
+                    >
+                      <Text style={[f.chipTxt, { color: on ? colors.primary : colors.foreground }]}>
+                        {freq.charAt(0).toUpperCase() + freq.slice(1)}
+                      </Text>
+                    </TouchableOpacity>
+                  );
+                })}
+              </ScrollView>
             </View>
           )}
 
@@ -710,7 +733,7 @@ function TaskCard({ task, onToggle, onEdit, onDelete }: {
           <View style={[ts.remBadge, { backgroundColor: "#f59e0b18" }]}>
             <Feather name="bell" size={11} color="#f59e0b" />
             <Text style={[ts.remTxt, { color: "#f59e0b" }]}>
-              Reminder · {new Date(task.reminderDate).toLocaleDateString("en-US", { month: "short", day: "numeric" })}
+              Reminder{task.reminderFrequency && task.reminderFrequency !== "once" ? ` (${task.reminderFrequency.charAt(0).toUpperCase() + task.reminderFrequency.slice(1)})` : ""} · {new Date(task.reminderDate).toLocaleDateString("en-US", { month: "short", day: "numeric" })}
               {"  "}{new Date(task.reminderDate).toLocaleTimeString("en-US", { hour: "2-digit", minute: "2-digit" })}
             </Text>
           </View>

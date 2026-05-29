@@ -323,11 +323,11 @@ export async function rescheduleAllBillNotifications(bills: BillLike[]): Promise
 
 // ─── Task notifications ───────────────────────────────────────────────────────
 
-interface TaskLike { id: string; title: string; reminderDate: string; notes?: string; }
+interface TaskLike { id: string; title: string; reminderDate: string; reminderFrequency?: "once" | "daily" | "weekly" | "monthly"; notes?: string; }
 
-/** Schedule a one-time reminder notification for a task. */
+/** Schedule a one-time or recurring reminder notification for a task. */
 export async function scheduleTaskReminder(task: TaskLike): Promise<void> {
-  console.log("[NotificationService] scheduleTaskReminder CALLED for task:", task.title);
+  console.log("[NotificationService] scheduleTaskReminder CALLED for task:", task.title, "frequency:", task.reminderFrequency);
   const N = await getNotif();
   if (!N) {
     console.log("[NotificationService] scheduleTaskReminder FAILED: getNotif() returned null (Web platform or module load failure).");
@@ -345,15 +345,55 @@ export async function scheduleTaskReminder(task: TaskLike): Promise<void> {
     console.log("[NotificationService] Trigger Date parsed:", triggerDate.toISOString(), "timestamp:", triggerDate.getTime());
     console.log("[NotificationService] Current Time:", new Date().toISOString(), "timestamp:", Date.now());
     
-    if (triggerDate.getTime() <= Date.now()) {
-      console.log("[NotificationService] scheduleTaskReminder SKIPPED: triggerDate is in the PAST or NOW.");
+    const isPast = triggerDate.getTime() <= Date.now();
+    if (isPast && (!task.reminderFrequency || task.reminderFrequency === "once")) {
+      console.log("[NotificationService] scheduleTaskReminder SKIPPED: triggerDate is in the PAST or NOW for one-time reminder.");
       return;
     }
     
     console.log("[NotificationService] Canceling existing reminder for task:", task.id);
     await N.cancelScheduledNotificationAsync(`task-${task.id}`).catch(() => {});
     
-    console.log("[NotificationService] Scheduling notification via Expo...");
+    let trigger: any = {
+      type: "date",
+      date: triggerDate,
+      repeats: false,
+    };
+
+    if (task.reminderFrequency === "daily") {
+      trigger = {
+        type: "daily",
+        hour: triggerDate.getHours(),
+        minute: triggerDate.getMinutes(),
+        repeats: true,
+      };
+    } else if (task.reminderFrequency === "weekly") {
+      trigger = {
+        type: "weekly",
+        weekday: triggerDate.getDay() + 1,
+        hour: triggerDate.getHours(),
+        minute: triggerDate.getMinutes(),
+        repeats: true,
+      };
+    } else if (task.reminderFrequency === "monthly") {
+      if (Platform.OS === "ios") {
+        trigger = {
+          type: "calendar",
+          day: triggerDate.getDate(),
+          hour: triggerDate.getHours(),
+          minute: triggerDate.getMinutes(),
+          repeats: true,
+        };
+      } else {
+        trigger = {
+          type: "date",
+          date: isPast ? new Date(Date.now() + 5000) : triggerDate,
+          repeats: false,
+        };
+      }
+    }
+
+    console.log("[NotificationService] Scheduling notification via Expo with trigger:", trigger);
     const scheduledId = await N.scheduleNotificationAsync({
       identifier: `task-${task.id}`,
       content: {
@@ -363,11 +403,7 @@ export async function scheduleTaskReminder(task: TaskLike): Promise<void> {
         channelId: "default",
         data: { taskId: task.id, type: "task" },
       } as any,
-      trigger: {
-        type: "date",
-        date: triggerDate,
-        repeats: false,
-      } as any,
+      trigger,
     });
     console.log("[NotificationService] scheduleTaskReminder SUCCESS! Scheduled ID:", scheduledId);
   } catch (err) {
@@ -440,7 +476,7 @@ export async function cancelTaskDueNotification(taskId: string): Promise<void> {
 
 /** Reschedule all task notifications — requests permission if not yet granted (use from Notifications screen). */
 export async function rescheduleAllTaskNotifications(
-  tasks: Array<{ id: string; title: string; dueDate: string; reminderEnabled: boolean; reminderDate?: string; notes?: string; isCompleted: boolean }>
+  tasks: Array<{ id: string; title: string; dueDate: string; reminderEnabled: boolean; reminderDate?: string; reminderFrequency?: "once" | "daily" | "weekly" | "monthly"; notes?: string; isCompleted: boolean }>
 ): Promise<void> {
   if (Platform.OS === "web") return;
   try {
@@ -452,7 +488,7 @@ export async function rescheduleAllTaskNotifications(
         await cancelTaskDueNotification(task.id);
       } else {
         if (task.reminderEnabled && task.reminderDate) {
-          await scheduleTaskReminder({ id: task.id, title: task.title, reminderDate: task.reminderDate, notes: task.notes });
+          await scheduleTaskReminder({ id: task.id, title: task.title, reminderDate: task.reminderDate, reminderFrequency: task.reminderFrequency, notes: task.notes });
         } else {
           await cancelTaskReminder(task.id);
         }
@@ -464,7 +500,7 @@ export async function rescheduleAllTaskNotifications(
 
 /** Called on app init: reschedule task notifications only if permission already granted. */
 export async function setupTaskNotificationsOnInit(
-  tasks: Array<{ id: string; title: string; dueDate: string; reminderEnabled: boolean; reminderDate?: string; notes?: string; isCompleted: boolean }>
+  tasks: Array<{ id: string; title: string; dueDate: string; reminderEnabled: boolean; reminderDate?: string; reminderFrequency?: "once" | "daily" | "weekly" | "monthly"; notes?: string; isCompleted: boolean }>
 ): Promise<void> {
   if (Platform.OS === "web") return;
   try {
@@ -475,7 +511,7 @@ export async function setupTaskNotificationsOnInit(
     for (const task of tasks) {
       if (!task.isCompleted) {
         if (task.reminderEnabled && task.reminderDate) {
-          await scheduleTaskReminder({ id: task.id, title: task.title, reminderDate: task.reminderDate, notes: task.notes });
+          await scheduleTaskReminder({ id: task.id, title: task.title, reminderDate: task.reminderDate, reminderFrequency: task.reminderFrequency, notes: task.notes });
         }
         await scheduleTaskDueNotification({ id: task.id, title: task.title, dueDate: task.dueDate, notes: task.notes });
       }

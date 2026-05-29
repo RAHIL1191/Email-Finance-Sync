@@ -143,6 +143,7 @@ export interface Task {
   isCompleted: boolean;
   reminderEnabled: boolean;
   reminderDate?: string;
+  reminderFrequency?: "once" | "daily" | "weekly" | "monthly";
   createdAt: string;
   updatedAt: string;
 }
@@ -1282,9 +1283,38 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
         registerPushTokenWithServer(getApiBase(), hId, dId);
         setBudgets(budgetRaw ? JSON.parse(budgetRaw) : []);
         setGoals(goalRaw ? JSON.parse(goalRaw) : []);
-        const parsedTasks = taskRaw ? JSON.parse(taskRaw) : [];
-        setTasks(parsedTasks);
-        setupTaskNotificationsOnInit(parsedTasks);
+        
+        const advanceReminderDate = (date: Date, freq: string): Date => {
+          const d = new Date(date);
+          switch (freq) {
+            case "daily":   d.setDate(d.getDate() + 1);   break;
+            case "weekly":  d.setDate(d.getDate() + 7);   break;
+            case "monthly": d.setMonth(d.getMonth() + 1); break;
+          }
+          return d;
+        };
+
+        const parsedTasks: Task[] = taskRaw ? JSON.parse(taskRaw) : [];
+        let tasksUpdated = false;
+        const migratedTasks = parsedTasks.map((t) => {
+          if (!t.isCompleted && t.reminderEnabled && t.reminderDate && t.reminderFrequency && t.reminderFrequency !== "once") {
+            let d = new Date(t.reminderDate);
+            if (d.getTime() < Date.now()) {
+              do {
+                d = advanceReminderDate(d, t.reminderFrequency);
+              } while (d.getTime() < Date.now());
+              tasksUpdated = true;
+              return { ...t, reminderDate: d.toISOString() };
+            }
+          }
+          return t;
+        });
+
+        setTasks(migratedTasks);
+        if (tasksUpdated) {
+          AsyncStorage.setItem(STORAGE_KEYS.tasks, JSON.stringify(migratedTasks)).catch(() => {});
+        }
+        setupTaskNotificationsOnInit(migratedTasks);
         setProjects(projectRaw ? JSON.parse(projectRaw) : []);
         setCategoryRules(rulesRaw ? JSON.parse(rulesRaw) : []);
         if (emailRaw) setEmailSync(JSON.parse(emailRaw));
@@ -1799,7 +1829,7 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
     const newT: Task = { ...t, id: genId(), createdAt: now, updatedAt: now };
     setTasks((prev) => [...prev, newT]);
     if (newT.reminderEnabled && newT.reminderDate)
-      scheduleTaskReminder({ id: newT.id, title: newT.title, reminderDate: newT.reminderDate, notes: newT.notes });
+      scheduleTaskReminder({ id: newT.id, title: newT.title, reminderDate: newT.reminderDate, reminderFrequency: newT.reminderFrequency, notes: newT.notes });
     scheduleTaskDueNotification({ id: newT.id, title: newT.title, dueDate: newT.dueDate, notes: newT.notes });
     apiCall("/api/tasks", "POST", householdIdRef.current, deviceIdRef.current, { ...newT, householdId: householdIdRef.current, deviceId: deviceIdRef.current });
   }, []);
@@ -1809,7 +1839,7 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
       if (t.id !== id) return t;
       const updated: Task = { ...t, ...updates, updatedAt: new Date().toISOString() };
       if (updated.reminderEnabled && updated.reminderDate)
-        scheduleTaskReminder({ id: updated.id, title: updated.title, reminderDate: updated.reminderDate, notes: updated.notes });
+        scheduleTaskReminder({ id: updated.id, title: updated.title, reminderDate: updated.reminderDate, reminderFrequency: updated.reminderFrequency, notes: updated.notes });
       else cancelTaskReminder(id);
       scheduleTaskDueNotification({ id: updated.id, title: updated.title, dueDate: updated.dueDate, notes: updated.notes });
       return updated;
