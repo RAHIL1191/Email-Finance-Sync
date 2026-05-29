@@ -114,6 +114,15 @@ function TaskFormSheet({
 
   const save = () => {
     if (!title.trim()) { Alert.alert("Missing Title", "Please enter a task title."); return; }
+    if (reminderEnabled) {
+      if (reminderDate.getTime() <= Date.now()) {
+        Alert.alert(
+          "Invalid Reminder Time",
+          "Reminder date and time cannot be in the past. If you are scheduling a reminder for today, please select a time in the future."
+        );
+        return;
+      }
+    }
     Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
     onSave({
       title:           title.trim(),
