@@ -33,7 +33,7 @@ services:
       - key: AI_INTEGRATIONS_OPENROUTER_API_KEY
         sync: false
       - key: AI_MODEL
-        value: qwen/qwen3-30b-a3b-instruct:free
+        value: openrouter/free
 
       # ── Plaid ───────────────────────────────────────────────────────────────
       - key: PLAID_CLIENT_ID

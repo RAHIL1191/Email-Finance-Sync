@@ -42,6 +42,7 @@ function RootLayoutNav() {
       <Stack.Screen name="projects" options={{ headerShown: false, animation: "slide_from_right" }} />
       <Stack.Screen name="project-detail" options={{ headerShown: false, animation: "slide_from_right" }} />
       <Stack.Screen name="notifications" options={{ headerShown: false, animation: "slide_from_right" }} />
+      <Stack.Screen name="alerts" options={{ headerShown: false, animation: "slide_from_right" }} />
       <Stack.Screen name="data-storage" options={{ headerShown: false, animation: "slide_from_right" }} />
       <Stack.Screen name="settings" options={{ headerShown: false, animation: "slide_from_right" }} />
       <Stack.Screen name="category-mapping" options={{ headerShown: false, animation: "slide_from_right" }} />

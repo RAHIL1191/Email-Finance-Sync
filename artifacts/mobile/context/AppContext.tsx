@@ -295,6 +295,16 @@ export interface CategoryRule {
   updatedAt: string;
 }
 
+export interface AlertLog {
+  id: string;
+  title: string;
+  body: string;
+  type: "bill" | "budget" | "task" | "sync" | "general";
+  date: string; // ISO string
+  isRead: boolean;
+  stableKey?: string;
+}
+
 interface AppContextType {
   transactions: Transaction[];
   accounts: Account[];
@@ -368,6 +378,11 @@ interface AppContextType {
   deviceId: string;
   householdId: string;
   changeHouseholdId: (code: string) => Promise<void>;
+  alerts: AlertLog[];
+  addAlert: (title: string, body: string, type: AlertLog["type"], stableKey?: string) => void;
+  markAlertRead: (id: string) => void;
+  markAllAlertsRead: () => void;
+  clearAllAlerts: () => void;
 }
 
 const AppContext = createContext<AppContextType | null>(null);
@@ -395,6 +410,7 @@ const STORAGE_KEYS = {
   investmentTransactions: "@fintrack/investmentTransactions",
   holdings: "@fintrack/holdings",
   rrspLimit: "@fintrack/rrspLimit",
+  alerts: "@fintrack/alerts",
 };
 
 // ── Helpers ──────────────────────────────────────────────────────────────────
@@ -1144,6 +1160,7 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
   const [householdId, setHouseholdId] = useState<string>("");
   const [userName, setUserNameState] = useState<string>("");
   const [reviewedTransactionIds, setReviewedTransactionIds] = useState<string[]>([]);
+  const [alerts, setAlerts] = useState<AlertLog[]>([]);
   const deviceIdRef = useRef<string>("");
   const householdIdRef = useRef<string>("");
   const accountsRef = useRef<Account[]>([]);
@@ -1157,6 +1174,7 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
   const holdingsRef = useRef<Holding[]>([]);
   const investmentTransactionsRef = useRef<InvestmentTransaction[]>([]);
   const categoryRulesRef = useRef<CategoryRule[]>([]);
+  const alertsRef = useRef<AlertLog[]>([]);
   useEffect(() => { categoryRulesRef.current = categoryRules; }, [categoryRules]);
   const categoriesRef = useRef<Category[]>([]);
   useEffect(() => { categoriesRef.current = categories; }, [categories]);
@@ -1170,11 +1188,12 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
   useEffect(() => { projectsRef.current = projects; }, [projects]);
   useEffect(() => { holdingsRef.current = holdings; }, [holdings]);
   useEffect(() => { investmentTransactionsRef.current = investmentTransactions; }, [investmentTransactions]);
+  useEffect(() => { alertsRef.current = alerts; }, [alerts]);
 
   useEffect(() => {
     (async () => {
       try {
-        const [storedVersion, txRaw, accRaw, billRaw, budgetRaw, goalRaw, projectRaw, catRaw, rulesRaw, emailRaw, plaidRaw, storedDeviceId, storedHouseholdId, storedUserName, storedReviewedIds, taskRaw, invTxRaw, holdRaw, rrspLimitRaw] =
+        const [storedVersion, txRaw, accRaw, billRaw, budgetRaw, goalRaw, projectRaw, catRaw, rulesRaw, emailRaw, plaidRaw, storedDeviceId, storedHouseholdId, storedUserName, storedReviewedIds, taskRaw, invTxRaw, holdRaw, rrspLimitRaw, alertsRaw] =
           await Promise.all([
             AsyncStorage.getItem(STORAGE_KEYS.version),
             AsyncStorage.getItem(STORAGE_KEYS.transactions),
@@ -1195,6 +1214,7 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
             AsyncStorage.getItem(STORAGE_KEYS.investmentTransactions),
             AsyncStorage.getItem(STORAGE_KEYS.holdings),
             AsyncStorage.getItem(STORAGE_KEYS.rrspLimit),
+            AsyncStorage.getItem(STORAGE_KEYS.alerts),
           ]);
 
         const dId = storedDeviceId || generateDeviceId();
@@ -1273,6 +1293,37 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
         if (holdRaw) setHoldings(JSON.parse(holdRaw));
         if (storedUserName) setUserNameState(storedUserName);
         if (storedReviewedIds) setReviewedTransactionIds(JSON.parse(storedReviewedIds));
+
+        // Parse alerts or seed default matching screenshot
+        let loadedAlerts: AlertLog[] = [];
+        if (alertsRaw) {
+          try {
+            loadedAlerts = JSON.parse(alertsRaw);
+          } catch {}
+        }
+        if (loadedAlerts.length === 0) {
+          const makeRelDate = (daysAgo: number, hours = 9, minutes = 0) => {
+            const d = new Date();
+            d.setDate(d.getDate() - daysAgo);
+            d.setHours(hours, minutes, 0, 0);
+            return d.toISOString();
+          };
+          loadedAlerts = [
+            { id: "s1", title: "4 overdue bills", body: "Electricity, Electricity, Electricity, Electricity", type: "bill", date: makeRelDate(0, 8, 29), isRead: false },
+            { id: "s2", title: "4 overdue bills", body: "Electricity, Electricity, Electricity, Electricity", type: "bill", date: makeRelDate(1, 15, 30), isRead: true },
+            { id: "s3", title: "3 overdue bills", body: "Electricity, Electricity, Electricity", type: "bill", date: makeRelDate(2, 11, 20), isRead: true },
+            { id: "s4", title: "3 overdue bills", body: "Electricity, Electricity, Electricity", type: "bill", date: makeRelDate(3, 10, 15), isRead: true },
+            { id: "s5", title: "3 overdue bills", body: "Electricity, Electricity, Electricity", type: "bill", date: makeRelDate(4, 9, 0), isRead: true },
+            { id: "s6", title: "3 overdue bills", body: "Electricity, Electricity, Electricity", type: "bill", date: makeRelDate(5, 8, 45), isRead: true },
+            { id: "s7", title: "3 overdue bills", body: "Electricity, Electricity, Electricity", type: "bill", date: makeRelDate(6, 17, 10), isRead: true },
+            { id: "s8", title: "3 overdue bills", body: "Electricity, Electricity, Electricity", type: "bill", date: makeRelDate(7, 14, 25), isRead: true },
+            { id: "s9", title: "Payment: Electricity", body: "Due Today", type: "bill", date: makeRelDate(8, 8, 0), isRead: true },
+            { id: "s10", title: "2 overdue bills", body: "Electricity, Electricity", type: "bill", date: makeRelDate(8, 8, 30), isRead: true },
+            { id: "s11", title: "2 overdue bills", body: "Electricity, Electricity", type: "bill", date: makeRelDate(9, 10, 0), isRead: true },
+            { id: "s12", title: "Upcoming: Electricity", body: "Due in 1d", type: "bill", date: makeRelDate(9, 8, 15), isRead: true },
+          ];
+        }
+        setAlerts(loadedAlerts);
 
         // ── Load categories ───────────────────────────────────────────────────
         const savedCats: Category[] = catRaw ? JSON.parse(catRaw) : [];
@@ -1461,6 +1512,7 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
   useEffect(() => { if (initialized) AsyncStorage.setItem(STORAGE_KEYS.investmentTransactions, JSON.stringify(investmentTransactions)); }, [investmentTransactions, initialized]);
   useEffect(() => { if (initialized) AsyncStorage.setItem(STORAGE_KEYS.holdings, JSON.stringify(holdings)); }, [holdings, initialized]);
   useEffect(() => { if (initialized) AsyncStorage.setItem(STORAGE_KEYS.rrspLimit, String(rrspLimit)); }, [rrspLimit, initialized]);
+  useEffect(() => { if (initialized) AsyncStorage.setItem(STORAGE_KEYS.alerts, JSON.stringify(alerts)); }, [alerts, initialized]);
 
   // ── Auto backup ──────────────────────────────────────────────────────────
   useEffect(() => {
@@ -2400,6 +2452,13 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
       }));
       setIsSyncing(false);
       syncLockRef.current = false;
+      if (actuallyNew > 0) {
+        addAlert(
+          "✉️ Email Sync Complete",
+          `Successfully imported ${actuallyNew} transaction(s) from your email.`,
+          "sync"
+        );
+      }
       return { imported: actuallyNew, parsed: Array.isArray(data.parsed) ? data.parsed : [] };
     } catch {
       setIsSyncing(false);
@@ -2911,6 +2970,13 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
         }));
         setIsSyncing(false);
         syncLockRef.current = false;
+        if (imported > 0) {
+          addAlert(
+            "🏦 Bank Sync Complete",
+            `Successfully imported ${imported} new transaction(s) from ${item.bankName || "your bank"}.`,
+            "sync"
+          );
+        }
         return { imported, importedTransactions: precomputedFresh };
       } catch {
         setIsSyncing(false);
@@ -3066,6 +3132,93 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
     return () => { sub.remove(); clearInterval(intervalId); };
   }, []);
 
+  const addAlert = useCallback((title: string, body: string, type: AlertLog["type"], stableKey?: string) => {
+    if (stableKey && alertsRef.current.some((a) => a.stableKey === stableKey)) {
+      return;
+    }
+    const newAlert: AlertLog = {
+      id: genId(),
+      title,
+      body,
+      type,
+      date: new Date().toISOString(),
+      isRead: false,
+      stableKey,
+    };
+    alertsRef.current = [newAlert, ...alertsRef.current];
+    setAlerts((prev) => [newAlert, ...prev]);
+  }, []);
+
+  const markAlertRead = useCallback((id: string) => {
+    setAlerts((prev) => prev.map((a) => (a.id === id ? { ...a, isRead: true } : a)));
+  }, []);
+
+  const markAllAlertsRead = useCallback(() => {
+    setAlerts((prev) => prev.map((a) => ({ ...a, isRead: true })));
+  }, []);
+
+  const clearAllAlerts = useCallback(() => {
+    setAlerts([]);
+  }, []);
+
+  // ── Automatic Alerts check (bills & budgets) ──────────────────────────────
+  useEffect(() => {
+    if (!initialized) return;
+
+    // 1. Overdue bills
+    const todayStr = toLocalYMD(new Date());
+    bills.forEach((bill) => {
+      if (!bill.isPaid && bill.dueDate < todayStr) {
+        const stableKey = `bill_overdue_${bill.id}_${bill.dueDate}`;
+        addAlert(
+          `Overdue: ${bill.title}`,
+          `Due date was ${bill.dueDate}. Amount: $${bill.amount.toFixed(2)}`,
+          "bill",
+          stableKey
+        );
+      }
+    });
+
+    // 2. Budget limits
+    const now = new Date();
+    const currentMonthKey = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, "0")}`;
+    const thisMonthTxs = transactions.filter((t) => localYM(t.date) === currentMonthKey);
+
+    budgets.forEach((budget) => {
+      if (budget.type !== "expense") return;
+      const catMatch = (txCat: string) => {
+        if (!budget.category) return true;
+        const a = txCat.toLowerCase();
+        const b = budget.category.toLowerCase();
+        return a.includes(b) || b.includes(a);
+      };
+      const spent = thisMonthTxs
+        .filter((t) => t.type === "expense" && catMatch(t.category ?? ""))
+        .reduce((sum, t) => sum + Math.abs(t.amount), 0);
+
+      const pct = budget.amount > 0 ? spent / budget.amount : 0;
+      const threshold = (budget.alertPct ?? 80) / 100;
+
+      if (pct >= 1) {
+        const stableKey = `budget_exceeded_${budget.id}_${currentMonthKey}`;
+        addAlert(
+          `🚨 Budget Exceeded`,
+          `Your "${budget.name}" budget ($${budget.amount}) has been exceeded by $${(spent - budget.amount).toFixed(2)}.`,
+          "budget",
+          stableKey
+        );
+      } else if (pct >= threshold) {
+        const stableKey = `budget_warning_${budget.id}_${currentMonthKey}`;
+        addAlert(
+          `⚠️ Budget Warning`,
+          `You have used ${Math.round(pct * 100)}% of your "${budget.name}" budget ($${budget.amount}).`,
+          "budget",
+          stableKey
+        );
+      }
+    });
+  }, [initialized, bills, transactions, budgets, addAlert]);
+
   const delinkPlaid = useCallback((itemId: string) => {
     // Remove Plaid token only — keeps accounts and transactions intact, but clears investment data
     setHoldings((prev) => prev.filter((h) => h.plaidItemId !== itemId));
@@ -3101,6 +3254,7 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
       deviceIdRef.current
     );
   }, [plaidSync]);
+
 
   // ── Computed values ───────────────────────────────────────────────────────
   const now = new Date();
@@ -3145,6 +3299,7 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
         // investmentTransactions + holdings already exposed above
         isSyncing, totalBalance, monthlyIncome, monthlyExpense,
         deviceId, householdId, changeHouseholdId,
+        alerts, addAlert, markAlertRead, markAllAlertsRead, clearAllAlerts,
       }}
     >
       {children}

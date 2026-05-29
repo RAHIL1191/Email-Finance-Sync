@@ -7,6 +7,7 @@ import {
   FlatList,
   Modal,
   Platform,
+  Pressable,
   RefreshControl,
   ScrollView,
   StyleSheet,
@@ -194,6 +195,27 @@ const TIPS = [
   { title: "The 50/30/20 Rule Explained", date: "Apr 14", tag: "Budgeting" },
 ];
 
+// ─── Alert relative date formatter ──────────────────────────────────────────
+function formatAlertDate(isoString: string) {
+  const d = new Date(isoString);
+  const now = new Date();
+  if (d.toDateString() === now.toDateString()) {
+    let hours = d.getHours();
+    const minutes = String(d.getMinutes()).padStart(2, "0");
+    const ampm = hours >= 12 ? "PM" : "AM";
+    hours = hours % 12;
+    hours = hours ? hours : 12;
+    return `${hours}:${minutes} ${ampm}`;
+  }
+  const yesterday = new Date();
+  yesterday.setDate(now.getDate() - 1);
+  if (d.toDateString() === yesterday.toDateString()) {
+    return "Yesterday";
+  }
+  const months = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
+  return `${months[d.getMonth()]} ${d.getDate()}`;
+}
+
 // ─── Main screen ──────────────────────────────────────────────────────────────
 export default function HomeScreen() {
   const colors = useColors();
@@ -212,6 +234,7 @@ export default function HomeScreen() {
     isSyncing,
     syncEmailTransactions,
     userName,
+    alerts,
   } = useApp();
 
   const [showSearch, setShowSearch] = useState(false);
@@ -303,22 +326,16 @@ export default function HomeScreen() {
   const upcomingTotal = useMemo(() => pendingBills.reduce((s, b) => s + b.amount, 0), [pendingBills]);
   const paidTotal     = useMemo(() => paidBills.reduce((s, b) => s + b.amount, 0), [paidBills]);
 
-  // Alerts derived
-  const alertItems = useMemo(() => {
-    const items: { text: string; sub: string; color: string }[] = [];
-    if (overdueBills.length > 0)
-      items.push({ text: `${overdueBills.length} overdue bill${overdueBills.length > 1 ? "s" : ""}`, sub: "Tap to view", color: "#ef4444" });
-    pendingBills.slice(0, 3).forEach(b => {
-      const d = parseLocalDate(b.dueDate);
-      const todayLocal = new Date(now.getFullYear(), now.getMonth(), now.getDate());
-      const dueLocal = new Date(d.getFullYear(), d.getMonth(), d.getDate());
-      const diffMs = dueLocal.getTime() - todayLocal.getTime();
-      const days = Math.round(diffMs / 86400000);
-      const label = days === 0 ? "Due today" : days <= 3 ? `Due in ${days}d` : d.toLocaleDateString("en-US", { month: "short", day: "numeric" });
-      items.push({ text: `Upcoming: ${b.title}`, sub: label, color: days <= 3 ? "#f59e0b" : "#22c55e" });
-    });
-    return items.slice(0, 4);
-  }, [overdueBills, pendingBills, now]);
+  // Alerts / Inbox derivation
+  const unreadAlertsCount = useMemo(() => {
+    return alerts.filter((a) => !a.isRead).length;
+  }, [alerts]);
+
+  const displayAlerts = useMemo(() => {
+    return [...alerts]
+      .sort((a, b) => new Date(b.date).getTime() - new Date(a.date).getTime())
+      .slice(0, 3);
+  }, [alerts]);
 
   const upcomingBills = useMemo(
     () =>
@@ -578,20 +595,84 @@ export default function HomeScreen() {
           <Dots count={2} active={0} />
         </SectionCard>
 
-        {/* ── Alerts ── */}
-        {alertItems.length > 0 && (
-          <SectionCard title="Alerts" onChevron={() => router.push("/(tabs)/bills")}>
+        {/* ── Alerts Widget (Notification Center) ── */}
+        <Pressable
+          onPress={() => {
+            Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
+            router.push("/alerts");
+          }}
+        >
+          <SectionCard
+            title={`Inbox${unreadAlertsCount > 0 ? ` (${unreadAlertsCount})` : ""}`}
+            onChevron={() => {
+              Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
+              router.push("/alerts");
+            }}
+          >
             <View style={{ gap: 2 }}>
-              {alertItems.map((item, i) => (
-                <View key={i} style={[styles.alertRow, i < alertItems.length - 1 && { borderBottomWidth: 1, borderBottomColor: colors.border }]}>
-                  <View style={[styles.alertDot, { backgroundColor: item.color }]} />
-                  <Text style={[styles.alertText, { color: colors.foreground }]} numberOfLines={1}>{item.text}</Text>
-                  <Text style={[styles.alertSub, { color: colors.mutedForeground }]}>{item.sub}</Text>
+              {displayAlerts.length === 0 ? (
+                <View style={{ flexDirection: "row", alignItems: "center", gap: 8, paddingVertical: 12, justifyContent: "center" }}>
+                  <Feather name="check-circle" size={16} color={colors.success} />
+                  <Text style={{ fontSize: 13, fontFamily: "Inter_500Medium", color: colors.mutedForeground }}>
+                    No new notifications
+                  </Text>
                 </View>
-              ))}
+              ) : (
+                displayAlerts.map((item, i) => (
+                  <View
+                    key={item.id}
+                    style={[
+                      styles.alertRow,
+                      i < displayAlerts.length - 1 && {
+                        borderBottomWidth: 1,
+                        borderBottomColor: colors.border,
+                      },
+                    ]}
+                  >
+                    <View
+                      style={[
+                        styles.alertDot,
+                        {
+                          backgroundColor: item.isRead ? "transparent" : colors.expense,
+                        },
+                      ]}
+                    />
+                    <View style={{ flex: 1, flexDirection: "row", justifyContent: "space-between", alignItems: "center", gap: 8 }}>
+                      <View style={{ flex: 1, gap: 2 }}>
+                        <Text
+                          style={[
+                            styles.alertText,
+                            {
+                              color: colors.foreground,
+                              fontFamily: item.isRead ? "Inter_500Medium" : "Inter_600SemiBold",
+                            },
+                          ]}
+                          numberOfLines={1}
+                        >
+                          {item.title}
+                        </Text>
+                        <Text
+                          style={[
+                            styles.alertSub,
+                            {
+                              color: colors.mutedForeground,
+                            },
+                          ]}
+                          numberOfLines={1}
+                        >
+                          {item.body}
+                        </Text>
+                      </View>
+                      <Text style={{ fontSize: 11, fontFamily: "Inter_400Regular", color: colors.mutedForeground }}>
+                        {formatAlertDate(item.date)}
+                      </Text>
+                    </View>
+                  </View>
+                ))
+              )}
             </View>
           </SectionCard>
-        )}
+        </Pressable>
 
         {/* ── Top Expenses ── */}
         <SectionCard title="Top Expenses" subtitle={`| ${monthName}`} onChevron={() => router.push("/(tabs)/transactions")}>
