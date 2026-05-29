@@ -23,6 +23,7 @@ import { SafeAreaView, useSafeAreaInsets } from "react-native-safe-area-context"
 import { useApp, Task, ChecklistItem } from "@/context/AppContext";
 import { useDrawer } from "@/context/DrawerContext";
 import { useColors } from "@/hooks/useColors";
+import { parseLocalDate } from "@/hooks/useLocalDate";
 
 // ─── Constants ────────────────────────────────────────────────────────────────
 const TASK_CATEGORIES = ["Subscription", "Appointment", "Payment", "Reminder", "Bill Cancel", "Dev / Feature", "Other"];
@@ -640,9 +641,8 @@ function TaskCard({ task, onToggle, onEdit, onDelete }: {
   onDelete: () => void;
 }) {
   const colors = useColors();
-  const dateStr = task.dueDate.slice(0, 10);
-  const [y, m, d] = dateStr.split("-").map(Number);
-  const localDue = new Date(y, m - 1, d);
+  const rawDue = parseLocalDate(task.dueDate);
+  const localDue = new Date(rawDue.getFullYear(), rawDue.getMonth(), rawDue.getDate());
 
   const todayLocal = new Date();
   const midnightNow = new Date(todayLocal.getFullYear(), todayLocal.getMonth(), todayLocal.getDate());
