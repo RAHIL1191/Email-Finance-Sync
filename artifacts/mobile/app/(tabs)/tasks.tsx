@@ -1,7 +1,7 @@
 import DateTimePicker from "@react-native-community/datetimepicker";
 import { Feather } from "@expo/vector-icons";
 import * as Haptics from "expo-haptics";
-import React, { useState, useMemo, useRef } from "react";
+import React, { useState, useMemo, useRef, useEffect } from "react";
 import {
   Alert,
   Animated,
@@ -45,6 +45,450 @@ const PRIORITY_LABELS: Record<Task["priority"], string> = {
   low: "Low", medium: "Medium", high: "High",
 };
 
+// ─── DateTimeReminderModal ──────────────────────────────────────────────────
+interface DateTimeReminderModalProps {
+  visible: boolean;
+  onClose: () => void;
+  onSave: (data: {
+    dueDate: Date;
+    reminderEnabled: boolean;
+    reminderDate?: Date;
+    reminderFrequency?: "once" | "daily" | "weekly" | "monthly";
+  }) => void;
+  initial: {
+    dueDate: Date;
+    reminderEnabled: boolean;
+    reminderDate?: Date;
+    reminderFrequency?: "once" | "daily" | "weekly" | "monthly";
+  };
+}
+
+const MONTH_NAMES = ["January", "February", "March", "April", "May", "June", "July", "August", "September", "October", "November", "December"];
+const WEEKDAYS = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"];
+
+function DateTimeReminderModal({ visible, onClose, onSave, initial }: DateTimeReminderModalProps) {
+  const colors = useColors();
+  const insets = useSafeAreaInsets();
+
+  const [selectedDate, setSelectedDate] = useState(new Date());
+  const [currentMonth, setCurrentMonth] = useState(new Date());
+  const [selectedTime, setSelectedTime] = useState<{ hour: number; minute: number } | null>(null);
+  const [selectedReminder, setSelectedReminder] = useState<"none" | "on_day" | "1_day" | "2_days" | "3_days" | "1_week">("none");
+  const [selectedRepeat, setSelectedRepeat] = useState<"once" | "daily" | "weekly" | "monthly">("once");
+  const [constantReminder, setConstantReminder] = useState(false);
+
+  // Sub-modal visibility states
+  const [activeSub, setActiveSub] = useState<"none" | "time" | "reminder" | "repeat">("none");
+  const [showNativeTimePicker, setShowNativeTimePicker] = useState(false);
+
+  useEffect(() => {
+    if (!visible) return;
+    const initialDue = initial.dueDate ? new Date(initial.dueDate) : new Date();
+    setSelectedDate(initialDue);
+    setCurrentMonth(new Date(initialDue.getFullYear(), initialDue.getMonth(), 1));
+
+    if (initial.reminderEnabled && initial.reminderDate) {
+      const remDate = new Date(initial.reminderDate);
+      setSelectedTime({ hour: remDate.getHours(), minute: remDate.getMinutes() });
+      setSelectedReminder("on_day"); // Default mapping
+    } else {
+      setSelectedTime(null);
+      setSelectedReminder("none");
+    }
+    setSelectedRepeat(initial.reminderFrequency ?? "once");
+  }, [visible, initial]);
+
+  const daysGrid = useMemo(() => {
+    const year = currentMonth.getFullYear();
+    const month = currentMonth.getMonth();
+    const firstDay = new Date(year, month, 1).getDay();
+    const totalDays = new Date(year, month + 1, 0).getDate();
+    
+    const grid: (Date | null)[] = [];
+    for (let i = 0; i < firstDay; i++) {
+      grid.push(null);
+    }
+    for (let i = 1; i <= totalDays; i++) {
+      grid.push(new Date(year, month, i));
+    }
+    return grid;
+  }, [currentMonth]);
+
+  const navigateMonth = (direction: "prev" | "next") => {
+    setCurrentMonth(prev => {
+      const d = new Date(prev);
+      d.setMonth(d.getMonth() + (direction === "next" ? 1 : -1));
+      return d;
+    });
+  };
+
+  const handleClear = () => {
+    setSelectedDate(new Date());
+    setSelectedTime(null);
+    setSelectedReminder("none");
+    setSelectedRepeat("once");
+    Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium);
+  };
+
+  const handleSave = () => {
+    // Combine selected date and time if reminder is enabled
+    const reminderEnabled = selectedTime !== null;
+    let reminderDate: Date | undefined = undefined;
+    if (reminderEnabled && selectedTime) {
+      reminderDate = new Date(selectedDate);
+      reminderDate.setHours(selectedTime.hour, selectedTime.minute, 0, 0);
+    }
+
+    onSave({
+      dueDate: selectedDate,
+      reminderEnabled,
+      reminderDate,
+      reminderFrequency: selectedRepeat,
+    });
+    Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
+    onClose();
+  };
+
+  const formatTimeLabel = () => {
+    if (!selectedTime) return "None";
+    const h = selectedTime.hour;
+    const m = String(selectedTime.minute).padStart(2, "0");
+    const ampm = h >= 12 ? "PM" : "AM";
+    const dispHour = h % 12 === 0 ? 12 : h % 12;
+    return `${dispHour}:${m} ${ampm}`;
+  };
+
+  const formatReminderLabel = () => {
+    const timeStr = selectedTime ? ` (${formatTimeLabel()})` : " (09:00)";
+    switch (selectedReminder) {
+      case "none": return "None";
+      case "on_day": return `On the day${timeStr}`;
+      case "1_day": return `1 day early${timeStr}`;
+      case "2_days": return `2 days early${timeStr}`;
+      case "3_days": return `3 days early${timeStr}`;
+      case "1_week": return `1 week early${timeStr}`;
+    }
+  };
+
+  const formatRepeatLabel = () => {
+    const dayName = WEEKDAYS[selectedDate.getDay()];
+    const dateNum = selectedDate.getDate();
+    switch (selectedRepeat) {
+      case "once": return "None";
+      case "daily": return "Daily";
+      case "weekly": return `Weekly (${dayName})`;
+      case "monthly": return `Monthly (The ${dateNum} day)`;
+    }
+  };
+
+  const today = new Date();
+
+  return (
+    <Modal visible={visible} transparent animationType="slide" onRequestClose={onClose}>
+      <TouchableOpacity style={{ flex: 1, backgroundColor: "rgba(0,0,0,0.6)" }} activeOpacity={1} onPress={onClose} />
+      <View style={[modalStyles.sheet, { backgroundColor: colors.card, paddingBottom: insets.bottom + 12 }]}>
+        
+        {/* Top Header Row */}
+        <View style={[modalStyles.headerRow, { borderBottomColor: colors.border }]}>
+          <TouchableOpacity onPress={onClose} hitSlop={12}>
+            <Feather name="x" size={22} color={colors.foreground} />
+          </TouchableOpacity>
+          <View style={modalStyles.tabs}>
+            <View style={[modalStyles.tab, modalStyles.tabActive, { borderBottomColor: colors.primary }]}>
+              <Text style={[modalStyles.tabTxt, { color: colors.primary }]}>Date</Text>
+            </View>
+            <View style={modalStyles.tab}>
+              <Text style={[modalStyles.tabTxt, { color: colors.mutedForeground }]}>Duration</Text>
+            </View>
+          </View>
+          <TouchableOpacity onPress={handleSave} hitSlop={12}>
+            <Feather name="check" size={22} color={colors.primary} />
+          </TouchableOpacity>
+        </View>
+
+        {/* Month Picker Row */}
+        <View style={modalStyles.monthRow}>
+          <Text style={[modalStyles.monthText, { color: colors.foreground }]}>
+            {MONTH_NAMES[currentMonth.getMonth()]} {currentMonth.getFullYear()}
+          </Text>
+          <View style={{ flexDirection: "row", gap: 16 }}>
+            <TouchableOpacity onPress={() => navigateMonth("prev")} hitSlop={8}>
+              <Feather name="chevron-left" size={20} color={colors.foreground} />
+            </TouchableOpacity>
+            <TouchableOpacity onPress={() => navigateMonth("next")} hitSlop={8}>
+              <Feather name="chevron-right" size={20} color={colors.foreground} />
+            </TouchableOpacity>
+          </View>
+        </View>
+
+        {/* Weekdays Header */}
+        <View style={modalStyles.weekdaysRow}>
+          {WEEKDAYS.map(w => (
+            <Text key={w} style={[modalStyles.weekdayTxt, { color: colors.mutedForeground }]}>{w}</Text>
+          ))}
+        </View>
+
+        {/* Calendar Grid */}
+        <View style={modalStyles.grid}>
+          {daysGrid.map((d, index) => {
+            if (!d) return <View key={`pad-${index}`} style={modalStyles.dayCell} />;
+            
+            const isSelected = selectedDate.getDate() === d.getDate() && selectedDate.getMonth() === d.getMonth() && selectedDate.getFullYear() === d.getFullYear();
+            const isToday = today.getDate() === d.getDate() && today.getMonth() === d.getMonth() && today.getFullYear() === d.getFullYear();
+
+            return (
+              <TouchableOpacity
+                key={d.toISOString()}
+                style={[
+                  modalStyles.dayCell,
+                  isSelected && { backgroundColor: colors.primary, borderRadius: 20 },
+                  isToday && !isSelected && { borderColor: colors.primary, borderWidth: 1, borderRadius: 20 }
+                ]}
+                onPress={() => {
+                  Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
+                  setSelectedDate(d);
+                }}
+              >
+                <Text style={[
+                  modalStyles.dayTxt,
+                  { color: isSelected ? "#fff" : colors.foreground },
+                  (isSelected || isToday) && { fontFamily: "Inter_600SemiBold" }
+                ]}>
+                  {d.getDate()}
+                </Text>
+              </TouchableOpacity>
+            );
+          })}
+        </View>
+
+        {/* Options List Container */}
+        <View style={[modalStyles.optionsContainer, { backgroundColor: colors.background, borderColor: colors.border }]}>
+          
+          {/* Time Option Row */}
+          <TouchableOpacity
+            style={[modalStyles.optionRow, { borderBottomColor: colors.border }]}
+            onPress={() => setActiveSub("time")}
+          >
+            <View style={modalStyles.optionLeft}>
+              <Feather name="clock" size={16} color={colors.mutedForeground} />
+              <Text style={[modalStyles.optionLabel, { color: colors.foreground }]}>Time</Text>
+            </View>
+            <View style={modalStyles.optionRight}>
+              <Text style={[modalStyles.optionValue, { color: colors.mutedForeground }]}>{formatTimeLabel()}</Text>
+              <Feather name="chevron-right" size={14} color={colors.mutedForeground} />
+            </View>
+          </TouchableOpacity>
+
+          {/* Reminder Option Row */}
+          <TouchableOpacity
+            style={[modalStyles.optionRow, { borderBottomColor: colors.border }]}
+            onPress={() => setActiveSub("reminder")}
+          >
+            <View style={modalStyles.optionLeft}>
+              <Feather name="bell" size={16} color={colors.mutedForeground} />
+              <Text style={[modalStyles.optionLabel, { color: colors.foreground }]}>Reminder</Text>
+            </View>
+            <View style={modalStyles.optionRight}>
+              <Text style={[modalStyles.optionValue, { color: colors.mutedForeground }]} numberOfLines={1}>{formatReminderLabel()}</Text>
+              <Feather name="chevron-right" size={14} color={colors.mutedForeground} />
+            </View>
+          </TouchableOpacity>
+
+          {/* Repeat Option Row */}
+          <TouchableOpacity
+            style={[modalStyles.optionRow, { borderBottomColor: "transparent" }]}
+            onPress={() => setActiveSub("repeat")}
+          >
+            <View style={modalStyles.optionLeft}>
+              <Feather name="repeat" size={16} color={colors.mutedForeground} />
+              <Text style={[modalStyles.optionLabel, { color: colors.foreground }]}>Repeat</Text>
+            </View>
+            <View style={modalStyles.optionRight}>
+              <Text style={[modalStyles.optionValue, { color: colors.mutedForeground }]}>{formatRepeatLabel()}</Text>
+              <Feather name="chevron-right" size={14} color={colors.mutedForeground} />
+            </View>
+          </TouchableOpacity>
+        </View>
+
+        {/* Bottom Clear Button */}
+        <TouchableOpacity style={modalStyles.clearBtn} onPress={handleClear}>
+          <Text style={modalStyles.clearTxt}>Clear</Text>
+        </TouchableOpacity>
+
+        {/* ─── Centered Sub-Modal Overlays ─── */}
+
+        {/* 1. Time Selection Sub-Modal */}
+        {activeSub === "time" && (
+          <View style={modalStyles.overlay}>
+            <TouchableOpacity style={StyleSheet.absoluteFill} onPress={() => setActiveSub("none")} />
+            <View style={[modalStyles.dialog, { backgroundColor: colors.card, borderColor: colors.border }]}>
+              <Text style={[modalStyles.dialogTitle, { color: colors.foreground }]}>Select Time</Text>
+              {[
+                { label: "None", value: null },
+                { label: "09:00 AM", value: { hour: 9, minute: 0 } },
+                { label: "12:00 PM", value: { hour: 12, minute: 0 } },
+                { label: "03:00 PM", value: { hour: 15, minute: 0 } },
+                { label: "06:00 PM", value: { hour: 18, minute: 0 } },
+              ].map((item) => {
+                const isSelected = (!item.value && !selectedTime) || (item.value && selectedTime && selectedTime.hour === item.value.hour && selectedTime.minute === item.value.minute);
+                return (
+                  <TouchableOpacity
+                    key={item.label}
+                    style={modalStyles.dialogRow}
+                    onPress={() => {
+                      Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
+                      setSelectedTime(item.value);
+                      if (item.value && selectedReminder === "none") setSelectedReminder("on_day");
+                      setActiveSub("none");
+                    }}
+                  >
+                    <Text style={[modalStyles.dialogRowTxt, { color: isSelected ? colors.primary : colors.foreground, fontFamily: isSelected ? "Inter_600SemiBold" : "Inter_400Regular" }]}>
+                      {item.label}
+                    </Text>
+                    {isSelected && <Feather name="check" size={16} color={colors.primary} />}
+                  </TouchableOpacity>
+                );
+              })}
+              <TouchableOpacity
+                style={modalStyles.dialogRow}
+                onPress={() => {
+                  setShowNativeTimePicker(true);
+                  setActiveSub("none");
+                }}
+              >
+                <Text style={[modalStyles.dialogRowTxt, { color: colors.foreground }]}>Custom...</Text>
+                <Feather name="chevron-right" size={14} color={colors.mutedForeground} />
+              </TouchableOpacity>
+            </View>
+          </View>
+        )}
+
+        {/* 2. Reminder Sub-Modal (Screenshot 2 style) */}
+        {activeSub === "reminder" && (
+          <View style={modalStyles.overlay}>
+            <TouchableOpacity style={StyleSheet.absoluteFill} onPress={() => setActiveSub("none")} />
+            <View style={[modalStyles.dialog, { backgroundColor: colors.card, borderColor: colors.border }]}>
+              <Text style={[modalStyles.dialogTitle, { color: colors.foreground }]}>Reminder</Text>
+              
+              <ScrollView style={{ maxHeight: 280 }} showsVerticalScrollIndicator={false}>
+                {[
+                  { label: "None", value: "none" },
+                  { label: "On the day", value: "on_day" },
+                  { label: "1 day early", value: "1_day" },
+                  { label: "2 days early", value: "2_days" },
+                  { label: "3 days early", value: "3_days" },
+                  { label: "1 week early", value: "1_week" },
+                ].map((item) => {
+                  const isSelected = selectedReminder === item.value;
+                  const timeLabel = selectedTime ? ` (${formatTimeLabel()})` : " (09:00)";
+                  return (
+                    <TouchableOpacity
+                      key={item.value}
+                      style={modalStyles.dialogRow}
+                      onPress={() => {
+                        Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
+                        setSelectedReminder(item.value as any);
+                        if (item.value !== "none" && !selectedTime) setSelectedTime({ hour: 9, minute: 0 });
+                      }}
+                    >
+                      <Text style={[modalStyles.dialogRowTxt, { color: isSelected ? colors.primary : colors.foreground, fontFamily: isSelected ? "Inter_600SemiBold" : "Inter_400Regular" }]}>
+                        {item.label}{item.value !== "none" && timeLabel}
+                      </Text>
+                      {isSelected && <Feather name="check" size={16} color={colors.primary} />}
+                    </TouchableOpacity>
+                  );
+                })}
+              </ScrollView>
+
+              <View style={[modalStyles.divider, { backgroundColor: colors.border }]} />
+
+              {/* Constant Reminder Toggle */}
+              <View style={modalStyles.switchRow}>
+                <Text style={[modalStyles.switchLabel, { color: colors.foreground }]}>Constant Reminder 👑</Text>
+                <Switch
+                  value={constantReminder}
+                  onValueChange={setConstantReminder}
+                  trackColor={{ false: colors.border, true: "#22c55e" }}
+                  thumbColor="#fff"
+                />
+              </View>
+
+              {/* Action Buttons */}
+              <View style={modalStyles.dialogActions}>
+                <TouchableOpacity onPress={() => setActiveSub("none")} hitSlop={8}>
+                  <Text style={[modalStyles.dialogBtnTxt, { color: colors.mutedForeground }]}>Cancel</Text>
+                </TouchableOpacity>
+                <TouchableOpacity onPress={() => setActiveSub("none")} hitSlop={8}>
+                  <Text style={[modalStyles.dialogBtnTxt, { color: colors.primary, fontFamily: "Inter_600SemiBold" }]}>OK</Text>
+                </TouchableOpacity>
+              </View>
+            </View>
+          </View>
+        )}
+
+        {/* 3. Repeat Sub-Modal (Screenshot 3 style) */}
+        {activeSub === "repeat" && (
+          <View style={modalStyles.overlay}>
+            <TouchableOpacity style={StyleSheet.absoluteFill} onPress={() => setActiveSub("none")} />
+            <View style={[modalStyles.dialog, { backgroundColor: colors.card, borderColor: colors.border }]}>
+              <Text style={[modalStyles.dialogTitle, { color: colors.foreground }]}>Repeat</Text>
+              
+              {[
+                { label: "None", value: "once" },
+                { label: "Daily", value: "daily" },
+                { label: `Weekly (${WEEKDAYS[selectedDate.getDay()]})`, value: "weekly" },
+                { label: `Monthly (The ${selectedDate.getDate()} day)`, value: "monthly" },
+              ].map((item) => {
+                const isSelected = selectedRepeat === item.value;
+                return (
+                  <TouchableOpacity
+                    key={item.value}
+                    style={modalStyles.dialogRow}
+                    onPress={() => {
+                      Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
+                      setSelectedRepeat(item.value as any);
+                      setActiveSub("none");
+                    }}
+                  >
+                    <Text style={[modalStyles.dialogRowTxt, { color: isSelected ? colors.primary : colors.foreground, fontFamily: isSelected ? "Inter_600SemiBold" : "Inter_400Regular" }]}>
+                      {item.label}
+                    </Text>
+                    {isSelected && <Feather name="check" size={16} color={colors.primary} />}
+                  </TouchableOpacity>
+                );
+              })}
+
+              <View style={[modalStyles.divider, { backgroundColor: colors.border, marginVertical: 8 }]} />
+
+              <View style={modalStyles.dialogActions}>
+                <TouchableOpacity onPress={() => setActiveSub("none")} hitSlop={8}>
+                  <Text style={[modalStyles.dialogBtnTxt, { color: colors.primary }]}>Cancel</Text>
+                </TouchableOpacity>
+              </View>
+            </View>
+          </View>
+        )}
+
+        {/* Native time picker triggers */}
+        {showNativeTimePicker && (
+          <DateTimePicker
+            value={new Date(selectedDate.getFullYear(), selectedDate.getMonth(), selectedDate.getDate(), selectedTime?.hour ?? 9, selectedTime?.minute ?? 0)}
+            mode="time"
+            display="spinner"
+            onChange={(_, d) => {
+              setShowNativeTimePicker(false);
+              if (d) {
+                setSelectedTime({ hour: d.getHours(), minute: d.getMinutes() });
+                if (selectedReminder === "none") setSelectedReminder("on_day");
+              }
+            }}
+          />
+        )}
+      </View>
+    </Modal>
+  );
+}
+
 // ─── TaskFormSheet ─────────────────────────────────────────────────────────────
 function TaskFormSheet({
   visible, initial, onClose, onSave,
@@ -62,13 +506,11 @@ function TaskFormSheet({
   const [email,           setEmail]           = useState("");
   const [paymentMode,     setPaymentMode]     = useState("");
   const [dueDate,         setDueDate]         = useState(new Date());
-  const [showDuePicker,   setShowDuePicker]   = useState(false);
   const [priority,        setPriority]        = useState<Task["priority"]>("medium");
   const [reminderEnabled,    setReminderEnabled]    = useState(false);
   const [reminderDate,       setReminderDate]       = useState(new Date());
   const [reminderFrequency,  setReminderFrequency]  = useState<"once" | "daily" | "weekly" | "monthly">("once");
-  const [showRemDatePicker,  setShowRemDatePicker]  = useState(false);
-  const [showRemTimePicker,  setShowRemTimePicker]  = useState(false);
+  const [showScheduleModal,  setShowScheduleModal]  = useState(false);
   const [notes,           setNotes]           = useState("");
   const [notesHeight,     setNotesHeight]     = useState(80);
   const [checklistItems,  setChecklistItems]  = useState<ChecklistItem[]>([]);
@@ -99,7 +541,6 @@ function TaskFormSheet({
       setReminderEnabled(initial.reminderEnabled);
       setReminderDate(initial.reminderDate ? new Date(initial.reminderDate) : new Date());
       setReminderFrequency(initial.reminderFrequency ?? "once");
-      setShowRemDatePicker(false); setShowRemTimePicker(false);
       setNotes(initial.notes ?? "");
       setChecklistItems(initial.checklistItems ?? []);
     } else {
@@ -107,7 +548,6 @@ function TaskFormSheet({
       setDueDate(new Date()); setPriority("medium");
       setReminderEnabled(false); setReminderDate(new Date());
       setReminderFrequency("once");
-      setShowRemDatePicker(false); setShowRemTimePicker(false);
       setNotes(""); setChecklistItems([]); setNewItemText("");
       setNotesHeight(80);
     }
@@ -238,22 +678,45 @@ function TaskFormSheet({
             })}
           </View>
 
-          {/* Due Date */}
-          <Text style={[f.label, { color: colors.mutedForeground }]}>Due Date</Text>
-          <TouchableOpacity style={[f.datePick, { backgroundColor: colors.background, borderColor: colors.border }]} onPress={() => setShowDuePicker(true)}>
+          {/* Schedule & Reminder */}
+          <Text style={[f.label, { color: colors.mutedForeground }]}>Schedule & Reminder</Text>
+          <TouchableOpacity
+            style={[f.datePick, { backgroundColor: colors.background, borderColor: colors.border }]}
+            onPress={() => {
+              Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
+              setShowScheduleModal(true);
+            }}
+            activeOpacity={0.8}
+          >
             <Feather name="calendar" size={16} color={colors.primary} />
-            <Text style={[f.datePickTxt, { color: colors.foreground }]}>
+            <Text style={[f.datePickTxt, { color: colors.foreground, flex: 1 }]}>
               {dueDate.toLocaleDateString("en-US", { weekday: "short", month: "short", day: "numeric", year: "numeric" })}
+              {reminderEnabled && ` · ${reminderDate.toLocaleTimeString("en-US", { hour: "2-digit", minute: "2-digit" })}`}
+              {reminderEnabled && reminderFrequency !== "once" && ` · ${reminderFrequency.charAt(0).toUpperCase() + reminderFrequency.slice(1)}`}
             </Text>
+            <Feather name="chevron-right" size={16} color={colors.mutedForeground} />
           </TouchableOpacity>
-          {showDuePicker && (
-            <DateTimePicker
-              value={dueDate}
-              mode="date"
-              display={Platform.OS === "ios" ? "spinner" : "default"}
-              onChange={(_, d) => { if (d) setDueDate(d); setShowDuePicker(false); }}
-            />
-          )}
+
+          <DateTimeReminderModal
+            visible={showScheduleModal}
+            onClose={() => setShowScheduleModal(false)}
+            onSave={(data) => {
+              setDueDate(data.dueDate);
+              setReminderEnabled(data.reminderEnabled);
+              if (data.reminderDate) {
+                setReminderDate(data.reminderDate);
+              }
+              if (data.reminderFrequency) {
+                setReminderFrequency(data.reminderFrequency);
+              }
+            }}
+            initial={{
+              dueDate,
+              reminderEnabled,
+              reminderDate,
+              reminderFrequency,
+            }}
+          />
 
           {/* Email — hidden in dev mode */}
           {!isDevMode && (
@@ -292,92 +755,7 @@ function TaskFormSheet({
             </>
           )}
 
-          {/* Reminder */}
-          <View style={[f.reminderRow, { borderColor: colors.border }]}>
-            <View style={{ flex: 1 }}>
-              <Text style={[f.label, { color: colors.mutedForeground, marginBottom: 0 }]}>Reminder</Text>
-              {reminderEnabled && (
-                <Text style={[f.reminderSub, { color: colors.mutedForeground }]}>
-                  {reminderDate.toLocaleDateString("en-US", { month: "short", day: "numeric", year: "numeric" })}
-                  {"  ·  "}
-                  {reminderDate.toLocaleTimeString("en-US", { hour: "2-digit", minute: "2-digit" })}
-                  {reminderFrequency && reminderFrequency !== "once" ? `  ·  ${reminderFrequency.charAt(0).toUpperCase() + reminderFrequency.slice(1)}` : ""}
-                </Text>
-              )}
-            </View>
-            <Switch
-              value={reminderEnabled}
-              onValueChange={setReminderEnabled}
-              trackColor={{ false: colors.border, true: "#22c55e" }}
-              thumbColor="#fff"
-            />
-          </View>
-          {reminderEnabled && (
-            <View style={{ gap: 8 }}>
-              {/* Date row */}
-              <TouchableOpacity style={[f.datePick, { backgroundColor: colors.background, borderColor: colors.border }]} onPress={() => setShowRemDatePicker(true)}>
-                <Feather name="calendar" size={16} color={colors.primary} />
-                <Text style={[f.datePickTxt, { color: colors.foreground }]}>
-                  {reminderDate.toLocaleDateString("en-US", { weekday: "short", month: "short", day: "numeric", year: "numeric" })}
-                </Text>
-              </TouchableOpacity>
-              {showRemDatePicker && (
-                <DateTimePicker
-                  value={reminderDate}
-                  mode="date"
-                  display={Platform.OS === "ios" ? "spinner" : "default"}
-                  onChange={(_, d) => {
-                    setShowRemDatePicker(false);
-                    if (d) {
-                      const merged = new Date(reminderDate);
-                      merged.setFullYear(d.getFullYear(), d.getMonth(), d.getDate());
-                      setReminderDate(merged);
-                    }
-                  }}
-                />
-              )}
-              {/* Time row */}
-              <TouchableOpacity style={[f.datePick, { backgroundColor: colors.background, borderColor: colors.border }]} onPress={() => setShowRemTimePicker(true)}>
-                <Feather name="clock" size={16} color={colors.primary} />
-                <Text style={[f.datePickTxt, { color: colors.foreground }]}>
-                  {reminderDate.toLocaleTimeString("en-US", { hour: "2-digit", minute: "2-digit" })}
-                </Text>
-              </TouchableOpacity>
-              {showRemTimePicker && (
-                <DateTimePicker
-                  value={reminderDate}
-                  mode="time"
-                  display={Platform.OS === "ios" ? "spinner" : "default"}
-                  onChange={(_, d) => {
-                    setShowRemTimePicker(false);
-                    if (d) {
-                      const merged = new Date(reminderDate);
-                      merged.setHours(d.getHours(), d.getMinutes());
-                      setReminderDate(merged);
-                    }
-                  }}
-                />
-              )}
-              {/* Frequency chips */}
-              <Text style={[f.label, { color: colors.mutedForeground, marginTop: 8, marginBottom: 4 }]}>Frequency</Text>
-              <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={f.chipRow}>
-                {(["once", "daily", "weekly", "monthly"] as const).map((freq) => {
-                  const on = reminderFrequency === freq;
-                  return (
-                    <TouchableOpacity
-                      key={freq}
-                      style={[f.chip, { backgroundColor: on ? colors.primary + "22" : colors.background, borderColor: on ? colors.primary : colors.border }]}
-                      onPress={() => { Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light); setReminderFrequency(freq); }}
-                    >
-                      <Text style={[f.chipTxt, { color: on ? colors.primary : colors.foreground }]}>
-                        {freq.charAt(0).toUpperCase() + freq.slice(1)}
-                      </Text>
-                    </TouchableOpacity>
-                  );
-                })}
-              </ScrollView>
-            </View>
-          )}
+
 
           {/* Notes */}
           <Text style={[f.label, { color: colors.mutedForeground }]}>{isDevMode ? "Description" : "Notes"}</Text>
@@ -1050,4 +1428,38 @@ const ts = StyleSheet.create({
   completedTitle: { fontSize: 16, fontFamily: "Inter_600SemiBold" },
   completedCountBadge: { paddingHorizontal: 8, paddingVertical: 2, borderRadius: 10 },
   completedCountTxt: { fontSize: 11, fontFamily: "Inter_600SemiBold" },
+});
+
+const modalStyles = StyleSheet.create({
+  sheet: { borderTopLeftRadius: 24, borderTopRightRadius: 24, paddingHorizontal: 20, paddingTop: 16 },
+  headerRow: { flexDirection: "row", justifyContent: "space-between", alignItems: "center", paddingBottom: 12, borderBottomWidth: StyleSheet.hairlineWidth },
+  tabs: { flexDirection: "row", gap: 24 },
+  tab: { paddingBottom: 6 },
+  tabActive: { borderBottomWidth: 2 },
+  tabTxt: { fontSize: 15, fontFamily: "Inter_600SemiBold" },
+  monthRow: { flexDirection: "row", justifyContent: "space-between", alignItems: "center", marginVertical: 14 },
+  monthText: { fontSize: 16, fontFamily: "Inter_600SemiBold" },
+  weekdaysRow: { flexDirection: "row", justifyContent: "space-between", marginBottom: 6 },
+  weekdayTxt: { width: "14.28%", textAlign: "center", fontSize: 11, fontFamily: "Inter_500Medium" },
+  grid: { flexDirection: "row", flexWrap: "wrap", rowGap: 8 },
+  dayCell: { width: "14.28%", aspectRatio: 1, alignItems: "center", justifyContent: "center" },
+  dayTxt: { fontSize: 14, fontFamily: "Inter_400Regular" },
+  optionsContainer: { borderRadius: 14, borderWidth: 1, marginTop: 20, overflow: "hidden" },
+  optionRow: { flexDirection: "row", justifyContent: "space-between", alignItems: "center", paddingHorizontal: 14, paddingVertical: 12, borderBottomWidth: StyleSheet.hairlineWidth },
+  optionLeft: { flexDirection: "row", alignItems: "center", gap: 10 },
+  optionRight: { flexDirection: "row", alignItems: "center", gap: 8 },
+  optionLabel: { fontSize: 14, fontFamily: "Inter_500Medium" },
+  optionValue: { fontSize: 13, fontFamily: "Inter_400Regular", maxWidth: 180 },
+  clearBtn: { alignItems: "center", paddingVertical: 12, marginTop: 14 },
+  clearTxt: { color: "#ef4444", fontSize: 15, fontFamily: "Inter_600SemiBold" },
+  overlay: { ...StyleSheet.absoluteFillObject, backgroundColor: "rgba(0,0,0,0.6)", justifyContent: "center", alignItems: "center", zIndex: 100 },
+  dialog: { width: "84%", borderRadius: 20, borderWidth: 1, padding: 20, gap: 4 },
+  dialogTitle: { fontSize: 18, fontFamily: "Inter_700Bold", marginBottom: 12 },
+  dialogRow: { flexDirection: "row", justifyContent: "space-between", alignItems: "center", paddingVertical: 12 },
+  dialogRowTxt: { fontSize: 14 },
+  divider: { height: StyleSheet.hairlineWidth, marginVertical: 12 },
+  switchRow: { flexDirection: "row", justifyContent: "space-between", alignItems: "center", paddingVertical: 4 },
+  switchLabel: { fontSize: 14, fontFamily: "Inter_500Medium" },
+  dialogActions: { flexDirection: "row", justifyContent: "flex-end", gap: 20, marginTop: 16 },
+  dialogBtnTxt: { fontSize: 14, fontFamily: "Inter_500Medium", paddingHorizontal: 8, paddingVertical: 4 }
 });
