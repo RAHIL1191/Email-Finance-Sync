@@ -1835,15 +1835,74 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
   }, []);
 
   const updateTask = useCallback((id: string, updates: Partial<Task>) => {
-    setTasks((prev) => prev.map((t) => {
-      if (t.id !== id) return t;
-      const updated: Task = { ...t, ...updates, updatedAt: new Date().toISOString() };
-      if (updated.reminderEnabled && updated.reminderDate)
-        scheduleTaskReminder({ id: updated.id, title: updated.title, reminderDate: updated.reminderDate, reminderFrequency: updated.reminderFrequency, notes: updated.notes });
-      else cancelTaskReminder(id);
-      scheduleTaskDueNotification({ id: updated.id, title: updated.title, dueDate: updated.dueDate, notes: updated.notes });
-      return updated;
-    }));
+    let newTaskToCreate: Task | null = null;
+    setTasks((prev) => {
+      const list = prev.map((t) => {
+        if (t.id !== id) return t;
+        const updated: Task = { ...t, ...updates, updatedAt: new Date().toISOString() };
+        
+        // If task is completed and has a recurring frequency, auto-generate the next period's task
+        if (updates.isCompleted === true && t.isCompleted === false && updated.reminderFrequency && updated.reminderFrequency !== "once") {
+          let nextDue = new Date(updated.dueDate);
+          switch (updated.reminderFrequency) {
+            case "daily":   nextDue.setDate(nextDue.getDate() + 1);   break;
+            case "weekly":  nextDue.setDate(nextDue.getDate() + 7);   break;
+            case "monthly": nextDue.setMonth(nextDue.getMonth() + 1); break;
+          }
+          
+          let nextReminder: string | undefined = undefined;
+          if (updated.reminderEnabled && updated.reminderDate) {
+            let nextRem = new Date(updated.reminderDate);
+            switch (updated.reminderFrequency) {
+              case "daily":   nextRem.setDate(nextRem.getDate() + 1);   break;
+              case "weekly":  nextRem.setDate(nextRem.getDate() + 7);   break;
+              case "monthly": nextRem.setMonth(nextRem.getMonth() + 1); break;
+            }
+            nextReminder = nextRem.toISOString();
+          }
+
+          const resetChecklist = updated.checklistItems?.map(item => ({ ...item, completed: false }));
+          const nowStr = new Date().toISOString();
+          
+          newTaskToCreate = {
+            id: genId(),
+            title: updated.title,
+            category: updated.category,
+            email: updated.email,
+            paymentMode: updated.paymentMode,
+            dueDate: nextDue.toISOString(),
+            notes: updated.notes,
+            checklistItems: resetChecklist,
+            priority: updated.priority,
+            isCompleted: false,
+            reminderEnabled: updated.reminderEnabled,
+            reminderDate: nextReminder,
+            reminderFrequency: updated.reminderFrequency,
+            createdAt: nowStr,
+            updatedAt: nowStr,
+          };
+        }
+
+        if (updated.reminderEnabled && updated.reminderDate)
+          scheduleTaskReminder({ id: updated.id, title: updated.title, reminderDate: updated.reminderDate, reminderFrequency: updated.reminderFrequency, notes: updated.notes });
+        else cancelTaskReminder(id);
+
+        scheduleTaskDueNotification({ id: updated.id, title: updated.title, dueDate: updated.dueDate, notes: updated.notes });
+        return updated;
+      });
+
+      if (newTaskToCreate) {
+        if (newTaskToCreate.reminderEnabled && newTaskToCreate.reminderDate) {
+          scheduleTaskReminder({ id: newTaskToCreate.id, title: newTaskToCreate.title, reminderDate: newTaskToCreate.reminderDate, reminderFrequency: newTaskToCreate.reminderFrequency, notes: newTaskToCreate.notes });
+        }
+        scheduleTaskDueNotification({ id: newTaskToCreate.id, title: newTaskToCreate.title, dueDate: newTaskToCreate.dueDate, notes: newTaskToCreate.notes });
+        bgCall("/api/tasks", "POST", householdIdRef.current, deviceIdRef.current, { ...newTaskToCreate, householdId: householdIdRef.current, deviceId: deviceIdRef.current });
+        return [...list, newTaskToCreate];
+      }
+
+      return list;
+    });
+
     apiCall(`/api/tasks/${id}`, "PUT", householdIdRef.current, deviceIdRef.current, updates);
   }, []);
 

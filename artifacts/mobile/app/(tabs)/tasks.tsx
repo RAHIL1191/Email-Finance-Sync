@@ -693,7 +693,10 @@ function TaskCard({ task, onToggle, onEdit, onDelete }: {
               <View style={[ts.catBadge, { backgroundColor: colors.primary + "18" }]}>
                 <Text style={[ts.catBadgeTxt, { color: colors.primary }]}>{task.category}</Text>
               </View>
-              <Text style={[ts.dueTxt, { color: dueColor }]}>{dueTxt}</Text>
+              <Text style={[ts.dueTxt, { color: dueColor }]}>
+                {dueTxt}
+                {task.reminderFrequency && task.reminderFrequency !== "once" && "  ⟳"}
+              </Text>
             </View>
             {(task.email || task.paymentMode) && (
               <View style={ts.subRow}>
@@ -758,23 +761,34 @@ export default function TasksScreen() {
   const { openDrawer } = useDrawer();
   const { tasks, addTask, updateTask, deleteTask } = useApp();
 
-  const [filter,    setFilter]    = useState<"all" | "pending" | "completed">("all");
-  const [viewMode,  setViewMode]  = useState<"list" | "board">("list");
-  const [showForm,  setShowForm]  = useState(false);
-  const [editTask,  setEditTask]  = useState<Task | null>(null);
+  const [completedExpanded, setCompletedExpanded] = useState(false);
+  const [sortBy,            setSortBy]            = useState<"date" | "title" | "priority">("date");
+  const [viewMode,          setViewMode]          = useState<"list" | "board">("list");
+  const [showForm,          setShowForm]          = useState(false);
+  const [editTask,          setEditTask]          = useState<Task | null>(null);
 
-  const sortedTasks = useMemo(() => {
-    let list = [...tasks].sort((a, b) => new Date(a.dueDate).getTime() - new Date(b.dueDate).getTime());
-    if (filter === "pending")   return list.filter((t) => !t.isCompleted);
-    if (filter === "completed") return list.filter((t) =>  t.isCompleted);
+  const PRIORITY_VAL = { high: 3, medium: 2, low: 1 };
+
+  const pendingTasks = useMemo(() => {
+    let list = tasks.filter((t) => !t.isCompleted);
+    list.sort((a, b) => {
+      if (sortBy === "title") {
+        return a.title.localeCompare(b.title);
+      }
+      if (sortBy === "priority") {
+        return PRIORITY_VAL[b.priority] - PRIORITY_VAL[a.priority];
+      }
+      // default: date
+      return new Date(a.dueDate).getTime() - new Date(b.dueDate).getTime();
+    });
     return list;
-  }, [tasks, filter]);
+  }, [tasks, sortBy]);
 
-  const counts = useMemo(() => ({
-    all:       tasks.length,
-    pending:   tasks.filter((t) => !t.isCompleted).length,
-    completed: tasks.filter((t) =>  t.isCompleted).length,
-  }), [tasks]);
+  const completedTasks = useMemo(() => {
+    let list = tasks.filter((t) => t.isCompleted);
+    list.sort((a, b) => new Date(b.dueDate).getTime() - new Date(a.dueDate).getTime());
+    return list;
+  }, [tasks]);
 
   const openAdd  = () => { setEditTask(null); setShowForm(true); };
   const openEdit = (t: Task) => { setEditTask(t); setShowForm(true); };
@@ -798,11 +812,11 @@ export default function TasksScreen() {
         <TouchableOpacity onPress={() => { Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light); openDrawer(); }} hitSlop={8}>
           <Feather name="menu" size={24} color={colors.foreground} />
         </TouchableOpacity>
-        <Text style={[ts.headerTitle, { color: colors.foreground }]}>Tasks</Text>
+        <Text style={[ts.headerTitle, { color: colors.foreground }]}>Inbox</Text>
         <View style={{ flexDirection: "row", alignItems: "center", gap: 8 }}>
           <TouchableOpacity
-            style={[ts.viewToggle, { backgroundColor: viewMode === "board" ? colors.primary + "18" : colors.card, borderColor: colors.border }]}
-            onPress={() => { Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light); setViewMode(v => v === "list" ? "board" : "list"); }}
+             style={[ts.viewToggle, { backgroundColor: viewMode === "board" ? colors.primary + "18" : colors.card, borderColor: colors.border }]}
+             onPress={() => { Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light); setViewMode(v => v === "list" ? "board" : "list"); }}
           >
             <Feather name={viewMode === "list" ? "columns" : "list"} size={16} color={viewMode === "board" ? colors.primary : colors.mutedForeground} />
           </TouchableOpacity>
@@ -812,57 +826,54 @@ export default function TasksScreen() {
         </View>
       </View>
 
-      {/* Filter tabs */}
-      <View style={[ts.filterRow, { borderBottomColor: colors.border }]}>
-        {(["all", "pending", "completed"] as const).map((f) => {
-          const active = filter === f;
-          return (
-            <TouchableOpacity
-              key={f}
-              style={[ts.filterTab, active && { borderBottomColor: colors.primary }]}
-              onPress={() => setFilter(f)}
-            >
-              <Text style={[ts.filterTxt, { color: active ? colors.primary : colors.mutedForeground }]}>
-                {f.charAt(0).toUpperCase() + f.slice(1)}
-              </Text>
-              <View style={[ts.countBadge, { backgroundColor: active ? colors.primary + "22" : colors.muted }]}>
-                <Text style={[ts.countTxt, { color: active ? colors.primary : colors.mutedForeground }]}>{counts[f]}</Text>
-              </View>
-            </TouchableOpacity>
-          );
-        })}
-      </View>
+      {/* Sort row */}
+      {viewMode === "list" && (
+        <View style={[ts.sortBar, { borderBottomColor: colors.border }]}>
+          <Text style={[ts.sortLabel, { color: colors.mutedForeground }]}>Sort by:</Text>
+          {(["date", "title", "priority"] as const).map((s) => {
+            const active = sortBy === s;
+            return (
+              <TouchableOpacity
+                key={s}
+                style={[ts.sortChip, active && { backgroundColor: colors.primary + "18", borderColor: colors.primary }]}
+                onPress={() => {
+                  Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
+                  setSortBy(s);
+                }}
+              >
+                <Text style={[ts.sortChipTxt, { color: active ? colors.primary : colors.foreground }]}>
+                  {s.charAt(0).toUpperCase() + s.slice(1)}
+                </Text>
+              </TouchableOpacity>
+            );
+          })}
+        </View>
+      )}
 
       {/* Content — List or Board */}
       {viewMode === "board" ? (
         <KanbanBoard
-          tasks={sortedTasks}
+          tasks={tasks}
           onToggle={handleToggle}
           onEdit={openEdit}
           onDelete={handleDelete}
         />
       ) : (
         <ScrollView showsVerticalScrollIndicator={false} contentContainerStyle={ts.scroll}>
-          {sortedTasks.length === 0 ? (
+          {pendingTasks.length === 0 ? (
             <View style={ts.empty}>
               <View style={[ts.emptyIcon, { backgroundColor: colors.primary + "18" }]}>
                 <Feather name="check-square" size={36} color={colors.primary} />
               </View>
-              <Text style={[ts.emptyTitle, { color: colors.foreground }]}>
-                {filter === "completed" ? "No completed tasks" : "No tasks yet"}
-              </Text>
-              <Text style={[ts.emptySub, { color: colors.mutedForeground }]}>
-                {filter === "pending" ? "All tasks are complete! 🎉" : "Tap + to track your first task"}
-              </Text>
-              {filter !== "completed" && (
-                <TouchableOpacity style={[ts.emptyBtn, { backgroundColor: colors.primary }]} onPress={openAdd}>
-                  <Feather name="plus" size={16} color="#fff" />
-                  <Text style={ts.emptyBtnTxt}>Add Task</Text>
-                </TouchableOpacity>
-              )}
+              <Text style={[ts.emptyTitle, { color: colors.foreground }]}>All caught up! 🎉</Text>
+              <Text style={[ts.emptySub, { color: colors.mutedForeground }]}>Your inbox is empty.</Text>
+              <TouchableOpacity style={[ts.emptyBtn, { backgroundColor: colors.primary }]} onPress={openAdd}>
+                <Feather name="plus" size={16} color="#fff" />
+                <Text style={ts.emptyBtnTxt}>Add Task</Text>
+              </TouchableOpacity>
             </View>
           ) : (
-            sortedTasks.map((t) => (
+            pendingTasks.map((t) => (
               <TaskCard
                 key={t.id}
                 task={t}
@@ -871,6 +882,41 @@ export default function TasksScreen() {
                 onDelete={() => handleDelete(t)}
               />
             ))
+          )}
+
+          {/* Collapsible Completed Section */}
+          {completedTasks.length > 0 && (
+            <View style={{ marginTop: 24 }}>
+              <TouchableOpacity
+                style={[ts.completedHeader, { borderBottomColor: colors.border }]}
+                onPress={() => {
+                  Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
+                  setCompletedExpanded(v => !v);
+                }}
+                activeOpacity={0.7}
+              >
+                <Text style={[ts.completedTitle, { color: colors.foreground }]}>Completed</Text>
+                <View style={{ flexDirection: "row", alignItems: "center", gap: 8 }}>
+                  <View style={[ts.completedCountBadge, { backgroundColor: colors.border }]}>
+                    <Text style={[ts.completedCountTxt, { color: colors.mutedForeground }]}>{completedTasks.length}</Text>
+                  </View>
+                  <Feather name={completedExpanded ? "chevron-up" : "chevron-down"} size={16} color={colors.mutedForeground} />
+                </View>
+              </TouchableOpacity>
+              {completedExpanded && (
+                <View style={{ gap: 10, marginTop: 12 }}>
+                  {completedTasks.map((t) => (
+                    <TaskCard
+                      key={t.id}
+                      task={t}
+                      onToggle={() => handleToggle(t)}
+                      onEdit={() => openEdit(t)}
+                      onDelete={() => handleDelete(t)}
+                    />
+                  ))}
+                </View>
+              )}
+            </View>
           )}
         </ScrollView>
       )}
@@ -994,4 +1040,14 @@ const ts = StyleSheet.create({
   emptySub:   { fontSize: 14, fontFamily: "Inter_400Regular", textAlign: "center" },
   emptyBtn:   { flexDirection: "row", alignItems: "center", gap: 8, paddingHorizontal: 24, paddingVertical: 12, borderRadius: 12, marginTop: 4 },
   emptyBtnTxt:{ fontSize: 15, fontFamily: "Inter_600SemiBold", color: "#fff" },
+
+  sortBar: { flexDirection: "row", alignItems: "center", gap: 8, paddingHorizontal: 16, paddingVertical: 12, borderBottomWidth: StyleSheet.hairlineWidth },
+  sortLabel: { fontSize: 13, fontFamily: "Inter_500Medium" },
+  sortChip: { paddingHorizontal: 12, paddingVertical: 6, borderRadius: 16, borderWidth: 1, borderColor: "transparent" },
+  sortChipTxt: { fontSize: 12, fontFamily: "Inter_600SemiBold" },
+
+  completedHeader: { flexDirection: "row", alignItems: "center", justifyContent: "space-between", paddingVertical: 14, borderBottomWidth: StyleSheet.hairlineWidth },
+  completedTitle: { fontSize: 16, fontFamily: "Inter_600SemiBold" },
+  completedCountBadge: { paddingHorizontal: 8, paddingVertical: 2, borderRadius: 10 },
+  completedCountTxt: { fontSize: 11, fontFamily: "Inter_600SemiBold" },
 });
