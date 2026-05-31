@@ -1295,26 +1295,8 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
         };
 
         const parsedTasks: Task[] = taskRaw ? JSON.parse(taskRaw) : [];
-        let tasksUpdated = false;
-        const migratedTasks = parsedTasks.map((t) => {
-          if (!t.isCompleted && t.reminderEnabled && t.reminderDate && t.reminderFrequency && t.reminderFrequency !== "once") {
-            let d = new Date(t.reminderDate);
-            if (d.getTime() < Date.now()) {
-              do {
-                d = advanceReminderDate(d, t.reminderFrequency);
-              } while (d.getTime() < Date.now());
-              tasksUpdated = true;
-              return { ...t, reminderDate: d.toISOString() };
-            }
-          }
-          return t;
-        });
-
-        setTasks(migratedTasks);
-        if (tasksUpdated) {
-          AsyncStorage.setItem(STORAGE_KEYS.tasks, JSON.stringify(migratedTasks)).catch(() => {});
-        }
-        setupTaskNotificationsOnInit(migratedTasks);
+        setTasks(parsedTasks);
+        setupTaskNotificationsOnInit(parsedTasks);
         setProjects(projectRaw ? JSON.parse(projectRaw) : []);
         setCategoryRules(rulesRaw ? JSON.parse(rulesRaw) : []);
         if (emailRaw) setEmailSync(JSON.parse(emailRaw));
@@ -1836,7 +1818,27 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
 
   const updateTask = useCallback((id: string, updates: Partial<Task>) => {
     let newTaskToCreate: Task | null = null;
+    let taskToDeleteId: string | undefined = undefined;
+
     setTasks((prev) => {
+      // 1. Determine if we are unchecking a completed recurring task, and find if we should delete the next occurrence
+      const currentTask = prev.find(t => t.id === id);
+      if (currentTask && updates.isCompleted === false && currentTask.isCompleted === true && currentTask.reminderFrequency && currentTask.reminderFrequency !== "once") {
+        let nextDue = new Date(currentTask.dueDate);
+        switch (currentTask.reminderFrequency) {
+          case "daily":   nextDue.setDate(nextDue.getDate() + 1);   break;
+          case "weekly":  nextDue.setDate(nextDue.getDate() + 7);   break;
+          case "monthly": nextDue.setMonth(nextDue.getMonth() + 1); break;
+        }
+        const nextDueStr = nextDue.toISOString();
+        taskToDeleteId = prev.find(existingTask => 
+          existingTask.title.trim().toLowerCase() === currentTask.title.trim().toLowerCase() &&
+          existingTask.dueDate === nextDueStr &&
+          !existingTask.isCompleted
+        )?.id;
+      }
+
+      // 2. Map list updates
       const list = prev.map((t) => {
         if (t.id !== id) return t;
         const updated: Task = { ...t, ...updates, updatedAt: new Date().toISOString() };
@@ -1850,37 +1852,47 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
             case "monthly": nextDue.setMonth(nextDue.getMonth() + 1); break;
           }
           
-          let nextReminder: string | undefined = undefined;
-          if (updated.reminderEnabled && updated.reminderDate) {
-            let nextRem = new Date(updated.reminderDate);
-            switch (updated.reminderFrequency) {
-              case "daily":   nextRem.setDate(nextRem.getDate() + 1);   break;
-              case "weekly":  nextRem.setDate(nextRem.getDate() + 7);   break;
-              case "monthly": nextRem.setMonth(nextRem.getMonth() + 1); break;
-            }
-            nextReminder = nextRem.toISOString();
-          }
+          const nextDueStr = nextDue.toISOString();
+          // Avoid duplicate task generation
+          const alreadyExists = prev.some(existingTask => 
+            existingTask.title.trim().toLowerCase() === updated.title.trim().toLowerCase() &&
+            existingTask.dueDate === nextDueStr &&
+            !existingTask.isCompleted
+          );
 
-          const resetChecklist = updated.checklistItems?.map(item => ({ ...item, completed: false }));
-          const nowStr = new Date().toISOString();
-          
-          newTaskToCreate = {
-            id: genId(),
-            title: updated.title,
-            category: updated.category,
-            email: updated.email,
-            paymentMode: updated.paymentMode,
-            dueDate: nextDue.toISOString(),
-            notes: updated.notes,
-            checklistItems: resetChecklist,
-            priority: updated.priority,
-            isCompleted: false,
-            reminderEnabled: updated.reminderEnabled,
-            reminderDate: nextReminder,
-            reminderFrequency: updated.reminderFrequency,
-            createdAt: nowStr,
-            updatedAt: nowStr,
-          };
+          if (!alreadyExists) {
+            let nextReminder: string | undefined = undefined;
+            if (updated.reminderEnabled && updated.reminderDate) {
+              let nextRem = new Date(updated.reminderDate);
+              switch (updated.reminderFrequency) {
+                case "daily":   nextRem.setDate(nextRem.getDate() + 1);   break;
+                case "weekly":  nextRem.setDate(nextRem.getDate() + 7);   break;
+                case "monthly": nextRem.setMonth(nextRem.getMonth() + 1); break;
+              }
+              nextReminder = nextRem.toISOString();
+            }
+
+            const resetChecklist = updated.checklistItems?.map(item => ({ ...item, completed: false }));
+            const nowStr = new Date().toISOString();
+            
+            newTaskToCreate = {
+              id: genId(),
+              title: updated.title,
+              category: updated.category,
+              email: updated.email,
+              paymentMode: updated.paymentMode,
+              dueDate: nextDueStr,
+              notes: updated.notes,
+              checklistItems: resetChecklist,
+              priority: updated.priority,
+              isCompleted: false,
+              reminderEnabled: updated.reminderEnabled,
+              reminderDate: nextReminder,
+              reminderFrequency: updated.reminderFrequency,
+              createdAt: nowStr,
+              updatedAt: nowStr,
+            };
+          }
         }
 
         if (updated.reminderEnabled && updated.reminderDate)
@@ -1891,16 +1903,26 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
         return updated;
       });
 
+      // 3. Apply deletion of unchecked occurrences
+      let filteredList = list;
+      if (taskToDeleteId) {
+        filteredList = list.filter(t => t.id !== taskToDeleteId);
+        cancelTaskReminder(taskToDeleteId);
+        cancelTaskDueNotification(taskToDeleteId);
+        bgCall(`/api/tasks/${taskToDeleteId}`, "DELETE", householdIdRef.current, deviceIdRef.current);
+      }
+
+      // 4. Return correct final array
       if (newTaskToCreate) {
         if (newTaskToCreate.reminderEnabled && newTaskToCreate.reminderDate) {
           scheduleTaskReminder({ id: newTaskToCreate.id, title: newTaskToCreate.title, reminderDate: newTaskToCreate.reminderDate, reminderFrequency: newTaskToCreate.reminderFrequency, notes: newTaskToCreate.notes });
         }
         scheduleTaskDueNotification({ id: newTaskToCreate.id, title: newTaskToCreate.title, dueDate: newTaskToCreate.dueDate, notes: newTaskToCreate.notes });
         bgCall("/api/tasks", "POST", householdIdRef.current, deviceIdRef.current, { ...newTaskToCreate, householdId: householdIdRef.current, deviceId: deviceIdRef.current });
-        return [...list, newTaskToCreate];
+        return [...filteredList, newTaskToCreate];
       }
 
-      return list;
+      return filteredList;
     });
 
     apiCall(`/api/tasks/${id}`, "PUT", householdIdRef.current, deviceIdRef.current, updates);
