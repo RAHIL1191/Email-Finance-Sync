@@ -23,7 +23,7 @@ import { SafeAreaView, useSafeAreaInsets } from "react-native-safe-area-context"
 import { useApp, Task, ChecklistItem } from "@/context/AppContext";
 import { useDrawer } from "@/context/DrawerContext";
 import { useColors } from "@/hooks/useColors";
-import { parseLocalDate } from "@/hooks/useLocalDate";
+import { parseLocalDate, toLocalYMD } from "@/hooks/useLocalDate";
 
 // ─── Constants ────────────────────────────────────────────────────────────────
 const TASK_CATEGORIES = ["Subscription", "Appointment", "Payment", "Reminder", "Bill Cancel", "Dev / Feature", "Other"];
@@ -536,7 +536,7 @@ function TaskFormSheet({
       setCategory(initial.category);
       setEmail(initial.email ?? "");
       setPaymentMode(initial.paymentMode ?? "");
-      setDueDate(new Date(initial.dueDate));
+      setDueDate(parseLocalDate(initial.dueDate));
       setPriority(initial.priority);
       setReminderEnabled(initial.reminderEnabled);
       setReminderDate(initial.reminderDate ? new Date(initial.reminderDate) : new Date());
@@ -570,7 +570,7 @@ function TaskFormSheet({
       category,
       email:           email.trim() || undefined,
       paymentMode:     paymentMode || undefined,
-      dueDate:         dueDate.toISOString(),
+      dueDate:         toLocalYMD(dueDate),
       priority,
       reminderEnabled,
       reminderDate:    reminderEnabled ? reminderDate.toISOString() : undefined,
@@ -1157,14 +1157,14 @@ export default function TasksScreen() {
         return PRIORITY_VAL[b.priority] - PRIORITY_VAL[a.priority];
       }
       // default: date
-      return new Date(a.dueDate).getTime() - new Date(b.dueDate).getTime();
+      return parseLocalDate(a.dueDate).getTime() - parseLocalDate(b.dueDate).getTime();
     });
     return list;
   }, [tasks, sortBy]);
 
   const completedTasks = useMemo(() => {
     let list = tasks.filter((t) => t.isCompleted);
-    list.sort((a, b) => new Date(b.dueDate).getTime() - new Date(a.dueDate).getTime());
+    list.sort((a, b) => parseLocalDate(b.dueDate).getTime() - parseLocalDate(a.dueDate).getTime());
     return list;
   }, [tasks]);
 

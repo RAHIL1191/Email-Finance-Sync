@@ -1295,8 +1295,27 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
         };
 
         const parsedTasks: Task[] = taskRaw ? JSON.parse(taskRaw) : [];
-        setTasks(parsedTasks);
-        setupTaskNotificationsOnInit(parsedTasks);
+        
+        // Healing mechanism: Resynchronize due dates with reminder dates for recurring tasks if they are out of sync
+        let healed = false;
+        const healedTasks = parsedTasks.map(t => {
+          if (t.reminderEnabled && t.reminderDate && t.reminderFrequency && t.reminderFrequency !== "once") {
+            const rDate = new Date(t.reminderDate);
+            const dDate = parseLocalDate(t.dueDate);
+            // Check if they are on different days (in local timezone)
+            if (rDate.getFullYear() !== dDate.getFullYear() || rDate.getMonth() !== dDate.getMonth() || rDate.getDate() !== dDate.getDate()) {
+              healed = true;
+              return { ...t, dueDate: toLocalYMD(rDate) };
+            }
+          }
+          return t;
+        });
+
+        setTasks(healedTasks);
+        if (healed) {
+          AsyncStorage.setItem(STORAGE_KEYS.tasks, JSON.stringify(healedTasks)).catch(() => {});
+        }
+        setupTaskNotificationsOnInit(healedTasks);
         setProjects(projectRaw ? JSON.parse(projectRaw) : []);
         setCategoryRules(rulesRaw ? JSON.parse(rulesRaw) : []);
         if (emailRaw) setEmailSync(JSON.parse(emailRaw));
@@ -1824,13 +1843,18 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
       // 1. Determine if we are unchecking a completed recurring task, and find if we should delete the next occurrence
       const currentTask = prev.find(t => t.id === id);
       if (currentTask && updates.isCompleted === false && currentTask.isCompleted === true && currentTask.reminderFrequency && currentTask.reminderFrequency !== "once") {
-        let nextDue = new Date(currentTask.dueDate);
-        switch (currentTask.reminderFrequency) {
-          case "daily":   nextDue.setDate(nextDue.getDate() + 1);   break;
-          case "weekly":  nextDue.setDate(nextDue.getDate() + 7);   break;
-          case "monthly": nextDue.setMonth(nextDue.getMonth() + 1); break;
-        }
-        const nextDueStr = nextDue.toISOString();
+        let nextDue = parseLocalDate(currentTask.dueDate);
+        const nowMidnight = new Date();
+        nowMidnight.setHours(0, 0, 0, 0);
+        do {
+          switch (currentTask.reminderFrequency) {
+            case "daily":   nextDue.setDate(nextDue.getDate() + 1);   break;
+            case "weekly":  nextDue.setDate(nextDue.getDate() + 7);   break;
+            case "monthly": nextDue.setMonth(nextDue.getMonth() + 1); break;
+          }
+        } while (nextDue.getTime() <= nowMidnight.getTime());
+
+        const nextDueStr = toLocalYMD(nextDue);
         taskToDeleteId = prev.find(existingTask => 
           existingTask.title.trim().toLowerCase() === currentTask.title.trim().toLowerCase() &&
           existingTask.dueDate === nextDueStr &&
@@ -1845,14 +1869,18 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
         
         // If task is completed and has a recurring frequency, auto-generate the next period's task
         if (updates.isCompleted === true && t.isCompleted === false && updated.reminderFrequency && updated.reminderFrequency !== "once") {
-          let nextDue = new Date(updated.dueDate);
-          switch (updated.reminderFrequency) {
-            case "daily":   nextDue.setDate(nextDue.getDate() + 1);   break;
-            case "weekly":  nextDue.setDate(nextDue.getDate() + 7);   break;
-            case "monthly": nextDue.setMonth(nextDue.getMonth() + 1); break;
-          }
+          let nextDue = parseLocalDate(updated.dueDate);
+          const nowMidnight = new Date();
+          nowMidnight.setHours(0, 0, 0, 0);
+          do {
+            switch (updated.reminderFrequency) {
+              case "daily":   nextDue.setDate(nextDue.getDate() + 1);   break;
+              case "weekly":  nextDue.setDate(nextDue.getDate() + 7);   break;
+              case "monthly": nextDue.setMonth(nextDue.getMonth() + 1); break;
+            }
+          } while (nextDue.getTime() <= nowMidnight.getTime());
           
-          const nextDueStr = nextDue.toISOString();
+          const nextDueStr = toLocalYMD(nextDue);
           // Avoid duplicate task generation
           const alreadyExists = prev.some(existingTask => 
             existingTask.title.trim().toLowerCase() === updated.title.trim().toLowerCase() &&
@@ -1864,11 +1892,13 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
             let nextReminder: string | undefined = undefined;
             if (updated.reminderEnabled && updated.reminderDate) {
               let nextRem = new Date(updated.reminderDate);
-              switch (updated.reminderFrequency) {
-                case "daily":   nextRem.setDate(nextRem.getDate() + 1);   break;
-                case "weekly":  nextRem.setDate(nextRem.getDate() + 7);   break;
-                case "monthly": nextRem.setMonth(nextRem.getMonth() + 1); break;
-              }
+              do {
+                switch (updated.reminderFrequency) {
+                  case "daily":   nextRem.setDate(nextRem.getDate() + 1);   break;
+                  case "weekly":  nextRem.setDate(nextRem.getDate() + 7);   break;
+                  case "monthly": nextRem.setMonth(nextRem.getMonth() + 1); break;
+                }
+              } while (nextRem.getTime() <= Date.now());
               nextReminder = nextRem.toISOString();
             }
 
