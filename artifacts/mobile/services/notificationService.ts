@@ -518,12 +518,27 @@ export async function setupTaskNotificationsOnInit(
     if (!N) return;
     const { status } = await N.getPermissionsAsync();
     if (status !== "granted") return;
+
+    // Fetch all currently scheduled notifications to avoid duplicates/unwanted triggers
+    const scheduledList = await N.getAllScheduledNotificationsAsync();
+    const scheduledIds = new Set(scheduledList.map(n => n.identifier));
+    const dueIds = await getTaskDueIds();
+
     for (const task of tasks) {
       if (!task.isCompleted) {
-        if (task.reminderEnabled && task.reminderDate) {
+        const reminderId = `task-${task.id}`;
+        
+        // Only schedule task reminder if not already scheduled
+        if (task.reminderEnabled && task.reminderDate && !scheduledIds.has(reminderId)) {
           await scheduleTaskReminder({ id: task.id, title: task.title, reminderDate: task.reminderDate, reminderFrequency: task.reminderFrequency, notes: task.notes });
         }
-        await scheduleTaskDueNotification({ id: task.id, title: task.title, dueDate: task.dueDate, notes: task.notes });
+        
+        // Only schedule due notification if not already scheduled
+        const dueNotifId = dueIds[task.id];
+        const hasDueScheduled = dueNotifId && scheduledIds.has(dueNotifId);
+        if (!hasDueScheduled) {
+          await scheduleTaskDueNotification({ id: task.id, title: task.title, dueDate: task.dueDate, notes: task.notes });
+        }
       }
     }
   } catch {}
@@ -642,9 +657,24 @@ export async function setupNotificationsOnInit(bills: BillLike[]): Promise<void>
     if (!N) return;
     const { status } = await N.getPermissionsAsync();
     if (status !== "granted") return;
+
+    // Fetch scheduled notifications to skip rescheduling already set bills
+    const scheduledList = await N.getAllScheduledNotificationsAsync();
+    const scheduledIds = new Set(scheduledList.map(n => n.identifier));
+    const billNotifMap = await getStoredIds();
+
     for (const bill of bills) {
-      if (!bill.isPaid) await scheduleBillNotifications(bill);
-      else await cancelBillNotifications(bill.id);
+      if (!bill.isPaid) {
+        const storedIdsForBill = billNotifMap[bill.id];
+        const hasUpcoming = storedIdsForBill?.upcoming && scheduledIds.has(storedIdsForBill.upcoming);
+        const hasOverdue = storedIdsForBill?.overdue && scheduledIds.has(storedIdsForBill.overdue);
+        
+        if (!hasUpcoming || !hasOverdue) {
+          await scheduleBillNotifications(bill);
+        }
+      } else {
+        await cancelBillNotifications(bill.id);
+      }
     }
   } catch {}
 }
