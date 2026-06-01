@@ -393,17 +393,22 @@ export default function HomeScreen() {
 
   const totalExpenses = topCategories.reduce((s, [, v]) => s + v, 0);
 
-  const lastMonthExpenses = useMemo(() => {
+  const lastMonthTopExpenses = useMemo(() => {
     const lmStart = new Date(now.getFullYear(), now.getMonth() - 1, 1).toISOString();
     const lmEnd   = new Date(now.getFullYear(), now.getMonth(), 1).toISOString();
-    return transactions
-      .filter(t => t.type === "expense" && t.category !== "Transfer" && t.category?.toLowerCase() !== "transfer" && t.date >= lmStart && t.date < lmEnd)
-      .reduce((s, t) => s + t.amount, 0);
+    const map: Record<string, number> = {};
+    transactions
+      .filter((t) => t.type === "expense" && t.category !== "Transfer" && t.category?.toLowerCase() !== "transfer" && t.date >= lmStart && t.date < lmEnd)
+      .forEach((t) => { map[t.category] = (map[t.category] || 0) + t.amount; });
+    const lmTop = Object.entries(map)
+      .sort((a, b) => b[1] - a[1])
+      .slice(0, 3);
+    return lmTop.reduce((s, [, v]) => s + v, 0);
   }, [transactions]);
 
   const lastMonthName = new Date(now.getFullYear(), now.getMonth() - 1, 1)
     .toLocaleString("default", { month: "short" });
-  const expenseDiff = lastMonthExpenses - totalExpenses;
+  const expenseDiff = lastMonthTopExpenses - totalExpenses;
 
   // Cash flow
   const netFlow = monthlyIncome - monthlyExpense;
@@ -722,11 +727,11 @@ export default function HomeScreen() {
                 </View>
               </View>
               {/* Insight line */}
-              {lastMonthExpenses > 0 && (
+              {lastMonthTopExpenses > 0 && (
                 <Text style={[styles.expenseInsight, { color: expenseDiff >= 0 ? colors.success : colors.expense }]}>
                   {expenseDiff >= 0
-                    ? `You're spending $${expenseDiff.toFixed(1)} less than ${lastMonthName}`
-                    : `You're spending $${Math.abs(expenseDiff).toFixed(1)} more than ${lastMonthName}`}
+                    ? `You're spending $${expenseDiff.toFixed(0)} less than ${lastMonthName} on top expenses`
+                    : `You're spending $${Math.abs(expenseDiff).toFixed(0)} more than ${lastMonthName} on top expenses`}
                 </Text>
               )}
             </>
