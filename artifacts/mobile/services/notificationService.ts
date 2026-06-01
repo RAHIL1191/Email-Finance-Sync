@@ -25,33 +25,15 @@ interface BillLike {
 // ─── Lazy expo-notifications import + handler init ────────────────────────────
 
 let _notifModule: typeof import("expo-notifications") | null = null;
-let _handlerSet = false;
 
 async function getNotif() {
   if (Platform.OS === "web") return null;
   if (!_notifModule) {
     try {
       _notifModule = await import("expo-notifications");
-      if (!_handlerSet) {
-        _handlerSet = true;
-        _notifModule.setNotificationHandler({
-          handleNotification: async () => ({
-            shouldShowAlert: true,
-            shouldPlaySound: true,
-            shouldSetBadge: true,
-            shouldShowBanner: true,
-            shouldShowList: true,
-          }),
-        });
-        if (Platform.OS === "android") {
-          _notifModule.setNotificationChannelAsync("default", {
-            name: "default",
-            importance: _notifModule.AndroidImportance.MAX,
-            vibrationPattern: [0, 250, 250, 250],
-            lightColor: "#FF231F7C",
-          });
-        }
-      }
+      // NOTE: setNotificationHandler is registered at module-scope in _layout.tsx
+      // so notifications display correctly even on cold-starts.
+      // Channel creation is also handled there for Android.
     } catch {
       _notifModule = null;
     }

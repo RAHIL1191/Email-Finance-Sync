@@ -1,5 +1,6 @@
 import AsyncStorage from "@react-native-async-storage/async-storage";
-import { AppState } from "react-native";
+import { AppState, Platform } from "react-native";
+import { router } from "expo-router";
 import {
   cancelBillNotifications,
   scheduleBillNotifications,
@@ -3312,7 +3313,7 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
     setAlerts([]);
   }, []);
 
-  // ── Automatic Alerts check (bills & budgets) ──────────────────────────────
+  // ── Automatic Alerts check (bills, budgets & tasks) ────────────────────────
   useEffect(() => {
     if (!initialized) return;
 
@@ -3368,7 +3369,78 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
         );
       }
     });
-  }, [initialized, bills, transactions, budgets, addAlert]);
+
+    // 3. Tasks due today & overdue tasks
+    tasks.forEach((task) => {
+      if (task.isCompleted) return;
+      if (task.dueDate === todayStr) {
+        const stableKey = `task_due_today_${task.id}_${task.dueDate}`;
+        addAlert(
+          `📋 Task Due Today: ${task.title}`,
+          task.notes || "This task is due today.",
+          "task",
+          stableKey
+        );
+      } else if (task.dueDate < todayStr) {
+        const stableKey = `task_overdue_${task.id}_${task.dueDate}`;
+        addAlert(
+          `⚠️ Overdue Task: ${task.title}`,
+          `This task was due on ${task.dueDate}.`,
+          "task",
+          stableKey
+        );
+      }
+    });
+  }, [initialized, bills, transactions, budgets, tasks, addAlert]);
+
+  // ── Notification listeners: bridge OS notifications → alerts + deep link ───
+  useEffect(() => {
+    if (Platform.OS === "web") return;
+    let receivedSub: { remove: () => void } | null = null;
+    let responseSub: { remove: () => void } | null = null;
+
+    import("expo-notifications").then((Notifications) => {
+      // 1. When a notification is received (foreground or background delivery)
+      //    → create an alert entry so it appears in the Inbox
+      receivedSub = Notifications.addNotificationReceivedListener((event) => {
+        const { title, body, data } = event.request.content;
+        if (!title) return;
+        const notifType = (data?.type as string) || "general";
+        const entityId = (data?.taskId || data?.billId || data?.budgetId || "") as string;
+        const alertType: AlertLog["type"] = notifType.startsWith("task") ? "task"
+          : notifType === "upcoming" || notifType === "overdue" ? "bill"
+          : notifType.startsWith("budget") ? "budget"
+          : "general";
+        const stableKey = `notif_${notifType}_${entityId}_${event.request.identifier}`;
+        addAlert(title, body || "", alertType, stableKey);
+      });
+
+      // 2. When the user taps a notification → navigate to the relevant screen
+      responseSub = Notifications.addNotificationResponseReceivedListener((response) => {
+        const { data } = response.notification.request.content;
+        const notifType = (data?.type as string) || "";
+        try {
+          if (notifType === "task" || notifType === "task_due") {
+            router.push("/(tabs)/tasks");
+          } else if (notifType === "upcoming" || notifType === "overdue") {
+            router.push("/(tabs)/bills");
+          } else if (notifType.startsWith("budget")) {
+            router.push("/(tabs)/budget");
+          } else {
+            // Default: go to alerts/inbox
+            router.push("/alerts");
+          }
+        } catch (navErr) {
+          console.warn("[Notification] Navigation error:", navErr);
+        }
+      });
+    }).catch(() => {});
+
+    return () => {
+      receivedSub?.remove();
+      responseSub?.remove();
+    };
+  }, [addAlert]);
 
   const delinkPlaid = useCallback((itemId: string) => {
     // Remove Plaid token only — keeps accounts and transactions intact, but clears investment data
