@@ -414,6 +414,7 @@ const STORAGE_KEYS = {
   holdings: "@fintrack/holdings",
   rrspLimit: "@fintrack/rrspLimit",
   alerts: "@fintrack/alerts",
+  dismissedAlertKeys: "@fintrack/dismissedAlertKeys",
 };
 
 // ── Helpers ──────────────────────────────────────────────────────────────────
@@ -1164,6 +1165,10 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
   const [userName, setUserNameState] = useState<string>("");
   const [reviewedTransactionIds, setReviewedTransactionIds] = useState<string[]>([]);
   const [alerts, setAlerts] = useState<AlertLog[]>([]);
+  const [dismissedAlertKeys, setDismissedAlertKeys] = useState<Set<string>>(new Set());
+  const dismissedAlertKeysRef = useRef<Set<string>>(new Set());
+  useEffect(() => { dismissedAlertKeysRef.current = dismissedAlertKeys; }, [dismissedAlertKeys]);
+  
   const deviceIdRef = useRef<string>("");
   const householdIdRef = useRef<string>("");
   const accountsRef = useRef<Account[]>([]);
@@ -1193,10 +1198,55 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
   useEffect(() => { investmentTransactionsRef.current = investmentTransactions; }, [investmentTransactions]);
   useEffect(() => { alertsRef.current = alerts; }, [alerts]);
 
+  const syncPresentedNotifications = useCallback(async () => {
+    if (Platform.OS === "web") return;
+    try {
+      const Notifications = await import("expo-notifications");
+      const presented = await Notifications.getPresentedNotificationsAsync();
+      if (!presented || presented.length === 0) return;
+      
+      let addedAny = false;
+      for (const notif of presented) {
+        const { title, body, data } = notif.request.content;
+        if (!title) continue;
+        
+        const notifType = (data?.type as string) || "general";
+        const entityId = (data?.taskId || data?.billId || data?.budgetId || "") as string;
+        const alertType: AlertLog["type"] = notifType.startsWith("task") ? "task"
+          : notifType === "upcoming" || notifType === "overdue" ? "bill"
+          : notifType.startsWith("budget") ? "budget"
+          : "general";
+        const stableKey = `notif_${notifType}_${entityId}_${notif.request.identifier}`;
+        
+        if (
+          !alertsRef.current.some((a) => a.stableKey === stableKey) &&
+          !dismissedAlertKeysRef.current.has(stableKey)
+        ) {
+          const newAlert: AlertLog = {
+            id: genId(),
+            title,
+            body: body || "",
+            type: alertType,
+            date: new Date().toISOString(),
+            isRead: false,
+            stableKey,
+          };
+          alertsRef.current = [newAlert, ...alertsRef.current];
+          addedAny = true;
+        }
+      }
+      if (addedAny) {
+        setAlerts([...alertsRef.current]);
+      }
+    } catch (err) {
+      console.warn("[Notifications] Error syncing presented notifications:", err);
+    }
+  }, []);
+
   useEffect(() => {
     (async () => {
       try {
-        const [storedVersion, txRaw, accRaw, billRaw, budgetRaw, goalRaw, projectRaw, catRaw, rulesRaw, emailRaw, plaidRaw, storedDeviceId, storedHouseholdId, storedUserName, storedReviewedIds, taskRaw, invTxRaw, holdRaw, rrspLimitRaw, alertsRaw] =
+        const [storedVersion, txRaw, accRaw, billRaw, budgetRaw, goalRaw, projectRaw, catRaw, rulesRaw, emailRaw, plaidRaw, storedDeviceId, storedHouseholdId, storedUserName, storedReviewedIds, taskRaw, invTxRaw, holdRaw, rrspLimitRaw, alertsRaw, dismissedKeysRaw] =
           await Promise.all([
             AsyncStorage.getItem(STORAGE_KEYS.version),
             AsyncStorage.getItem(STORAGE_KEYS.transactions),
@@ -1218,6 +1268,7 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
             AsyncStorage.getItem(STORAGE_KEYS.holdings),
             AsyncStorage.getItem(STORAGE_KEYS.rrspLimit),
             AsyncStorage.getItem(STORAGE_KEYS.alerts),
+            AsyncStorage.getItem(STORAGE_KEYS.dismissedAlertKeys),
           ]);
 
         const dId = storedDeviceId || generateDeviceId();
@@ -1357,6 +1408,19 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
           ];
         }
         setAlerts(loadedAlerts);
+        if (dismissedKeysRaw) {
+          try {
+            const parsedKeys = JSON.parse(dismissedKeysRaw);
+            if (Array.isArray(parsedKeys)) {
+              setDismissedAlertKeys(new Set(parsedKeys));
+            }
+          } catch {}
+        }
+        
+        // Sync any notifications that arrived while app was closed
+        setTimeout(() => {
+          syncPresentedNotifications();
+        }, 1000);
 
         // ── Load categories ───────────────────────────────────────────────────
         const savedCats: Category[] = catRaw ? JSON.parse(catRaw) : [];
@@ -1546,6 +1610,11 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
   useEffect(() => { if (initialized) AsyncStorage.setItem(STORAGE_KEYS.holdings, JSON.stringify(holdings)); }, [holdings, initialized]);
   useEffect(() => { if (initialized) AsyncStorage.setItem(STORAGE_KEYS.rrspLimit, String(rrspLimit)); }, [rrspLimit, initialized]);
   useEffect(() => { if (initialized) AsyncStorage.setItem(STORAGE_KEYS.alerts, JSON.stringify(alerts)); }, [alerts, initialized]);
+  useEffect(() => {
+    if (initialized) {
+      AsyncStorage.setItem(STORAGE_KEYS.dismissedAlertKeys, JSON.stringify(Array.from(dismissedAlertKeys))).catch(() => {});
+    }
+  }, [dismissedAlertKeys, initialized]);
 
   // ── Auto backup ──────────────────────────────────────────────────────────
   useEffect(() => {
@@ -3276,6 +3345,7 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
       checkBills();
       doAutoSync();
       pullAllFromDb();
+      syncPresentedNotifications();
     };
 
     const sub = AppState.addEventListener("change", (state) => {
@@ -3286,7 +3356,10 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
   }, []);
 
   const addAlert = useCallback((title: string, body: string, type: AlertLog["type"], stableKey?: string) => {
-    if (stableKey && alertsRef.current.some((a) => a.stableKey === stableKey)) {
+    if (stableKey && (
+      alertsRef.current.some((a) => a.stableKey === stableKey) ||
+      dismissedAlertKeysRef.current.has(stableKey)
+    )) {
       return;
     }
     const newAlert: AlertLog = {
@@ -3311,10 +3384,27 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
   }, []);
 
   const clearAllAlerts = useCallback(() => {
+    const keysToDismiss = alertsRef.current.map((a) => a.stableKey).filter(Boolean) as string[];
+    if (keysToDismiss.length > 0) {
+      setDismissedAlertKeys((prev) => {
+        const next = new Set(prev);
+        keysToDismiss.forEach((k) => next.add(k));
+        return next;
+      });
+    }
+    alertsRef.current = [];
     setAlerts([]);
   }, []);
 
   const deleteAlert = useCallback((id: string) => {
+    const alertToDelete = alertsRef.current.find((a) => a.id === id);
+    if (alertToDelete?.stableKey) {
+      setDismissedAlertKeys((prev) => {
+        const next = new Set(prev);
+        next.add(alertToDelete.stableKey!);
+        return next;
+      });
+    }
     alertsRef.current = alertsRef.current.filter((a) => a.id !== id);
     setAlerts((prev) => prev.filter((a) => a.id !== id));
   }, []);
@@ -3423,8 +3513,19 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
 
       // 2. When the user taps a notification → navigate to the relevant screen
       responseSub = Notifications.addNotificationResponseReceivedListener((response) => {
-        const { data } = response.notification.request.content;
+        const { title, body, data } = response.notification.request.content;
         const notifType = (data?.type as string) || "";
+        const entityId = (data?.taskId || data?.billId || data?.budgetId || "") as string;
+
+        if (title) {
+          const alertType: AlertLog["type"] = notifType.startsWith("task") ? "task"
+            : notifType === "upcoming" || notifType === "overdue" ? "bill"
+            : notifType.startsWith("budget") ? "budget"
+            : "general";
+          const stableKey = `notif_${notifType}_${entityId}_${response.notification.request.identifier}`;
+          addAlert(title, body || "", alertType, stableKey);
+        }
+
         try {
           if (notifType === "task" || notifType === "task_due") {
             router.push("/(tabs)/tasks");
@@ -3433,7 +3534,6 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
           } else if (notifType.startsWith("budget")) {
             router.push("/(tabs)/budget");
           } else {
-            // Default: go to alerts/inbox
             router.push("/alerts");
           }
         } catch (navErr) {

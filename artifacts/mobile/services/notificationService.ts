@@ -143,7 +143,7 @@ function buildTriggerDate(
   hour: number,
   minute: number
 ): Date | null {
-  const trigger = new Date(dueDateStr);
+  const trigger = parseLocalDate(dueDateStr);
   trigger.setDate(trigger.getDate() + offsetDays);
   trigger.setHours(hour, minute, 0, 0);
   return trigger.getTime() > Date.now() ? trigger : null;
@@ -233,6 +233,7 @@ export async function scheduleBillNotifications(bill: BillLike): Promise<void> {
     if (prefs.bill_upcoming !== false) {
       const triggerDate = buildTriggerDate(bill.dueDate, -remindOffset, hour, minute);
       if (triggerDate) {
+        const seconds = Math.max(1, Math.round((triggerDate.getTime() - Date.now()) / 1000));
         const id = await N.scheduleNotificationAsync({
           content: {
             title: "📅 Bill Due Soon",
@@ -242,7 +243,8 @@ export async function scheduleBillNotifications(bill: BillLike): Promise<void> {
             data: { billId: bill.id, type: "upcoming" },
           } as any,
           trigger: {
-            date: triggerDate,
+            type: "timeInterval" as any,
+            seconds,
           },
         });
         billIds.upcoming = id;
@@ -253,6 +255,7 @@ export async function scheduleBillNotifications(bill: BillLike): Promise<void> {
     if (prefs.bill_overdue !== false) {
       const triggerDate = buildTriggerDate(bill.dueDate, 1, hour, minute);
       if (triggerDate) {
+        const seconds = Math.max(1, Math.round((triggerDate.getTime() - Date.now()) / 1000));
         const id = await N.scheduleNotificationAsync({
           content: {
             title: "⚠️ Bill Overdue",
@@ -262,7 +265,8 @@ export async function scheduleBillNotifications(bill: BillLike): Promise<void> {
             data: { billId: bill.id, type: "overdue" },
           } as any,
           trigger: {
-            date: triggerDate,
+            type: "timeInterval" as any,
+            seconds,
           },
         });
         billIds.overdue = id;
@@ -340,11 +344,14 @@ export async function scheduleTaskReminder(task: TaskLike): Promise<void> {
     console.log("[NotificationService] Canceling existing reminder for task:", task.id);
     await N.cancelScheduledNotificationAsync(`task-${task.id}`).catch(() => {});
     
-    let trigger: any = {
-      date: triggerDate,
-    };
-
-    if (task.reminderFrequency === "daily") {
+    let trigger: any = null;
+    if (!task.reminderFrequency || task.reminderFrequency === "once") {
+      const seconds = Math.max(1, Math.round((triggerDate.getTime() - Date.now()) / 1000));
+      trigger = {
+        type: "timeInterval" as any,
+        seconds,
+      };
+    } else if (task.reminderFrequency === "daily") {
       trigger = {
         type: "daily",
         hour: triggerDate.getHours(),
@@ -414,9 +421,10 @@ export async function scheduleTaskDueNotification(task: TaskDueLike): Promise<vo
     }
     if (ids[task.id]) await N.cancelScheduledNotificationAsync(ids[task.id]).catch(() => {});
     const { hour, minute } = await getTaskReminderTime();
-    const triggerDate = new Date(task.dueDate);
+    const triggerDate = parseLocalDate(task.dueDate);
     triggerDate.setHours(hour, minute, 0, 0);
     if (triggerDate.getTime() <= Date.now()) return;
+    const seconds = Math.max(1, Math.round((triggerDate.getTime() - Date.now()) / 1000));
     const id = await N.scheduleNotificationAsync({
       content: {
         title: `📋 Task Due Today: ${task.title}`,
@@ -426,7 +434,8 @@ export async function scheduleTaskDueNotification(task: TaskDueLike): Promise<vo
         data: { taskId: task.id, type: "task_due" },
       } as any,
       trigger: {
-        date: triggerDate,
+        type: "timeInterval" as any,
+        seconds,
       },
     });
     ids[task.id] = id;
