@@ -2,7 +2,7 @@
   "name": "@workspace/mobile",
   "version": "0.0.0",
   "private": true,
-  "main": "expo-router/entry",
+  "main": "index.js",
   "scripts": {
     "dev": "expo start",
     "build": "node scripts/build.js",
@@ -60,6 +60,7 @@
     "zod-validation-error": "^3.4.0"
   },
   "dependencies": {
+    "@notifee/react-native": "^9.1.8",
     "@react-native-community/datetimepicker": "8.4.4",
     "expo": "~54.0.34",
     "expo-document-picker": "~14.0.6",

@@ -97,6 +97,14 @@ export default function RootLayout() {
     }
   }, [ready]);
 
+  useEffect(() => {
+    if (Platform.OS !== "web") {
+      import("@/services/notifeeService").then(({ initializeNotifeeChannels }) => {
+        initializeNotifeeChannels().catch(() => {});
+      }).catch(() => {});
+    }
+  }, []);
+
   if (!ready) {
     return null;
   }

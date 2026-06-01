@@ -204,10 +204,30 @@ function getPeriodStart(period: string): Date {
 
 // ─── Public API ───────────────────────────────────────────────────────────────
 
+import { scheduleNotifeeReminder, cancelNotifeeReminder } from "./notifeeService";
+
+// Helper to safely fetch currently scheduled trigger IDs from Notifee without web runtime issues
+async function getNotifeeScheduledIds(): Promise<Set<string>> {
+  if (Platform.OS === "web") return new Set();
+  try {
+    const notifee = (await import("@notifee/react-native")).default;
+    const ids = await notifee.getTriggerNotificationIds();
+    return new Set(ids);
+  } catch {
+    return new Set();
+  }
+}
+
+async function cancelIdsForBill(billId: string): Promise<void> {
+  await cancelNotifeeReminder(billId, "bill", "upcoming").catch(() => {});
+  await cancelNotifeeReminder(billId, "bill", "overdue").catch(() => {});
+}
+
+// ─── Public API ───────────────────────────────────────────────────────────────
+
 /** Schedule upcoming (3 days before) and/or overdue (1 day after) notifications for a bill. */
 export async function scheduleBillNotifications(bill: BillLike): Promise<void> {
-  const N = await getNotif();
-  if (!N) return;
+  if (Platform.OS === "web") return;
   if (bill.isPaid) { await cancelBillNotifications(bill.id); return; }
 
   try {
@@ -218,7 +238,7 @@ export async function scheduleBillNotifications(bill: BillLike): Promise<void> {
     const ids = await getStoredIds();
     const billIds: BillNotifIds = {};
 
-    if (ids[bill.id]) await cancelIds(ids[bill.id]);
+    await cancelIdsForBill(bill.id);
 
     // Upcoming: remindDays before due date (default 3)
     // Handles both numeric strings ("3") and text format ("5 days before", "1 week before", "2 weeks before")
@@ -233,20 +253,15 @@ export async function scheduleBillNotifications(bill: BillLike): Promise<void> {
     if (prefs.bill_upcoming !== false) {
       const triggerDate = buildTriggerDate(bill.dueDate, -remindOffset, hour, minute);
       if (triggerDate) {
-        const id = await N.scheduleNotificationAsync({
-          content: {
-            title: "📅 Bill Due Soon",
-            body: `${bill.title} — $${bill.amount.toFixed(2)} is due in ${remindOffset} day${remindOffset !== 1 ? "s" : ""}.`,
-            sound: true,
-            channelId: "default",
-            data: { billId: bill.id, type: "upcoming", app: "fintrack" },
-          } as any,
-          trigger: {
-            type: "date" as any,
-            date: triggerDate,
-          },
-        });
-        billIds.upcoming = id;
+        await scheduleNotifeeReminder(
+          bill.id,
+          "📅 Bill Due Soon",
+          `${bill.title} — $${bill.amount.toFixed(2)} is due in ${remindOffset} day${remindOffset !== 1 ? "s" : ""}.`,
+          triggerDate,
+          "bill",
+          "upcoming"
+        );
+        billIds.upcoming = `bill-upcoming-${bill.id}`;
       }
     }
 
@@ -254,20 +269,15 @@ export async function scheduleBillNotifications(bill: BillLike): Promise<void> {
     if (prefs.bill_overdue !== false) {
       const triggerDate = buildTriggerDate(bill.dueDate, 1, hour, minute);
       if (triggerDate) {
-        const id = await N.scheduleNotificationAsync({
-          content: {
-            title: "⚠️ Bill Overdue",
-            body: `${bill.title} — $${bill.amount.toFixed(2)} was due yesterday. Please pay now.`,
-            sound: true,
-            channelId: "default",
-            data: { billId: bill.id, type: "overdue", app: "fintrack" },
-          } as any,
-          trigger: {
-            type: "date" as any,
-            date: triggerDate,
-          },
-        });
-        billIds.overdue = id;
+        await scheduleNotifeeReminder(
+          bill.id,
+          "⚠️ Bill Overdue",
+          `${bill.title} — $${bill.amount.toFixed(2)} was due yesterday. Please pay now.`,
+          triggerDate,
+          "bill",
+          "overdue"
+        );
+        billIds.overdue = `bill-overdue-${bill.id}`;
       }
     }
 
@@ -283,10 +293,11 @@ export async function cancelBillNotifications(billId: string): Promise<void> {
   if (Platform.OS === "web") return;
   try {
     const ids = await getStoredIds();
-    if (!ids[billId]) return;
-    await cancelIds(ids[billId]);
-    delete ids[billId];
-    await saveStoredIds(ids);
+    await cancelIdsForBill(billId);
+    if (ids[billId]) {
+      delete ids[billId];
+      await saveStoredIds(ids);
+    }
   } catch {}
 }
 
@@ -307,14 +318,10 @@ export async function rescheduleAllBillNotifications(bills: BillLike[]): Promise
 
 interface TaskLike { id: string; title: string; reminderDate: string; reminderFrequency?: "once" | "daily" | "weekly" | "monthly"; notes?: string; }
 
-/** Schedule a one-time or recurring reminder notification for a task. */
+/** Schedule a one-time reminder notification for a task. */
 export async function scheduleTaskReminder(task: TaskLike): Promise<void> {
   console.log("[NotificationService] scheduleTaskReminder CALLED for task:", task.title, "frequency:", task.reminderFrequency);
-  const N = await getNotif();
-  if (!N) {
-    console.log("[NotificationService] scheduleTaskReminder FAILED: getNotif() returned null (Web platform or module load failure).");
-    return;
-  }
+  if (Platform.OS === "web") return;
   try {
     const granted = await requestNotificationPermissions();
     if (!granted) {
@@ -325,7 +332,7 @@ export async function scheduleTaskReminder(task: TaskLike): Promise<void> {
     console.log("[NotificationService] Current notification preferences:", prefs);
     if (prefs.task_reminders === false) {
       console.log("[NotificationService] scheduleTaskReminder SKIPPED: task_reminders pref is explicitly false.");
-      await N.cancelScheduledNotificationAsync(`task-${task.id}`).catch(() => {});
+      await cancelNotifeeReminder(task.id, "task").catch(() => {});
       return;
     }
     const triggerDate = new Date(task.reminderDate);
@@ -340,52 +347,17 @@ export async function scheduleTaskReminder(task: TaskLike): Promise<void> {
     }
     
     console.log("[NotificationService] Canceling existing reminder for task:", task.id);
-    await N.cancelScheduledNotificationAsync(`task-${task.id}`).catch(() => {});
+    await cancelNotifeeReminder(task.id, "task").catch(() => {});
     
-    let trigger: any = null;
-    if (!task.reminderFrequency || task.reminderFrequency === "once") {
-      trigger = {
-        type: "date" as any,
-        date: triggerDate,
-      };
-    } else if (task.reminderFrequency === "daily") {
-      trigger = {
-        type: "daily",
-        hour: triggerDate.getHours(),
-        minute: triggerDate.getMinutes(),
-        repeats: true,
-      };
-    } else if (task.reminderFrequency === "weekly") {
-      trigger = {
-        type: "weekly",
-        weekday: triggerDate.getDay() + 1,
-        hour: triggerDate.getHours(),
-        minute: triggerDate.getMinutes(),
-        repeats: true,
-      };
-    } else if (task.reminderFrequency === "monthly") {
-      trigger = {
-        type: "calendar",
-        day: triggerDate.getDate(),
-        hour: triggerDate.getHours(),
-        minute: triggerDate.getMinutes(),
-        repeats: true,
-      };
-    }
-
-    console.log("[NotificationService] Scheduling notification via Expo with trigger:", trigger);
-    const scheduledId = await N.scheduleNotificationAsync({
-      identifier: `task-${task.id}`,
-      content: {
-        title: `⏰ Task Reminder: ${task.title}`,
-        body: task.notes || "Don't forget your upcoming task!",
-        sound: true,
-        channelId: "default",
-        data: { taskId: task.id, type: "task", app: "fintrack" },
-      } as any,
-      trigger,
-    });
-    console.log("[NotificationService] scheduleTaskReminder SUCCESS! Scheduled ID:", scheduledId);
+    console.log("[NotificationService] Scheduling notification via Notifee exact alarm...");
+    await scheduleNotifeeReminder(
+      task.id,
+      `⏰ Task Reminder: ${task.title}`,
+      task.notes || "Don't forget your upcoming task!",
+      triggerDate,
+      "task"
+    );
+    console.log("[NotificationService] scheduleTaskReminder SUCCESS!");
   } catch (err) {
     console.error("[NotificationService] Error scheduling task reminder:", err);
   }
@@ -394,47 +366,40 @@ export async function scheduleTaskReminder(task: TaskLike): Promise<void> {
 /** Cancel a scheduled task reminder. */
 export async function cancelTaskReminder(taskId: string): Promise<void> {
   if (Platform.OS === "web") return;
-  const N = await getNotif();
-  if (!N) return;
-  try { await N.cancelScheduledNotificationAsync(`task-${taskId}`).catch(() => {}); } catch {}
+  await cancelNotifeeReminder(taskId, "task").catch(() => {});
 }
 
 /** Schedule a notification on the task's due date (fires at 8:00 AM on the due day). */
 export async function scheduleTaskDueNotification(task: TaskDueLike): Promise<void> {
-  const N = await getNotif();
-  if (!N) return;
+  if (Platform.OS === "web") return;
   try {
     const granted = await requestNotificationPermissions();
     if (!granted) return;
     const prefs = await getPrefs();
     const ids = await getTaskDueIds();
     if (prefs.task_due === false) {
+      await cancelNotifeeReminder(task.id, "task", "due").catch(() => {});
       if (ids[task.id]) {
-        await N.cancelScheduledNotificationAsync(ids[task.id]).catch(() => {});
         delete ids[task.id];
         await saveTaskDueIds(ids);
       }
       return;
     }
-    if (ids[task.id]) await N.cancelScheduledNotificationAsync(ids[task.id]).catch(() => {});
+    await cancelNotifeeReminder(task.id, "task", "due").catch(() => {});
     const { hour, minute } = await getTaskReminderTime();
     const triggerDate = parseLocalDate(task.dueDate);
     triggerDate.setHours(hour, minute, 0, 0);
     if (triggerDate.getTime() <= Date.now()) return;
-    const id = await N.scheduleNotificationAsync({
-      content: {
-        title: `📋 Task Due Today: ${task.title}`,
-        body: task.notes || "This task is due today.",
-        sound: true,
-        channelId: "default",
-        data: { taskId: task.id, type: "task_due", app: "fintrack" },
-      } as any,
-      trigger: {
-        type: "date" as any,
-        date: triggerDate,
-      },
-    });
-    ids[task.id] = id;
+    
+    await scheduleNotifeeReminder(
+      task.id,
+      `📋 Task Due Today: ${task.title}`,
+      task.notes || "This task is due today.",
+      triggerDate,
+      "task",
+      "due"
+    );
+    ids[task.id] = `task-due-${task.id}`;
     await saveTaskDueIds(ids);
   } catch (err) {
     console.error("[NotificationService] Error scheduling task due notification:", err);
@@ -444,14 +409,13 @@ export async function scheduleTaskDueNotification(task: TaskDueLike): Promise<vo
 /** Cancel a scheduled task due-date notification. */
 export async function cancelTaskDueNotification(taskId: string): Promise<void> {
   if (Platform.OS === "web") return;
-  const N = await getNotif();
-  if (!N) return;
   try {
     const ids = await getTaskDueIds();
-    if (!ids[taskId]) return;
-    await N.cancelScheduledNotificationAsync(ids[taskId]).catch(() => {});
-    delete ids[taskId];
-    await saveTaskDueIds(ids);
+    await cancelNotifeeReminder(taskId, "task", "due").catch(() => {});
+    if (ids[taskId]) {
+      delete ids[taskId];
+      await saveTaskDueIds(ids);
+    }
   } catch {}
 }
 
@@ -490,9 +454,8 @@ export async function setupTaskNotificationsOnInit(
     const { status } = await N.getPermissionsAsync();
     if (status !== "granted") return;
 
-    // Fetch all currently scheduled notifications to avoid duplicates/unwanted triggers
-    const scheduledList = await N.getAllScheduledNotificationsAsync();
-    const scheduledIds = new Set(scheduledList.map(n => n.identifier));
+    // Fetch all currently scheduled Notifee trigger IDs to avoid duplicate scheduling
+    const scheduledIds = await getNotifeeScheduledIds();
     const dueIds = await getTaskDueIds();
 
     for (const task of tasks) {
@@ -505,9 +468,8 @@ export async function setupTaskNotificationsOnInit(
         }
         
         // Only schedule due notification if not already scheduled
-        const dueNotifId = dueIds[task.id];
-        const hasDueScheduled = dueNotifId && scheduledIds.has(dueNotifId);
-        if (!hasDueScheduled) {
+        const dueNotifId = dueIds[task.id] || `task-due-${task.id}`;
+        if (!scheduledIds.has(dueNotifId)) {
           await scheduleTaskDueNotification({ id: task.id, title: task.title, dueDate: task.dueDate, notes: task.notes });
         }
       }
@@ -631,9 +593,8 @@ export async function setupNotificationsOnInit(bills: BillLike[]): Promise<void>
     const { status } = await N.getPermissionsAsync();
     if (status !== "granted") return;
 
-    // Fetch scheduled notifications to skip rescheduling already set bills
-    const scheduledList = await N.getAllScheduledNotificationsAsync();
-    const scheduledIds = new Set(scheduledList.map(n => n.identifier));
+    // Fetch scheduled Notifee trigger IDs to skip rescheduling already set bills
+    const scheduledIds = await getNotifeeScheduledIds();
     const billNotifMap = await getStoredIds();
 
     for (const bill of bills) {

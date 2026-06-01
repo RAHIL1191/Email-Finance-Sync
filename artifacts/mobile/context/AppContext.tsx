@@ -3495,6 +3495,7 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
     if (Platform.OS === "web") return;
     let receivedSub: { remove: () => void } | null = null;
     let responseSub: { remove: () => void } | null = null;
+    let unsubscribeNotifee: (() => void) | null = null;
 
     import("expo-notifications").then((Notifications) => {
       // 1. When a notification is received (foreground or background delivery)
@@ -3546,11 +3547,89 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
       });
     }).catch(() => {});
 
+    // 3. Notifee Foreground Listener for interactive buttons (Snooze & Complete) & Taps
+    import("@notifee/react-native").then((notifeeModule) => {
+      const notifee = notifeeModule.default;
+      const EventType = notifeeModule.EventType;
+
+      unsubscribeNotifee = notifee.onForegroundEvent(({ type, detail }) => {
+        const { notification, pressAction } = detail;
+        if (!notification) return;
+
+        const entityId = notification.data?.entityId as string;
+        const entityType = notification.data?.type as string;
+        const entitySubtype = notification.data?.subtype as string;
+        const isFintrack = notification.data?.app === 'fintrack';
+
+        if (isFintrack && notification.title) {
+          const notifType = entityType || "general";
+          const fullNotifType = entitySubtype ? `${notifType}_${entitySubtype}` : notifType;
+
+          if (type === EventType.DELIVERED) {
+            const alertType: AlertLog["type"] = notifType === 'task' ? "task"
+              : notifType === 'bill' ? "bill"
+              : "general";
+            const stableKey = `notif_${fullNotifType}_${entityId}_${notification.id}`;
+            addAlert(notification.title, notification.body || "", alertType, stableKey);
+          }
+
+          if (type === EventType.PRESS) {
+            // Also ensure it is logged in inbox if user missed the delivery handler
+            const alertType: AlertLog["type"] = notifType === 'task' ? "task"
+              : notifType === 'bill' ? "bill"
+              : "general";
+            const stableKey = `notif_${fullNotifType}_${entityId}_${notification.id}`;
+            addAlert(notification.title, notification.body || "", alertType, stableKey);
+
+            // Navigate user directly to target screen
+            try {
+              if (notifType === "task") {
+                router.push("/(tabs)/tasks");
+              } else if (notifType === "bill") {
+                router.push("/(tabs)/bills");
+              } else {
+                router.push("/alerts");
+              }
+            } catch (navErr) {
+              console.warn("[Notifee Foreground] Navigation error:", navErr);
+            }
+          }
+        }
+
+        if (type === EventType.ACTION_PRESS && entityId) {
+          if (pressAction?.id === 'complete') {
+            notifee.cancelNotification(notification.id!).catch(() => {});
+            if (entityType === 'task') {
+              updateTask(entityId, { isCompleted: true });
+            } else if (entityType === 'bill') {
+              markBillPaid(entityId);
+            }
+          }
+
+          if (pressAction?.id === 'snooze') {
+            notifee.cancelNotification(notification.id!).catch(() => {});
+            const snoozeTime = new Date(Date.now() + 10 * 60 * 1000);
+            import("@/services/notifeeService").then(({ scheduleNotifeeReminder }) => {
+              scheduleNotifeeReminder(
+                entityId,
+                notification.title || 'Snoozed Reminder',
+                notification.body || '',
+                snoozeTime,
+                entityType as 'task' | 'bill',
+                entitySubtype
+              ).catch(() => {});
+            }).catch(() => {});
+          }
+        }
+      });
+    }).catch(() => {});
+
     return () => {
       receivedSub?.remove();
       responseSub?.remove();
+      unsubscribeNotifee?.();
     };
-  }, [addAlert]);
+  }, [addAlert, updateTask, markBillPaid]);
 
   const delinkPlaid = useCallback((itemId: string) => {
     // Remove Plaid token only — keeps accounts and transactions intact, but clears investment data

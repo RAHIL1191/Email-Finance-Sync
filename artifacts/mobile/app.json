@@ -24,7 +24,10 @@
     "android": {
       "package": "com.rahil1191.mobile",
       "permissions": [
-        "SCHEDULE_EXACT_ALARM"
+        "SCHEDULE_EXACT_ALARM",
+        "VIBRATE",
+        "RECEIVE_BOOT_COMPLETED",
+        "POST_NOTIFICATIONS"
       ]
     },
     "web": {
