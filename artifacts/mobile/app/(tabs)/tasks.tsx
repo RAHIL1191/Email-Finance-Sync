@@ -1133,6 +1133,131 @@ function TaskCard({ task, onToggle, onEdit, onDelete }: {
   );
 }
 
+function parseNaturalDate(str: string): Date | null {
+  const now = new Date();
+  str = str.trim().toLowerCase();
+
+  if (str === "today") {
+    return now;
+  }
+  if (str === "tomorrow") {
+    const d = new Date(now);
+    d.setDate(now.getDate() + 1);
+    return d;
+  }
+
+  // Weekdays lookup
+  const weekdays: Record<string, number> = {
+    sunday: 0, sun: 0,
+    monday: 1, mon: 1,
+    tuesday: 2, tue: 2,
+    wednesday: 3, wed: 3,
+    thursday: 4, thu: 4,
+    friday: 5, fri: 5,
+    saturday: 6, sat: 6
+  };
+
+  if (str in weekdays) {
+    const targetDay = weekdays[str];
+    const currentDay = now.getDay();
+    let diff = targetDay - currentDay;
+    if (diff <= 0) {
+      diff += 7; // Next week's weekday if today or already passed
+    }
+    const d = new Date(now);
+    d.setDate(now.getDate() + diff);
+    return d;
+  }
+
+  // Try standard Date parsing
+  const parsed = Date.parse(str);
+  if (!isNaN(parsed)) {
+    const d = new Date(parsed);
+    return d;
+  }
+
+  // Check for formats like "june 15" or "15 june" without year
+  const months = ["jan", "feb", "mar", "apr", "may", "jun", "jul", "aug", "sep", "oct", "nov", "dec"];
+  const monthDayMatch = str.match(/([a-z]{3,})\s+(\d{1,2})/i);
+  if (monthDayMatch) {
+    const mStr = monthDayMatch[1].substring(0, 3);
+    const mIndex = months.indexOf(mStr);
+    const day = parseInt(monthDayMatch[2], 10);
+    if (mIndex !== -1 && day >= 1 && day <= 31) {
+      const d = new Date(now.getFullYear(), mIndex, day);
+      if (d < now) {
+        d.setFullYear(now.getFullYear() + 1);
+      }
+      return d;
+    }
+  }
+
+  return null;
+}
+
+function parseYodaCommand(command: string): { title: string; dueDate: Date; repeat: "once" | "daily" | "weekly" | "monthly" } | null {
+  const cmd = command.trim();
+  const cmdLower = cmd.toLowerCase();
+  
+  let trigger = "";
+  if (cmdLower.startsWith("yoda add task")) {
+    trigger = "yoda add task";
+  } else if (cmdLower.startsWith("add task")) {
+    trigger = "add task";
+  } else {
+    return null;
+  }
+
+  let content = cmd.slice(trigger.length).trim();
+  if (!content) return null;
+
+  let repeat: "once" | "daily" | "weekly" | "monthly" = "once";
+  const repeatRegex = /\brepeat\s+(once|daily|weekly|monthly)\b/i;
+  const repeatMatch = content.match(repeatRegex);
+  if (repeatMatch) {
+    repeat = repeatMatch[1].toLowerCase() as any;
+    content = content.replace(repeatRegex, "").trim();
+  } else {
+    const simpleRepeatRegex = /\b(daily|weekly|monthly)\b/i;
+    const simpleRepeatMatch = content.match(simpleRepeatRegex);
+    if (simpleRepeatMatch) {
+      repeat = simpleRepeatMatch[1].toLowerCase() as any;
+      content = content.replace(simpleRepeatRegex, "").trim();
+    }
+  }
+
+  let dueDate = new Date();
+  const dateRegex = /\b(on|due|for)\s+(.+)$/i;
+  const dateMatch = content.match(dateRegex);
+  if (dateMatch) {
+    const dateStr = dateMatch[2].trim().toLowerCase();
+    const titlePart = content.slice(0, dateMatch.index).trim();
+    const parsedDate = parseNaturalDate(dateStr);
+    if (parsedDate) {
+      dueDate = parsedDate;
+      content = titlePart;
+    }
+  } else {
+    const endWordsRegex = /\b(today|tomorrow|monday|tuesday|wednesday|thursday|friday|saturday|sunday|mon|tue|wed|thu|fri|sat|sun)\b$/i;
+    const endWordsMatch = content.match(endWordsRegex);
+    if (endWordsMatch) {
+      const dateStr = endWordsMatch[1].trim().toLowerCase();
+      const titlePart = content.slice(0, endWordsMatch.index).trim();
+      const parsedDate = parseNaturalDate(dateStr);
+      if (parsedDate) {
+        dueDate = parsedDate;
+        content = titlePart;
+      }
+    }
+  }
+
+  return {
+    title: content.trim(),
+    dueDate,
+    repeat,
+  };
+}
+
 // ─── Main Screen ──────────────────────────────────────────────────────────────
 export default function TasksScreen() {
   const colors = useColors();
@@ -1144,6 +1269,7 @@ export default function TasksScreen() {
   const [viewMode,          setViewMode]          = useState<"list" | "board">("list");
   const [showForm,          setShowForm]          = useState(false);
   const [editTask,          setEditTask]          = useState<Task | null>(null);
+  const [yodaText,          setYodaText]          = useState("");
 
   const PRIORITY_VAL = { high: 3, medium: 2, low: 1 };
 
@@ -1182,6 +1308,37 @@ export default function TasksScreen() {
     ]);
   };
 
+  const handleYodaSubmit = () => {
+    if (!yodaText.trim()) return;
+    const parsed = parseYodaCommand(yodaText);
+    if (!parsed) {
+      Alert.alert(
+        "Invalid Command 🤖",
+        "Command must start with 'yoda add task' or 'add task'.\n\nExample:\n'yoda add task Buy Groceries on Friday repeat weekly'"
+      );
+      return;
+    }
+
+    const newTaskData: Omit<Task, "id" | "createdAt" | "updatedAt"> = {
+      title: parsed.title,
+      category: "Reminder",
+      dueDate: toLocalYMD(parsed.dueDate),
+      priority: "medium",
+      reminderEnabled: parsed.repeat !== "once",
+      reminderDate: parsed.repeat !== "once" ? parsed.dueDate.toISOString() : undefined,
+      reminderFrequency: parsed.repeat !== "once" ? parsed.repeat : undefined,
+      isCompleted: false,
+    };
+
+    addTask(newTaskData);
+    Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
+    setYodaText("");
+    Alert.alert(
+      "Task Created! 🤖",
+      `Title: "${parsed.title}"\nDue: ${toLocalYMD(parsed.dueDate)}\nRepeat: ${parsed.repeat.charAt(0).toUpperCase() + parsed.repeat.slice(1)}`
+    );
+  };
+
   return (
     <SafeAreaView style={[ts.root, { backgroundColor: colors.background }]} edges={["top"]}>
 
@@ -1201,6 +1358,33 @@ export default function TasksScreen() {
           <TouchableOpacity style={[ts.addBtn, { backgroundColor: colors.primary }]} onPress={openAdd}>
             <Feather name="plus" size={20} color="#fff" />
           </TouchableOpacity>
+        </View>
+      </View>
+
+      {/* Quick Yoda Command Input Bar */}
+      <View style={[ts.commandContainer, { backgroundColor: colors.card, borderBottomColor: colors.border }]}>
+        <View style={[ts.commandInputWrap, { backgroundColor: colors.background, borderColor: colors.border }]}>
+          <View style={[ts.yodaBadge, { backgroundColor: colors.primary + "18" }]}>
+            <Text style={[ts.yodaBadgeTxt, { color: colors.primary }]}>Yoda 🤖</Text>
+          </View>
+          <TextInput
+            style={[ts.commandInput, { color: colors.foreground }]}
+            placeholder="Type 'yoda add task [title] on [date] repeat [weekly]'"
+            placeholderTextColor={colors.mutedForeground}
+            value={yodaText}
+            onChangeText={setYodaText}
+            onSubmitEditing={handleYodaSubmit}
+            returnKeyType="done"
+            autoCapitalize="none"
+            autoCorrect={false}
+          />
+          {yodaText.length > 0 ? (
+            <TouchableOpacity onPress={handleYodaSubmit} style={ts.commandSubmitBtn}>
+              <Feather name="arrow-right" size={16} color={colors.primary} />
+            </TouchableOpacity>
+          ) : (
+            <Feather name="zap" size={14} color={colors.mutedForeground} style={{ marginRight: 8 }} />
+          )}
         </View>
       </View>
 
@@ -1428,6 +1612,13 @@ const ts = StyleSheet.create({
   completedTitle: { fontSize: 16, fontFamily: "Inter_600SemiBold" },
   completedCountBadge: { paddingHorizontal: 8, paddingVertical: 2, borderRadius: 10 },
   completedCountTxt: { fontSize: 11, fontFamily: "Inter_600SemiBold" },
+
+  commandContainer: { paddingHorizontal: 16, paddingVertical: 10, borderBottomWidth: StyleSheet.hairlineWidth },
+  commandInputWrap: { flexDirection: "row", alignItems: "center", borderRadius: 14, borderWidth: 1, paddingHorizontal: 8, paddingVertical: 6 },
+  yodaBadge: { paddingHorizontal: 8, paddingVertical: 4, borderRadius: 8, marginRight: 8 },
+  yodaBadgeTxt: { fontSize: 11, fontFamily: "Inter_700Bold" },
+  commandInput: { flex: 1, fontSize: 13, fontFamily: "Inter_400Regular", paddingVertical: 4 },
+  commandSubmitBtn: { padding: 6, borderRadius: 8 },
 });
 
 const modalStyles = StyleSheet.create({
