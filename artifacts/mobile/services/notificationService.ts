@@ -240,7 +240,7 @@ export async function scheduleBillNotifications(bill: BillLike): Promise<void> {
             body: `${bill.title} — $${bill.amount.toFixed(2)} is due in ${remindOffset} day${remindOffset !== 1 ? "s" : ""}.`,
             sound: true,
             channelId: "default",
-            data: { billId: bill.id, type: "upcoming" },
+            data: { billId: bill.id, type: "upcoming", app: "fintrack" },
           } as any,
           trigger: {
             type: "timeInterval" as any,
@@ -262,7 +262,7 @@ export async function scheduleBillNotifications(bill: BillLike): Promise<void> {
             body: `${bill.title} — $${bill.amount.toFixed(2)} was due yesterday. Please pay now.`,
             sound: true,
             channelId: "default",
-            data: { billId: bill.id, type: "overdue" },
+            data: { billId: bill.id, type: "overdue", app: "fintrack" },
           } as any,
           trigger: {
             type: "timeInterval" as any,
@@ -384,7 +384,7 @@ export async function scheduleTaskReminder(task: TaskLike): Promise<void> {
         body: task.notes || "Don't forget your upcoming task!",
         sound: true,
         channelId: "default",
-        data: { taskId: task.id, type: "task" },
+        data: { taskId: task.id, type: "task", app: "fintrack" },
       } as any,
       trigger,
     });
@@ -431,7 +431,7 @@ export async function scheduleTaskDueNotification(task: TaskDueLike): Promise<vo
         body: task.notes || "This task is due today.",
         sound: true,
         channelId: "default",
-        data: { taskId: task.id, type: "task_due" },
+        data: { taskId: task.id, type: "task_due", app: "fintrack" },
       } as any,
       trigger: {
         type: "timeInterval" as any,
@@ -554,7 +554,7 @@ export async function fireImmediateNotification(title: string, body: string, dat
     const { status } = await N.getPermissionsAsync();
     if (status !== "granted") return;
     await N.scheduleNotificationAsync({
-      content: { title, body, sound: true, channelId: "default", data: data ?? {} } as any,
+      content: { title, body, sound: true, channelId: "default", data: { ...(data ?? {}), app: "fintrack" } } as any,
       trigger: null,
     });
   } catch {}
@@ -596,7 +596,8 @@ export async function checkBudgetAndNotify(
           const over = (spent - budget.amount).toFixed(2);
           await fireImmediateNotification(
             "\uD83D\uDEA8 Budget Exceeded",
-            `Your "${budget.name}" budget is over by $${over}.`
+            `Your "${budget.name}" budget is over by $${over}.`,
+            { type: "budget_exceeded", budgetId: budget.id }
           );
           firedMap[overKey] = "fired";
           mapChanged = true;
@@ -610,7 +611,8 @@ export async function checkBudgetAndNotify(
           const pctUsed = Math.round(pct * 100);
           await fireImmediateNotification(
             "\u26A0\uFE0F Budget Alert",
-            `You've used ${pctUsed}% of your "${budget.name}" budget.`
+            `You've used ${pctUsed}% of your "${budget.name}" budget.`,
+            { type: "budget_warning", budgetId: budget.id }
           );
           firedMap[pctKey] = "fired";
           mapChanged = true;

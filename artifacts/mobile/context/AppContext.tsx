@@ -1209,6 +1209,7 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
       for (const notif of presented) {
         const { title, body, data } = notif.request.content;
         if (!title) continue;
+        if (data?.app !== "fintrack") continue;
         
         const notifType = (data?.type as string) || "general";
         const entityId = (data?.taskId || data?.billId || data?.budgetId || "") as string;
@@ -3501,6 +3502,7 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
       receivedSub = Notifications.addNotificationReceivedListener((event) => {
         const { title, body, data } = event.request.content;
         if (!title) return;
+        if (data?.app !== "fintrack") return;
         const notifType = (data?.type as string) || "general";
         const entityId = (data?.taskId || data?.billId || data?.budgetId || "") as string;
         const alertType: AlertLog["type"] = notifType.startsWith("task") ? "task"
@@ -3516,6 +3518,8 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
         const { title, body, data } = response.notification.request.content;
         const notifType = (data?.type as string) || "";
         const entityId = (data?.taskId || data?.billId || data?.budgetId || "") as string;
+
+        if (data?.app !== "fintrack") return;
 
         if (title) {
           const alertType: AlertLog["type"] = notifType.startsWith("task") ? "task"
