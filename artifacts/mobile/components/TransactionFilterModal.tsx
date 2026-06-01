@@ -26,6 +26,8 @@ export interface TxFilterSettings {
   amountMin: string;
   amountMax: string;
   notes: string;
+  merchant: string;
+  title: string;
 }
 
 export const DEFAULT_TX_FILTER: TxFilterSettings = {
@@ -37,6 +39,8 @@ export const DEFAULT_TX_FILTER: TxFilterSettings = {
   amountMin: "",
   amountMax: "",
   notes: "",
+  merchant: "",
+  title: "",
 };
 
 const TX_TYPES = ["All", "Expenses", "Income", "Transfer"] as const;
@@ -61,6 +65,8 @@ export default function TransactionFilterModal({ visible, current, onApply, onCl
   const [amountMin, setAmountMin] = useState(current.amountMin);
   const [amountMax, setAmountMax] = useState(current.amountMax);
   const [notes, setNotes] = useState(current.notes);
+  const [merchant, setMerchant] = useState(current.merchant || "");
+  const [title, setTitle] = useState(current.title || "");
 
   const [showCatPicker, setShowCatPicker] = useState(false);
   const [showAccPicker, setShowAccPicker] = useState(false);
@@ -75,12 +81,25 @@ export default function TransactionFilterModal({ visible, current, onApply, onCl
       setAmountMin(current.amountMin);
       setAmountMax(current.amountMax);
       setNotes(current.notes);
+      setMerchant(current.merchant || "");
+      setTitle(current.title || "");
     }
   }, [visible]);
 
   const handleApply = () => {
     Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
-    onApply({ type, categories: selCategories, accountIds: selAccountIds, dateFrom, dateTo, amountMin, amountMax, notes });
+    onApply({
+      type,
+      categories: selCategories,
+      accountIds: selAccountIds,
+      dateFrom,
+      dateTo,
+      amountMin,
+      amountMax,
+      notes,
+      merchant,
+      title,
+    });
   };
 
   const handleClear = () => {
@@ -93,6 +112,8 @@ export default function TransactionFilterModal({ visible, current, onApply, onCl
     setAmountMin("");
     setAmountMax("");
     setNotes("");
+    setMerchant("");
+    setTitle("");
   };
 
   const removeCategory = (cat: string) => setSelCategories((p) => p.filter((c) => c !== cat));
@@ -229,6 +250,30 @@ export default function TransactionFilterModal({ visible, current, onApply, onCl
                 onChangeText={setAmountMax}
               />
             </View>
+          </View>
+
+          {/* Merchant */}
+          <Text style={[s.sectionLabel, { color: colors.foreground }]}>Merchant</Text>
+          <View style={[s.inputBox, { borderColor: colors.border, backgroundColor: colors.card }]}>
+            <TextInput
+              style={[s.input, { color: colors.foreground }]}
+              placeholder="Filter by merchant name..."
+              placeholderTextColor={colors.mutedForeground}
+              value={merchant}
+              onChangeText={setMerchant}
+            />
+          </View>
+
+          {/* Title */}
+          <Text style={[s.sectionLabel, { color: colors.foreground }]}>Title</Text>
+          <View style={[s.inputBox, { borderColor: colors.border, backgroundColor: colors.card }]}>
+            <TextInput
+              style={[s.input, { color: colors.foreground }]}
+              placeholder="Filter by transaction title..."
+              placeholderTextColor={colors.mutedForeground}
+              value={title}
+              onChangeText={setTitle}
+            />
           </View>
 
           {/* Notes */}

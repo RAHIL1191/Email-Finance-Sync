@@ -1531,6 +1531,12 @@ function TransactionsTab({ transactions, colors, showFilter, setShowFilter, filt
       result = result.filter((t) => t.amount >= parseFloat(filterSettings.amountMin));
     if (filterSettings.amountMax !== "")
       result = result.filter((t) => t.amount <= parseFloat(filterSettings.amountMax));
+    // Merchant
+    if (filterSettings.merchant && filterSettings.merchant.trim())
+      result = result.filter((t) => (t.merchant ?? "").toLowerCase().includes(filterSettings.merchant.toLowerCase()));
+    // Title
+    if (filterSettings.title && filterSettings.title.trim())
+      result = result.filter((t) => (t.title ?? "").toLowerCase().includes(filterSettings.title.toLowerCase()));
     // Notes
     if (filterSettings.notes.trim())
       result = result.filter((t) => (t.note ?? "").toLowerCase().includes(filterSettings.notes.toLowerCase()));
