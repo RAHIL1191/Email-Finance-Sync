@@ -385,6 +385,7 @@ interface AppContextType {
   markAlertRead: (id: string) => void;
   markAllAlertsRead: () => void;
   clearAllAlerts: () => void;
+  deleteAlert: (id: string) => void;
 }
 
 const AppContext = createContext<AppContextType | null>(null);
@@ -3313,6 +3314,11 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
     setAlerts([]);
   }, []);
 
+  const deleteAlert = useCallback((id: string) => {
+    alertsRef.current = alertsRef.current.filter((a) => a.id !== id);
+    setAlerts((prev) => prev.filter((a) => a.id !== id));
+  }, []);
+
   // ── Automatic Alerts check (bills, budgets & tasks) ────────────────────────
   useEffect(() => {
     if (!initialized) return;
@@ -3522,7 +3528,7 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
         // investmentTransactions + holdings already exposed above
         isSyncing, totalBalance, monthlyIncome, monthlyExpense,
         deviceId, householdId, changeHouseholdId,
-        alerts, addAlert, markAlertRead, markAllAlertsRead, clearAllAlerts,
+        alerts, addAlert, markAlertRead, markAllAlertsRead, clearAllAlerts, deleteAlert,
       }}
     >
       {children}

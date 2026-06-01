@@ -242,10 +242,8 @@ export async function scheduleBillNotifications(bill: BillLike): Promise<void> {
             data: { billId: bill.id, type: "upcoming" },
           } as any,
           trigger: {
-            type: "date",
             date: triggerDate,
-            repeats: false,
-          } as any,
+          },
         });
         billIds.upcoming = id;
       }
@@ -264,10 +262,8 @@ export async function scheduleBillNotifications(bill: BillLike): Promise<void> {
             data: { billId: bill.id, type: "overdue" },
           } as any,
           trigger: {
-            type: "date",
             date: triggerDate,
-            repeats: false,
-          } as any,
+          },
         });
         billIds.overdue = id;
       }
@@ -345,9 +341,7 @@ export async function scheduleTaskReminder(task: TaskLike): Promise<void> {
     await N.cancelScheduledNotificationAsync(`task-${task.id}`).catch(() => {});
     
     let trigger: any = {
-      type: "date",
       date: triggerDate,
-      repeats: false,
     };
 
     if (task.reminderFrequency === "daily") {
@@ -366,21 +360,13 @@ export async function scheduleTaskReminder(task: TaskLike): Promise<void> {
         repeats: true,
       };
     } else if (task.reminderFrequency === "monthly") {
-      if (Platform.OS === "ios") {
-        trigger = {
-          type: "calendar",
-          day: triggerDate.getDate(),
-          hour: triggerDate.getHours(),
-          minute: triggerDate.getMinutes(),
-          repeats: true,
-        };
-      } else {
-        trigger = {
-          type: "date",
-          date: isPast ? new Date(Date.now() + 5000) : triggerDate,
-          repeats: false,
-        };
-      }
+      trigger = {
+        type: "calendar",
+        day: triggerDate.getDate(),
+        hour: triggerDate.getHours(),
+        minute: triggerDate.getMinutes(),
+        repeats: true,
+      };
     }
 
     console.log("[NotificationService] Scheduling notification via Expo with trigger:", trigger);
@@ -440,10 +426,8 @@ export async function scheduleTaskDueNotification(task: TaskDueLike): Promise<vo
         data: { taskId: task.id, type: "task_due" },
       } as any,
       trigger: {
-        type: "date",
         date: triggerDate,
-        repeats: false,
-      } as any,
+      },
     });
     ids[task.id] = id;
     await saveTaskDueIds(ids);

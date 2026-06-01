@@ -57,6 +57,7 @@ export default function AlertsScreen() {
     markAlertRead,
     markAllAlertsRead,
     clearAllAlerts,
+    deleteAlert,
   } = useApp();
 
   // Sort chronologically reverse (newest first)
@@ -69,6 +70,11 @@ export default function AlertsScreen() {
       Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
       markAlertRead(id);
     }
+  };
+
+  const handleDeleteAlert = (id: string) => {
+    Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium);
+    deleteAlert(id);
   };
 
   const handleMarkAllRead = () => {
@@ -214,6 +220,20 @@ export default function AlertsScreen() {
                     {item.body}
                   </Text>
                 </View>
+
+                {/* Individual Delete Button */}
+                <TouchableOpacity
+                  onPress={() => handleDeleteAlert(item.id)}
+                  style={{
+                    justifyContent: "center",
+                    alignItems: "center",
+                    paddingLeft: 8,
+                    paddingRight: 4,
+                  }}
+                  hitSlop={{ top: 12, bottom: 12, left: 12, right: 12 }}
+                >
+                  <Feather name="trash-2" size={16} color={colors.mutedForeground} />
+                </TouchableOpacity>
               </Pressable>
             );
           }}

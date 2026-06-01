@@ -332,7 +332,8 @@ export default function HomeScreen() {
   }, [alerts]);
 
   const displayAlerts = useMemo(() => {
-    return [...alerts]
+    return alerts
+      .filter((a) => !a.isRead)
       .sort((a, b) => new Date(b.date).getTime() - new Date(a.date).getTime())
       .slice(0, 3);
   }, [alerts]);
@@ -601,29 +602,22 @@ export default function HomeScreen() {
         </SectionCard>
 
         {/* ── Alerts Widget (Notification Center) ── */}
-        <Pressable
-          onPress={() => {
-            Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
-            router.push("/alerts");
-          }}
-        >
-          <SectionCard
-            title={`Inbox${unreadAlertsCount > 0 ? ` (${unreadAlertsCount})` : ""}`}
-            onChevron={() => {
+        {displayAlerts.length > 0 && (
+          <Pressable
+            onPress={() => {
               Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
               router.push("/alerts");
             }}
           >
-            <View style={{ gap: 2 }}>
-              {displayAlerts.length === 0 ? (
-                <View style={{ flexDirection: "row", alignItems: "center", gap: 8, paddingVertical: 12, justifyContent: "center" }}>
-                  <Feather name="check-circle" size={16} color={colors.success} />
-                  <Text style={{ fontSize: 13, fontFamily: "Inter_500Medium", color: colors.mutedForeground }}>
-                    No new notifications
-                  </Text>
-                </View>
-              ) : (
-                displayAlerts.map((item, i) => (
+            <SectionCard
+              title={`Inbox${unreadAlertsCount > 0 ? ` (${unreadAlertsCount})` : ""}`}
+              onChevron={() => {
+                Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
+                router.push("/alerts");
+              }}
+            >
+              <View style={{ gap: 2 }}>
+                {displayAlerts.map((item, i) => (
                   <View
                     key={item.id}
                     style={[
@@ -673,11 +667,11 @@ export default function HomeScreen() {
                       </Text>
                     </View>
                   </View>
-                ))
-              )}
-            </View>
-          </SectionCard>
-        </Pressable>
+                ))}
+              </View>
+            </SectionCard>
+          </Pressable>
+        )}
 
         {/* ── Top Expenses ── */}
         <SectionCard title="Top Expenses" subtitle={`| ${monthName}`} onChevron={() => router.push("/(tabs)/transactions")}>
