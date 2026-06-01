@@ -229,6 +229,8 @@ export async function scheduleBillNotifications(bill: BillLike): Promise<void> {
   if (bill.isPaid) { await cancelBillNotifications(bill.id); return; }
 
   try {
+    const granted = await requestNotificationPermissions();
+    if (!granted) return;
     const prefs = await getPrefs();
     const { hour, minute } = await getReminderTime();
     const ids = await getStoredIds();
@@ -334,6 +336,11 @@ export async function scheduleTaskReminder(task: TaskLike): Promise<void> {
     return;
   }
   try {
+    const granted = await requestNotificationPermissions();
+    if (!granted) {
+      console.log("[NotificationService] scheduleTaskReminder FAILED: Permission not granted.");
+      return;
+    }
     const prefs = await getPrefs();
     console.log("[NotificationService] Current notification preferences:", prefs);
     if (prefs.task_reminders === false) {
@@ -342,7 +349,8 @@ export async function scheduleTaskReminder(task: TaskLike): Promise<void> {
       return;
     }
     const triggerDate = new Date(task.reminderDate);
-    console.log("[NotificationService] Trigger Date parsed:", triggerDate.toISOString(), "timestamp:", triggerDate.getTime());
+    triggerDate.setSeconds(0, 0);
+    console.log("[NotificationService] Trigger Date parsed (seconds reset to 0):", triggerDate.toISOString(), "timestamp:", triggerDate.getTime());
     console.log("[NotificationService] Current Time:", new Date().toISOString(), "timestamp:", Date.now());
     
     const isPast = triggerDate.getTime() <= Date.now();
@@ -424,6 +432,8 @@ export async function scheduleTaskDueNotification(task: TaskDueLike): Promise<vo
   const N = await getNotif();
   if (!N) return;
   try {
+    const granted = await requestNotificationPermissions();
+    if (!granted) return;
     const prefs = await getPrefs();
     const ids = await getTaskDueIds();
     if (prefs.task_due === false) {
