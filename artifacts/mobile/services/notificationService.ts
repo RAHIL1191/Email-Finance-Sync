@@ -233,7 +233,6 @@ export async function scheduleBillNotifications(bill: BillLike): Promise<void> {
     if (prefs.bill_upcoming !== false) {
       const triggerDate = buildTriggerDate(bill.dueDate, -remindOffset, hour, minute);
       if (triggerDate) {
-        const seconds = Math.max(1, Math.round((triggerDate.getTime() - Date.now()) / 1000));
         const id = await N.scheduleNotificationAsync({
           content: {
             title: "📅 Bill Due Soon",
@@ -243,8 +242,8 @@ export async function scheduleBillNotifications(bill: BillLike): Promise<void> {
             data: { billId: bill.id, type: "upcoming", app: "fintrack" },
           } as any,
           trigger: {
-            type: "timeInterval" as any,
-            seconds,
+            type: "date" as any,
+            date: triggerDate,
           },
         });
         billIds.upcoming = id;
@@ -255,7 +254,6 @@ export async function scheduleBillNotifications(bill: BillLike): Promise<void> {
     if (prefs.bill_overdue !== false) {
       const triggerDate = buildTriggerDate(bill.dueDate, 1, hour, minute);
       if (triggerDate) {
-        const seconds = Math.max(1, Math.round((triggerDate.getTime() - Date.now()) / 1000));
         const id = await N.scheduleNotificationAsync({
           content: {
             title: "⚠️ Bill Overdue",
@@ -265,8 +263,8 @@ export async function scheduleBillNotifications(bill: BillLike): Promise<void> {
             data: { billId: bill.id, type: "overdue", app: "fintrack" },
           } as any,
           trigger: {
-            type: "timeInterval" as any,
-            seconds,
+            type: "date" as any,
+            date: triggerDate,
           },
         });
         billIds.overdue = id;
@@ -346,10 +344,9 @@ export async function scheduleTaskReminder(task: TaskLike): Promise<void> {
     
     let trigger: any = null;
     if (!task.reminderFrequency || task.reminderFrequency === "once") {
-      const seconds = Math.max(1, Math.round((triggerDate.getTime() - Date.now()) / 1000));
       trigger = {
-        type: "timeInterval" as any,
-        seconds,
+        type: "date" as any,
+        date: triggerDate,
       };
     } else if (task.reminderFrequency === "daily") {
       trigger = {
@@ -424,7 +421,6 @@ export async function scheduleTaskDueNotification(task: TaskDueLike): Promise<vo
     const triggerDate = parseLocalDate(task.dueDate);
     triggerDate.setHours(hour, minute, 0, 0);
     if (triggerDate.getTime() <= Date.now()) return;
-    const seconds = Math.max(1, Math.round((triggerDate.getTime() - Date.now()) / 1000));
     const id = await N.scheduleNotificationAsync({
       content: {
         title: `📋 Task Due Today: ${task.title}`,
@@ -434,8 +430,8 @@ export async function scheduleTaskDueNotification(task: TaskDueLike): Promise<vo
         data: { taskId: task.id, type: "task_due", app: "fintrack" },
       } as any,
       trigger: {
-        type: "timeInterval" as any,
-        seconds,
+        type: "date" as any,
+        date: triggerDate,
       },
     });
     ids[task.id] = id;
