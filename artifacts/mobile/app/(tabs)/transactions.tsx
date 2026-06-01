@@ -661,7 +661,7 @@ function MonthlyView({
                 </Text>
               </View>
               <Text style={[styles.monthlyIncome, { color: "#4caf50" }]}>
-                {`$${Math.abs(m.netIncome).toFixed(0)}`}
+                {`$${m.income.toFixed(0)}`}
               </Text>
             </View>
           </View>
@@ -680,8 +680,8 @@ function MonthlyView({
           <View style={styles.monthlyBalanceRow}>
             <View style={styles.monthlyBalanceLeft}>
               <Text style={[styles.monthlyBalanceLabel, { color: colors.mutedForeground }]}>Balance</Text>
-              <Text style={[styles.monthlyBalanceAmt, { color: "#f97316" }]}>
-                {`$${m.expense.toFixed(0)}`}
+              <Text style={[styles.monthlyBalanceAmt, { color: m.netIncome >= 0 ? "#4caf50" : "#ef4444" }]}>
+                {m.netIncome >= 0 ? `$${m.netIncome.toFixed(0)}` : `-$${Math.abs(m.netIncome).toFixed(0)}`}
               </Text>
             </View>
             <View style={styles.monthlyBalanceRight}>
