@@ -16,7 +16,7 @@ notifee.onBackgroundEvent(async ({ type, detail }) => {
     // ── Complete Action ───────────────────────────────────────────────────────
     if (pressAction?.id === 'complete') {
       try {
-        await notifee.cancelNotification(notification.id!);
+        await notifee.cancelNotification(notification.id);
 
         if (entityType === 'task') {
           const rawTasks = await AsyncStorage.getItem('@fintrack/tasks');
@@ -47,7 +47,7 @@ notifee.onBackgroundEvent(async ({ type, detail }) => {
     // ── Snooze Action ─────────────────────────────────────────────────────────
     if (pressAction?.id === 'snooze') {
       try {
-        await notifee.cancelNotification(notification.id!);
+        await notifee.cancelNotification(notification.id);
 
         // Calculate snooze date (10 minutes in the future)
         const snoozeTime = new Date(Date.now() + 10 * 60 * 1000);
@@ -59,7 +59,7 @@ notifee.onBackgroundEvent(async ({ type, detail }) => {
           notification.title || 'Snoozed Reminder',
           notification.body || '',
           snoozeTime,
-          entityType as 'task' | 'bill',
+          entityType,
           entitySubtype
         );
         console.log(`[Notifee Background] Snoozed entity ${entityId} (${entitySubtype || 'default'}) rescheduled for ${snoozeTime.toISOString()}`);
