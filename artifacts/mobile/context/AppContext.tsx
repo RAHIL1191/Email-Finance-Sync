@@ -377,6 +377,8 @@ interface AppContextType {
   totalBalance: number;
   monthlyIncome: number;
   monthlyExpense: number;
+  currentMonth: number;
+  setCurrentMonth: (m: number) => void;
   deviceId: string;
   householdId: string;
   changeHouseholdId: (code: string) => Promise<void>;
@@ -1163,6 +1165,7 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
   const [deviceId, setDeviceId] = useState<string>("");
   const [householdId, setHouseholdId] = useState<string>("");
   const [userName, setUserNameState] = useState<string>("");
+  const [currentMonth, setCurrentMonth] = useState<number>(new Date().getMonth());
   const [reviewedTransactionIds, setReviewedTransactionIds] = useState<string[]>([]);
   const [alerts, setAlerts] = useState<AlertLog[]>([]);
   const [dismissedAlertKeys, setDismissedAlertKeys] = useState<Set<string>>(new Set());
@@ -3674,7 +3677,7 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
   // new Date(...).toISOString() gives "2026-05-01T04:00:00.000Z" (UTC offset),
   // which makes "2026-05-01" < "2026-05-01T04:..." causing 1st-of-month transactions
   // to be silently excluded.
-  const monthKey = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, "0")}`;
+  const monthKey = `${now.getFullYear()}-${String(currentMonth + 1).padStart(2, "0")}`;
   const thisMonthTx = transactions.filter((t) => localYM(t.date) === monthKey);
   const monthlyIncome = thisMonthTx.filter((t) => t.type === "income" && t.category !== "Transfer" && t.category?.toLowerCase() !== "transfer").reduce((s, t) => s + t.amount, 0);
   const monthlyExpense = thisMonthTx.filter((t) => t.type === "expense" && t.category !== "Transfer" && t.category?.toLowerCase() !== "transfer").reduce((s, t) => s + t.amount, 0);
@@ -3710,6 +3713,7 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
         connectPlaid, syncPlaidTransactions, delinkPlaid, disconnectPlaid,
         // investmentTransactions + holdings already exposed above
         isSyncing, totalBalance, monthlyIncome, monthlyExpense,
+        currentMonth, setCurrentMonth,
         deviceId, householdId, changeHouseholdId,
         alerts, addAlert, markAlertRead, markAllAlertsRead, clearAllAlerts, deleteAlert,
       }}

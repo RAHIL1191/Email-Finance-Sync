@@ -2306,7 +2306,7 @@ function txDedupKey(t: Transaction): string {
 export default function InsightsScreen() {
   const colors = useColors();
   const { openDrawer } = useDrawer();
-  const { transactions, bills, accounts, addTransaction, reviewedTransactionIds, investmentTransactions, holdings } = useApp();
+  const { transactions, bills, accounts, addTransaction, reviewedTransactionIds, investmentTransactions, holdings, currentMonth, setCurrentMonth } = useApp();
   const [activeTab, setActiveTab] = useState<Subtab>("CASH FLOW");
 
   const pendingReviewCount = useMemo(
@@ -2370,8 +2370,6 @@ export default function InsightsScreen() {
   const pfFilterCount = (pfType !== "All" ? 1 : 0) + (pfAccountId !== null ? 1 : 0) + (pfPeriod !== "All" ? 1 : 0);
   const [showPeriodSettings, setShowPeriodSettings] = useState(false);
   const [periodSettings, setPeriodSettings] = useState<PeriodSettings>(DEFAULT_PERIOD_SETTINGS);
-  const currentMonthIdx = new Date().getMonth();
-  const [currentMonth, setCurrentMonth] = useState(currentMonthIdx);
   const [selectedMonth, setSelectedMonth] = useState<{ year: number; month: number } | null>(null);
 
   const handleMonthPress = (y: number, m: number) => {

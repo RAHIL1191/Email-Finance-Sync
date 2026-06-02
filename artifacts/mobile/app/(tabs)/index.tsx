@@ -235,14 +235,20 @@ export default function HomeScreen() {
     syncEmailTransactions,
     userName,
     alerts,
+    currentMonth,
+    setCurrentMonth,
   } = useApp();
 
   const [showSearch, setShowSearch] = useState(false);
   const [searchQuery, setSearchQuery] = useState("");
   const [refreshing, setRefreshing] = useState(false);
 
-  const now  = new Date();
-  const now2 = now.getTime();
+  const now = useMemo(() => {
+    const d = new Date();
+    d.setMonth(currentMonth);
+    return d;
+  }, [currentMonth]);
+  const now2 = useMemo(() => now.getTime(), [now]);
 
   const handleRefresh = async () => {
     setRefreshing(true);
@@ -491,6 +497,36 @@ export default function HomeScreen() {
               {netFlow >= 0 ? "+" : ""}${Math.abs(netFlow).toLocaleString("en-US", { minimumFractionDigits: 0 })}
             </Text>
           </View>
+        </View>
+
+        {/* ── Month Selector ── */}
+        <View style={[styles.monthSelector, { backgroundColor: colors.card, borderColor: colors.border }]}>
+          <TouchableOpacity 
+            style={styles.monthArrow} 
+            onPress={() => {
+              Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
+              setCurrentMonth(Math.max(0, currentMonth - 1));
+            }}
+            disabled={currentMonth === 0}
+          >
+            <Feather name="chevron-left" size={20} color={currentMonth === 0 ? colors.mutedForeground + "40" : colors.foreground} />
+          </TouchableOpacity>
+          <View style={styles.monthCenter}>
+            <Feather name="calendar" size={16} color={colors.primary} style={{ marginRight: 6 }} />
+            <Text style={[styles.monthLabel, { color: colors.foreground }]}>
+              {new Date(now.getFullYear(), currentMonth, 1).toLocaleString("default", { month: "long" })} {now.getFullYear()}
+            </Text>
+          </View>
+          <TouchableOpacity 
+            style={styles.monthArrow} 
+            onPress={() => {
+              Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
+              setCurrentMonth(Math.min(11, currentMonth + 1));
+            }}
+            disabled={currentMonth === 11}
+          >
+            <Feather name="chevron-right" size={20} color={currentMonth === 11 ? colors.mutedForeground + "40" : colors.foreground} />
+          </TouchableOpacity>
         </View>
 
         {/* ── Accounts ── */}
@@ -1136,6 +1172,33 @@ const styles = StyleSheet.create({
   goalSaved:     { fontSize: 11, fontFamily: "Inter_400Regular" },
   goalStatus:    { paddingHorizontal: 7, paddingVertical: 2, borderRadius: 6 },
   goalStatusTxt: { fontSize: 10, fontFamily: "Inter_600SemiBold" },
+  // Month Selector Styling
+  monthSelector: {
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "space-between",
+    marginHorizontal: 16,
+    marginTop: 12,
+    marginBottom: 4,
+    paddingVertical: 12,
+    paddingHorizontal: 16,
+    borderRadius: 12,
+    borderWidth: 1.5,
+  },
+  monthArrow: {
+    padding: 4,
+    justifyContent: "center",
+    alignItems: "center",
+  },
+  monthCenter: {
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "center",
+  },
+  monthLabel: {
+    fontSize: 15,
+    fontFamily: "Inter_600SemiBold",
+  },
 });
 
 const srch = StyleSheet.create({
