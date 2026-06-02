@@ -70,7 +70,7 @@ export async function scheduleNotifeeReminder(
             },
             {
               title: 'Snooze',
-              pressAction: { id: 'snooze' },
+              pressAction: { id: 'snooze', launchActivity: 'default' },
             },
           ],
         },

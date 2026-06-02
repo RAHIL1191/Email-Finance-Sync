@@ -15,6 +15,7 @@ import {
   checkBudgetAndNotify,
 } from "@/services/notificationService";
 import { parseLocalDate, toLocalYMD, localYM } from "@/hooks/useLocalDate";
+import SnoozeModal from "@/components/SnoozeModal";
 import React, {
   createContext,
   useCallback,
@@ -379,6 +380,8 @@ interface AppContextType {
   monthlyExpense: number;
   currentMonth: number;
   setCurrentMonth: (m: number) => void;
+  snoozeEntity: { id: string; type: 'task' | 'bill'; title?: string; body?: string } | null;
+  setSnoozeEntity: (entity: { id: string; type: 'task' | 'bill'; title?: string; body?: string } | null) => void;
   deviceId: string;
   householdId: string;
   changeHouseholdId: (code: string) => Promise<void>;
@@ -1166,6 +1169,7 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
   const [householdId, setHouseholdId] = useState<string>("");
   const [userName, setUserNameState] = useState<string>("");
   const [currentMonth, setCurrentMonth] = useState<number>(new Date().getMonth());
+  const [snoozeEntity, setSnoozeEntity] = useState<{ id: string; type: 'task' | 'bill'; title?: string; body?: string } | null>(null);
   const [reviewedTransactionIds, setReviewedTransactionIds] = useState<string[]>([]);
   const [alerts, setAlerts] = useState<AlertLog[]>([]);
   const [dismissedAlertKeys, setDismissedAlertKeys] = useState<Set<string>>(new Set());
@@ -3555,6 +3559,51 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
       const notifee = notifeeModule.default;
       const EventType = notifeeModule.EventType;
 
+      // Handle initial notification if app was launched from a killed state
+      notifee.getInitialNotification().then((initialNotification) => {
+        if (initialNotification) {
+          const { notification, pressAction } = initialNotification;
+          if (notification) {
+            const entityId = notification.data?.entityId as string;
+            const entityType = notification.data?.type as string;
+            const isFintrack = notification.data?.app === 'fintrack';
+
+            if (isFintrack) {
+              if (pressAction?.id === 'snooze' && entityId && entityType) {
+                notifee.cancelNotification(notification.id!).catch(() => {});
+                setSnoozeEntity({
+                  id: entityId,
+                  type: entityType as 'task' | 'bill',
+                  title: notification.title,
+                  body: notification.body,
+                });
+              } else if (pressAction?.id === 'complete' && entityId && entityType) {
+                notifee.cancelNotification(notification.id!).catch(() => {});
+                if (entityType === 'task') {
+                  updateTask(entityId, { isCompleted: true });
+                } else if (entityType === 'bill') {
+                  markBillPaid(entityId);
+                }
+              } else if (!pressAction || pressAction.id === 'default') {
+                try {
+                  if (entityType === "task") {
+                    router.push("/(tabs)/tasks");
+                  } else if (entityType === "bill") {
+                    router.push("/(tabs)/bills");
+                  } else {
+                    router.push("/alerts");
+                  }
+                } catch (navErr) {
+                  console.warn("[Notifee InitialNotification] Navigation error:", navErr);
+                }
+              }
+            }
+          }
+        }
+      }).catch((err) => {
+        console.warn("[Notifee InitialNotification] Error getting initial notification:", err);
+      });
+
       unsubscribeNotifee = notifee.onForegroundEvent(({ type, detail }) => {
         const { notification, pressAction } = detail;
         if (!notification) return;
@@ -3611,17 +3660,12 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
 
           if (pressAction?.id === 'snooze') {
             notifee.cancelNotification(notification.id!).catch(() => {});
-            const snoozeTime = new Date(Date.now() + 10 * 60 * 1000);
-            import("@/services/notifeeService").then(({ scheduleNotifeeReminder }) => {
-              scheduleNotifeeReminder(
-                entityId,
-                notification.title || 'Snoozed Reminder',
-                notification.body || '',
-                snoozeTime,
-                entityType as 'task' | 'bill',
-                entitySubtype
-              ).catch(() => {});
-            }).catch(() => {});
+            setSnoozeEntity({
+              id: entityId,
+              type: entityType as 'task' | 'bill',
+              title: notification.title,
+              body: notification.body,
+            });
           }
         }
       });
@@ -3714,11 +3758,13 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
         // investmentTransactions + holdings already exposed above
         isSyncing, totalBalance, monthlyIncome, monthlyExpense,
         currentMonth, setCurrentMonth,
+        snoozeEntity, setSnoozeEntity,
         deviceId, householdId, changeHouseholdId,
         alerts, addAlert, markAlertRead, markAllAlertsRead, clearAllAlerts, deleteAlert,
       }}
     >
       {children}
+      <SnoozeModal />
     </AppContext.Provider>
   );
 }
