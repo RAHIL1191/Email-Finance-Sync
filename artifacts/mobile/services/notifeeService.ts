@@ -61,6 +61,8 @@ export async function scheduleNotifeeReminder(
           sound: 'default',
           vibrationPattern: [300, 500, 300, 500],
           pressAction: { id: 'default' },
+          ongoing: true, // Persistent notification (cannot be swiped away)
+          autoCancel: false, // Remains in tray even if clicked/tapped
           actions: [
             {
               title: 'Complete',
