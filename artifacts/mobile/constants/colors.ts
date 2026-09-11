@@ -1,81 +1,110 @@
 const colors = {
   light: {
-    text: "#0f1923",
-    tint: "#1a56db",
+    text: "#1B222C",
+    tint: "#F4A261",
 
-    background: "#f5f7fb",
-    foreground: "#0f1923",
+    background: "#F7F3EC",
+    foreground: "#1B222C",
 
-    card: "#ffffff",
-    cardForeground: "#0f1923",
+    card: "#FFFFFF",
+    cardForeground: "#1B222C",
 
-    primary: "#1a56db",
-    primaryForeground: "#ffffff",
+    primary: "#F4A261",
+    primaryForeground: "#FFFFFF",
 
-    secondary: "#e8edf8",
-    secondaryForeground: "#1a56db",
+    secondary: "#F3ECE2",
+    secondaryForeground: "#1B222C",
 
-    muted: "#f0f2f8",
-    mutedForeground: "#6b7280",
+    muted: "#EFE8DD",
+    mutedForeground: "#7D8490",
 
-    accent: "#eef3ff",
-    accentForeground: "#1a56db",
+    accent: "#FFF3E8",
+    accentForeground: "#F4A261",
 
-    destructive: "#ef4444",
-    destructiveForeground: "#ffffff",
+    destructive: "#D9381E",
+    destructiveForeground: "#FFFFFF",
 
-    success: "#10b981",
-    successForeground: "#ffffff",
+    success: "#1B8A5A",
+    successForeground: "#FFFFFF",
 
-    warning: "#f59e0b",
-    warningForeground: "#ffffff",
+    warning: "#F4A261",
+    warningForeground: "#FFFFFF",
 
-    border: "#e2e8f4",
-    input: "#e2e8f4",
+    border: "#EBE5DA",
+    input: "#EBE5DA",
 
-    income: "#10b981",
-    expense: "#ef4444",
+    income: "#1B8A5A",
+    incomeBg: "#EBF5F0",
+    incomeForeground: "#1B8A5A",
+
+    expense: "#D9381E",
+    expenseBg: "#FDF0ED",
+    expenseForeground: "#D9381E",
+
+    peach: "#F4A261",
+    peachBg: "#FFF4EA",
+
+    catFood: "#FF8A65",
+    catTransport: "#FFB74D",
+    catShopping: "#BA68C8",
+    catEntertainment: "#81C784",
+    catOthers: "#64B5F6",
   },
 
   dark: {
-    text: "#f1f5f9",
-    tint: "#60a5fa",
+    text: "#F3F4F6",
+    tint: "#F4A261",
 
-    background: "#0f1923",
-    foreground: "#f1f5f9",
+    background: "#18181A",
+    foreground: "#F3F4F6",
 
-    card: "#1c2a3a",
-    cardForeground: "#f1f5f9",
+    card: "#242427",
+    cardForeground: "#F3F4F6",
 
-    primary: "#3b82f6",
-    primaryForeground: "#ffffff",
+    primary: "#F4A261",
+    primaryForeground: "#FFFFFF",
 
-    secondary: "#1e3a5f",
-    secondaryForeground: "#93c5fd",
+    secondary: "#303036",
+    secondaryForeground: "#F3F4F6",
 
-    muted: "#1e2d40",
-    mutedForeground: "#94a3b8",
+    muted: "#2B2B30",
+    mutedForeground: "#9CA3AF",
 
-    accent: "#1e3a5f",
-    accentForeground: "#93c5fd",
+    accent: "#3A2A20",
+    accentForeground: "#F4A261",
 
-    destructive: "#f87171",
-    destructiveForeground: "#ffffff",
+    destructive: "#F87171",
+    destructiveForeground: "#FFFFFF",
 
-    success: "#34d399",
-    successForeground: "#ffffff",
+    success: "#34D399",
+    successForeground: "#FFFFFF",
 
-    warning: "#fbbf24",
-    warningForeground: "#ffffff",
+    warning: "#F4A261",
+    warningForeground: "#FFFFFF",
 
-    border: "#243447",
-    input: "#243447",
+    border: "#303035",
+    input: "#303035",
 
-    income: "#34d399",
-    expense: "#f87171",
+    income: "#34D399",
+    incomeBg: "#1E2D25",
+    incomeForeground: "#34D399",
+
+    expense: "#F87171",
+    expenseBg: "#2E2222",
+    expenseForeground: "#F87171",
+
+    peach: "#F4A261",
+    peachBg: "#3A2B20",
+
+    catFood: "#FF8A65",
+    catTransport: "#FFB74D",
+    catShopping: "#BA68C8",
+    catEntertainment: "#81C784",
+    catOthers: "#64B5F6",
   },
 
-  radius: 12,
+  radius: 16,
 };
 
 export default colors;
+

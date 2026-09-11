@@ -1,12 +1,11 @@
 import { BlurView } from "expo-blur";
 import { isLiquidGlassAvailable } from "expo-glass-effect";
-import { Tabs } from "expo-router";
+import { Tabs, router } from "expo-router";
 import { Icon, Label, NativeTabs } from "expo-router/unstable-native-tabs";
 import { SymbolView } from "expo-symbols";
 import { Feather } from "@expo/vector-icons";
 import React from "react";
-import { Platform, StyleSheet, View, useColorScheme } from "react-native";
-
+import { Platform, StyleSheet, TouchableOpacity, View, useColorScheme } from "react-native";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { useColors } from "@/hooks/useColors";
 
@@ -21,21 +20,13 @@ function NativeTabLayout() {
         <Icon sf={{ default: "arrow.left.arrow.right", selected: "arrow.left.arrow.right.circle.fill" }} />
         <Label>Transactions</Label>
       </NativeTabs.Trigger>
-      <NativeTabs.Trigger name="accounts">
-        <Icon sf={{ default: "creditcard", selected: "creditcard.fill" }} />
-        <Label>Accounts</Label>
-      </NativeTabs.Trigger>
       <NativeTabs.Trigger name="bills">
         <Icon sf={{ default: "doc.text", selected: "doc.text.fill" }} />
         <Label>Bills</Label>
       </NativeTabs.Trigger>
-      <NativeTabs.Trigger name="budget">
-        <Icon sf={{ default: "chart.bar", selected: "chart.bar.fill" }} />
-        <Label>Budget</Label>
-      </NativeTabs.Trigger>
-      <NativeTabs.Trigger name="insights">
-        <Icon sf={{ default: "chart.bar", selected: "chart.bar.fill" }} />
-        <Label>Insights</Label>
+      <NativeTabs.Trigger name="accounts">
+        <Icon sf={{ default: "person", selected: "person.fill" }} />
+        <Label>Profile</Label>
       </NativeTabs.Trigger>
     </NativeTabs>
   );
@@ -49,7 +40,7 @@ function ClassicTabLayout() {
   const isIOS = Platform.OS === "ios";
   const isWeb = Platform.OS === "web";
 
-  const TAB_BAR_HEIGHT = isWeb ? 84 : 60 + (insets.bottom > 0 ? insets.bottom - 10 : 0);
+  const TAB_BAR_HEIGHT = isWeb ? 84 : 64 + (insets.bottom > 0 ? insets.bottom - 6 : 0);
   const PADDING_BOTTOM = isWeb ? 34 : (insets.bottom > 0 ? insets.bottom : 8);
 
   return (
@@ -66,6 +57,7 @@ function ClassicTabLayout() {
           elevation: 0,
           height: TAB_BAR_HEIGHT,
           paddingBottom: PADDING_BOTTOM,
+          paddingTop: 8,
         },
         tabBarBackground: () =>
           isIOS ? (
@@ -92,74 +84,61 @@ function ClassicTabLayout() {
         name="index"
         options={{
           title: "Home",
-          tabBarIcon: ({ color }) =>
-            isIOS ? (
-              <SymbolView name="house" tintColor={color} size={22} />
-            ) : (
-              <Feather name="home" size={22} color={color} />
-            ),
+          tabBarIcon: ({ color }) => (
+            <Feather name="home" size={22} color={color} />
+          ),
         }}
       />
+
       <Tabs.Screen
         name="transactions"
         options={{
-          title: "Insights",
-          tabBarIcon: ({ color }) =>
-            isIOS ? (
-              <SymbolView name="arrow.left.arrow.right" tintColor={color} size={22} />
-            ) : (
-              <Feather name="repeat" size={22} color={color} />
-            ),
+          title: "Transactions",
+          tabBarIcon: ({ color }) => (
+            <Feather name="list" size={22} color={color} />
+          ),
         }}
       />
+
       <Tabs.Screen
         name="accounts"
         options={{
           title: "Accounts",
-          tabBarIcon: ({ color }) =>
-            isIOS ? (
-              <SymbolView name="creditcard" tintColor={color} size={22} />
-            ) : (
-              <Feather name="credit-card" size={22} color={color} />
-            ),
+          tabBarIcon: ({ color }) => (
+            <Feather name="credit-card" size={22} color={color} />
+          ),
         }}
       />
+
       <Tabs.Screen
         name="bills"
         options={{
           title: "Bills",
-          tabBarIcon: ({ color }) =>
-            isIOS ? (
-              <SymbolView name="doc.text" tintColor={color} size={22} />
-            ) : (
-              <Feather name="file-text" size={22} color={color} />
-            ),
+          tabBarIcon: ({ color }) => (
+            <Feather name="file-text" size={22} color={color} />
+          ),
         }}
       />
+
+      <Tabs.Screen
+        name="insights"
+        options={{
+          title: "AI",
+          tabBarIcon: ({ color }) => (
+            <Feather name="cpu" size={22} color={color} />
+          ),
+        }}
+      />
+
       <Tabs.Screen
         name="budget"
         options={{
           title: "Budget",
-          tabBarIcon: ({ color }) =>
-            isIOS ? (
-              <SymbolView name="dollarsign.circle" tintColor={color} size={22} />
-            ) : (
-              <Feather name="pie-chart" size={22} color={color} />
-            ),
+          tabBarButton: () => null,
+          tabBarItemStyle: { display: "none" },
         }}
       />
-      <Tabs.Screen
-        name="insights"
-        options={{
-          title: "AI Insights",
-          tabBarIcon: ({ color }) =>
-            isIOS ? (
-              <SymbolView name="chart.bar" tintColor={color} size={22} />
-            ) : (
-              <Feather name="bar-chart-2" size={22} color={color} />
-            ),
-        }}
-      />
+
       <Tabs.Screen
         name="tasks"
         options={{
@@ -171,6 +150,27 @@ function ClassicTabLayout() {
     </Tabs>
   );
 }
+
+const styles = StyleSheet.create({
+  centerFabContainer: {
+    top: -14,
+    justifyContent: "center",
+    alignItems: "center",
+    width: 60,
+  },
+  centerFab: {
+    width: 50,
+    height: 50,
+    borderRadius: 25,
+    justifyContent: "center",
+    alignItems: "center",
+    shadowColor: "#F4A261",
+    shadowOffset: { width: 0, height: 4 },
+    shadowOpacity: 0.3,
+    shadowRadius: 8,
+    elevation: 5,
+  },
+});
 
 export default function TabLayout() {
   if (isLiquidGlassAvailable()) {
