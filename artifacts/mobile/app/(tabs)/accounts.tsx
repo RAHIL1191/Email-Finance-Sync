@@ -23,7 +23,7 @@ import { SafeAreaView, useSafeAreaInsets } from "react-native-safe-area-context"
 import AddAccountModal from "@/components/AddAccountModal";
 import ConfirmModal from "@/components/ConfirmModal";
 import PlaidLinkModal from "@/components/PlaidLinkModal";
-import { Account, PlaidItem, PLAID_BANKS, computeBalance, isIncludedInNetworth, useApp } from "@/context/AppContext";
+import { Account, PlaidItem, PLAID_BANKS, computeBalance, isIncludedInNetworth, isLiabilityAccount, getAccountGroupKey, useApp } from "@/context/AppContext";
 import { useDrawer } from "@/context/DrawerContext";
 import { useColors } from "@/hooks/useColors";
 
@@ -96,13 +96,6 @@ function NetWorthChart({ balance, colors }: { balance: number; colors: any }) {
 }
 
 // ── Premium Matte Account Card ────────────────────────────────────────────────
-
-function getAccountGroupKey(account: Account): string {
-  const text = `${account.name} ${account.bank}`.toLowerCase();
-  if (text.includes("mortgage")) return "mortgage";
-  if (text.includes("loan") || text.includes("lending") || text.includes("borrow")) return "loan";
-  return account.type;
-}
 
 const GROUP_META: Record<string, { label: string; icon: string; color: string; isLiability: boolean; order: number }> = {
   checking:   { label: "Chequing",   icon: "layers",          color: "#3b82f6", isLiability: false, order: 1 },
@@ -863,16 +856,10 @@ export default function AccountsScreen() {
   }, [accounts, transactions]);
 
   const assetsTotal = accounts
-    .filter((a) => {
-      const k = getAccountGroupKey(a);
-      return k !== "credit" && k !== "mortgage" && k !== "loan" && isIncludedInNetworth(a);
-    })
+    .filter((a) => isIncludedInNetworth(a) && !isLiabilityAccount(a))
     .reduce((s, a) => s + computeBalance(a, transactions), 0);
   const liabilitiesTotal = accounts
-    .filter((a) => {
-      const k = getAccountGroupKey(a);
-      return (k === "credit" || k === "mortgage" || k === "loan") && isIncludedInNetworth(a);
-    })
+    .filter((a) => isIncludedInNetworth(a) && isLiabilityAccount(a))
     .reduce((s, a) => s + Math.abs(computeBalance(a, transactions)), 0);
 
   const connectedCount = plaidSync.items.length + (emailSync.isConnected ? 1 : 0);

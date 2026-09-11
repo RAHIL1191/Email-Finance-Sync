@@ -111,6 +111,7 @@ export default function HomeScreen() {
     accounts,
     transactions,
     bills,
+    totalBalance,
     monthlyIncome,
     monthlyExpense,
     emailSync,
@@ -247,7 +248,6 @@ export default function HomeScreen() {
   }, [bills]);
 
   const [hideBalance, setHideBalance] = useState(false);
-  const totalBalance = useMemo(() => accounts.reduce((sum, a) => sum + (a.balance || 0), 0), [accounts]);
 
   // Balance comparison vs last month
   const netChange = useMemo(() => currentMonthIncome - currentMonthExpenses, [currentMonthIncome, currentMonthExpenses]);
