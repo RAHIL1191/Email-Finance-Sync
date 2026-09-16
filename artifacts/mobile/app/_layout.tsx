@@ -52,7 +52,7 @@ import { ThemeProvider } from "@/context/ThemeContext";
 // unhandled promise rejection that shows the dev error overlay as a black screen.
 LogBox.ignoreLogs([/Unable to activate keep awake/]);
 
-SplashScreen.preventAutoHideAsync();
+SplashScreen.preventAutoHideAsync().catch(() => {});
 
 const queryClient = new QueryClient();
 
@@ -93,7 +93,7 @@ export default function RootLayout() {
 
   useEffect(() => {
     if (ready) {
-      SplashScreen.hideAsync();
+      SplashScreen.hideAsync().catch(() => {});
     }
   }, [ready]);
 

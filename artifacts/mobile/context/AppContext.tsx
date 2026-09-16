@@ -534,6 +534,12 @@ async function apiCall(
   }
 }
 
+function createTimeoutSignal(ms: number): AbortSignal {
+  const controller = new AbortController();
+  setTimeout(() => controller.abort(), ms);
+  return controller.signal;
+}
+
 /** Fire-and-forget API call. Logs non-ok responses but never throws. */
 function bgCall(
   path: string,
@@ -1144,6 +1150,20 @@ export function isIncludedInNetworth(account: Account): boolean {
   return true;
 }
 
+export function getAccountGroupKey(account: Account): string {
+  const type = (account.type || "").toLowerCase();
+  const text = `${account.name || ""} ${account.bank || ""}`.toLowerCase();
+  if (text.includes("mortgage")) return "mortgage";
+  if (text.includes("loan") || text.includes("lending") || text.includes("borrow")) return "loan";
+  if (text.includes("credit card") || text.includes("mastercard") || text.includes("visa") || text.includes("amex")) return "credit";
+  return type || "checking";
+}
+
+export function isLiabilityAccount(account: Account): boolean {
+  const key = getAccountGroupKey(account);
+  return key === "credit" || key === "mortgage" || key === "loan";
+}
+
 const BILL_DETECT_KEY = "@fintrack/bill_detect_notified";
 
 // ── Provider ─────────────────────────────────────────────────────────────────
@@ -1436,7 +1456,7 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
         try {
           const catFetch = await fetch(`${getApiBase()}/api/categories`, {
             headers: { "X-Household-ID": hId, "X-Device-ID": dId },
-            signal: AbortSignal.timeout(6000),
+            signal: createTimeoutSignal(6000),
           });
           if (catFetch.ok) {
             const remoteCats: Category[] = await catFetch.json();
@@ -1461,7 +1481,7 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
         try {
           const rulesFetch = await fetch(`${getApiBase()}/api/category-rules`, {
             headers: { "X-Household-ID": hId, "X-Device-ID": dId },
-            signal: AbortSignal.timeout(6000),
+            signal: createTimeoutSignal(6000),
           });
           if (rulesFetch.ok) {
             const remoteRules: CategoryRule[] = await rulesFetch.json();
@@ -1477,7 +1497,7 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
           try {
             const serverRes = await fetch(`${getApiBase()}/api/transactions`, {
               headers: { "X-Household-ID": hId, "X-Device-ID": dId },
-              signal: AbortSignal.timeout(10000),
+              signal: createTimeoutSignal(10000),
             });
             if (serverRes.ok) {
               const serverTxs: Transaction[] = await serverRes.json();
@@ -3725,17 +3745,13 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
   const thisMonthTx = transactions.filter((t) => localYM(t.date) === monthKey);
   const monthlyIncome = thisMonthTx.filter((t) => t.type === "income" && t.category !== "Transfer" && t.category?.toLowerCase() !== "transfer").reduce((s, t) => s + t.amount, 0);
   const monthlyExpense = thisMonthTx.filter((t) => t.type === "expense" && t.category !== "Transfer" && t.category?.toLowerCase() !== "transfer").reduce((s, t) => s + t.amount, 0);
-  const isLiabilityAccount = (a: Account) => {
-    if (["credit", "mortgage", "loan"].includes(a.type ?? "")) return true;
-    const text = `${a.name} ${a.bank}`.toLowerCase();
-    return text.includes("mortgage") || text.includes("loan") || text.includes("lending") || text.includes("borrow");
-  };
-  const totalBalance = accounts
-    .filter(isIncludedInNetworth)
-    .reduce((s, a) => {
-      const bal = computeBalance(a, transactions);
-      return isLiabilityAccount(a) ? s - Math.abs(bal) : s + bal;
-    }, 0);
+  const assetsTotal = accounts
+    .filter((a) => isIncludedInNetworth(a) && !isLiabilityAccount(a))
+    .reduce((s, a) => s + computeBalance(a, transactions), 0);
+  const liabilitiesTotal = accounts
+    .filter((a) => isIncludedInNetworth(a) && isLiabilityAccount(a))
+    .reduce((s, a) => s + Math.abs(computeBalance(a, transactions)), 0);
+  const totalBalance = assetsTotal - liabilitiesTotal;
 
   return (
     <AppContext.Provider
