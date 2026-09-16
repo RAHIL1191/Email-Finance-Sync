@@ -36,7 +36,7 @@ const CATEGORY_ICONS: Record<string, string> = {
   "Dev / Feature": "code",
   "Other": "more-horizontal",
 };
-const PAYMENT_MODES   = ["Credit Card", "Debit Card", "PayPal", "Bank Transfer", "Cash", "Other"];
+const PAYMENT_MODES = ["Credit Card", "Debit Card", "PayPal", "Bank Transfer", "Cash", "Other"];
 
 const PRIORITY_COLORS: Record<Task["priority"], string> = {
   low: "#22c55e", medium: "#f59e0b", high: "#ef4444",
@@ -103,7 +103,7 @@ function DateTimeReminderModal({ visible, onClose, onSave, initial }: DateTimeRe
     const month = currentMonth.getMonth();
     const firstDay = new Date(year, month, 1).getDay();
     const totalDays = new Date(year, month + 1, 0).getDate();
-    
+
     const grid: (Date | null)[] = [];
     for (let i = 0; i < firstDay; i++) {
       grid.push(null);
@@ -187,7 +187,7 @@ function DateTimeReminderModal({ visible, onClose, onSave, initial }: DateTimeRe
     <Modal visible={visible} transparent animationType="slide" onRequestClose={onClose}>
       <TouchableOpacity style={{ flex: 1, backgroundColor: "rgba(0,0,0,0.6)" }} activeOpacity={1} onPress={onClose} />
       <View style={[modalStyles.sheet, { backgroundColor: colors.card, paddingBottom: insets.bottom + 12 }]}>
-        
+
         {/* Top Header Row */}
         <View style={[modalStyles.headerRow, { borderBottomColor: colors.border }]}>
           <TouchableOpacity onPress={onClose} hitSlop={12}>
@@ -232,7 +232,7 @@ function DateTimeReminderModal({ visible, onClose, onSave, initial }: DateTimeRe
         <View style={modalStyles.grid}>
           {daysGrid.map((d, index) => {
             if (!d) return <View key={`pad-${index}`} style={modalStyles.dayCell} />;
-            
+
             const isSelected = selectedDate.getDate() === d.getDate() && selectedDate.getMonth() === d.getMonth() && selectedDate.getFullYear() === d.getFullYear();
             const isToday = today.getDate() === d.getDate() && today.getMonth() === d.getMonth() && today.getFullYear() === d.getFullYear();
 
@@ -263,7 +263,7 @@ function DateTimeReminderModal({ visible, onClose, onSave, initial }: DateTimeRe
 
         {/* Options List Container */}
         <View style={[modalStyles.optionsContainer, { backgroundColor: colors.background, borderColor: colors.border }]}>
-          
+
           {/* Time Option Row */}
           <TouchableOpacity
             style={[modalStyles.optionRow, { borderBottomColor: colors.border }]}
@@ -369,7 +369,7 @@ function DateTimeReminderModal({ visible, onClose, onSave, initial }: DateTimeRe
             <TouchableOpacity style={StyleSheet.absoluteFill} onPress={() => setActiveSub("none")} />
             <View style={[modalStyles.dialog, { backgroundColor: colors.card, borderColor: colors.border }]}>
               <Text style={[modalStyles.dialogTitle, { color: colors.foreground }]}>Reminder</Text>
-              
+
               <ScrollView style={{ maxHeight: 280 }} showsVerticalScrollIndicator={false}>
                 {[
                   { label: "None", value: "none" },
@@ -432,7 +432,7 @@ function DateTimeReminderModal({ visible, onClose, onSave, initial }: DateTimeRe
             <TouchableOpacity style={StyleSheet.absoluteFill} onPress={() => setActiveSub("none")} />
             <View style={[modalStyles.dialog, { backgroundColor: colors.card, borderColor: colors.border }]}>
               <Text style={[modalStyles.dialogTitle, { color: colors.foreground }]}>Repeat</Text>
-              
+
               {[
                 { label: "None", value: "once" },
                 { label: "Daily", value: "daily" },
@@ -498,25 +498,25 @@ function TaskFormSheet({
   onClose: () => void;
   onSave: (data: Omit<Task, "id" | "createdAt" | "updatedAt">) => void;
 }) {
-  const colors  = useColors();
-  const insets  = useSafeAreaInsets();
+  const colors = useColors();
+  const insets = useSafeAreaInsets();
 
-  const [title,           setTitle]           = useState("");
-  const [category,        setCategory]        = useState("Subscription");
-  const [email,           setEmail]           = useState("");
-  const [paymentMode,     setPaymentMode]     = useState("");
-  const [dueDate,         setDueDate]         = useState(new Date());
-  const [priority,        setPriority]        = useState<Task["priority"]>("medium");
-  const [reminderEnabled,    setReminderEnabled]    = useState(false);
-  const [reminderDate,       setReminderDate]       = useState(new Date());
-  const [reminderFrequency,  setReminderFrequency]  = useState<"once" | "daily" | "weekly" | "monthly">("once");
-  const [showScheduleModal,  setShowScheduleModal]  = useState(false);
-  const [notes,           setNotes]           = useState("");
-  const [notesHeight,     setNotesHeight]     = useState(80);
-  const [checklistItems,  setChecklistItems]  = useState<ChecklistItem[]>([]);
-  const [newItemText,     setNewItemText]     = useState("");
+  const [title, setTitle] = useState("");
+  const [category, setCategory] = useState("Subscription");
+  const [email, setEmail] = useState("");
+  const [paymentMode, setPaymentMode] = useState("");
+  const [dueDate, setDueDate] = useState(new Date());
+  const [priority, setPriority] = useState<Task["priority"]>("medium");
+  const [reminderEnabled, setReminderEnabled] = useState(false);
+  const [reminderDate, setReminderDate] = useState(new Date());
+  const [reminderFrequency, setReminderFrequency] = useState<"once" | "daily" | "weekly" | "monthly">("once");
+  const [showScheduleModal, setShowScheduleModal] = useState(false);
+  const [notes, setNotes] = useState("");
+  const [notesHeight, setNotesHeight] = useState(80);
+  const [checklistItems, setChecklistItems] = useState<ChecklistItem[]>([]);
+  const [newItemText, setNewItemText] = useState("");
   const [showCatDropdown, setShowCatDropdown] = useState(false);
-  const [expandedNoteId,  setExpandedNoteId]  = useState<string | null>(null);
+  const [expandedNoteId, setExpandedNoteId] = useState<string | null>(null);
   const newItemRef = useRef<TextInput>(null);
   const isDevMode = category === "Dev / Feature";
 
@@ -566,18 +566,18 @@ function TaskFormSheet({
     }
     Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
     onSave({
-      title:           title.trim(),
+      title: title.trim(),
       category,
-      email:           email.trim() || undefined,
-      paymentMode:     paymentMode || undefined,
-      dueDate:         toLocalYMD(dueDate),
+      email: email.trim() || undefined,
+      paymentMode: paymentMode || undefined,
+      dueDate: toLocalYMD(dueDate),
       priority,
       reminderEnabled,
-      reminderDate:    reminderEnabled ? reminderDate.toISOString() : undefined,
+      reminderDate: reminderEnabled ? reminderDate.toISOString() : undefined,
       reminderFrequency: reminderEnabled ? reminderFrequency : undefined,
-      notes:           notes.trim() || undefined,
-      checklistItems:  checklistItems.length > 0 ? checklistItems : undefined,
-      isCompleted:     initial?.isCompleted ?? false,
+      notes: notes.trim() || undefined,
+      checklistItems: checklistItems.length > 0 ? checklistItems : undefined,
+      isCompleted: initial?.isCompleted ?? false,
     });
     onClose();
   };
@@ -632,8 +632,8 @@ function TaskFormSheet({
                   <TouchableOpacity
                     key={c}
                     style={[f.dropdownItem,
-                      idx < TASK_CATEGORIES.length - 1 && { borderBottomWidth: StyleSheet.hairlineWidth, borderBottomColor: colors.border },
-                      on && { backgroundColor: colors.primary + "12" },
+                    idx < TASK_CATEGORIES.length - 1 && { borderBottomWidth: StyleSheet.hairlineWidth, borderBottomColor: colors.border },
+                    on && { backgroundColor: colors.primary + "12" },
                     ]}
                     onPress={() => { setCategory(c); setShowCatDropdown(false); Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light); }}
                   >
@@ -939,7 +939,7 @@ function KanbanCard({ task, onToggle, onEdit, onDelete }: { task: Task; onToggle
   const colors = useColors();
   const pColor = PRIORITY_COLORS[task.priority];
   const checkedCount = task.checklistItems?.filter(i => i.completed).length ?? 0;
-  const totalCount   = task.checklistItems?.length ?? 0;
+  const totalCount = task.checklistItems?.length ?? 0;
   return (
     <TouchableOpacity style={[ts.kCard, { backgroundColor: colors.background, borderColor: colors.border }]} onPress={onEdit} activeOpacity={0.8}>
       <View style={[ts.kPriorityBar, { backgroundColor: pColor }]} />
@@ -978,9 +978,9 @@ function KanbanBoard({ tasks, onToggle, onEdit, onDelete }: { tasks: Task[]; onT
   const doneTasks = tasks.filter(t => t.isCompleted);
 
   const columns: { label: string; color: string; icon: string; tasks: Task[] }[] = [
-    { label: "To Do",       color: "#6366f1", icon: "circle",       tasks: todoTasks },
-    { label: "In Progress", color: "#f59e0b", icon: "clock",        tasks: inProgressTasks },
-    { label: "Done",        color: "#22c55e", icon: "check-circle", tasks: doneTasks },
+    { label: "To Do", color: "#6366f1", icon: "circle", tasks: todoTasks },
+    { label: "In Progress", color: "#f59e0b", icon: "clock", tasks: inProgressTasks },
+    { label: "Done", color: "#22c55e", icon: "check-circle", tasks: doneTasks },
   ];
 
   return (
@@ -1026,16 +1026,16 @@ function TaskCard({ task, onToggle, onEdit, onDelete }: {
   const midnightNow = new Date(todayLocal.getFullYear(), todayLocal.getMonth(), todayLocal.getDate());
 
   const daysLeft = Math.round((localDue.getTime() - midnightNow.getTime()) / 86400000);
-  const isOver   = daysLeft < 0 && !task.isCompleted;
-  const isSoon   = daysLeft >= 0 && daysLeft <= 3 && !task.isCompleted;
-  const pColor   = PRIORITY_COLORS[task.priority];
+  const isOver = daysLeft < 0 && !task.isCompleted;
+  const isSoon = daysLeft >= 0 && daysLeft <= 3 && !task.isCompleted;
+  const pColor = PRIORITY_COLORS[task.priority];
 
   const dueTxt = task.isCompleted
     ? localDue.toLocaleDateString("en-US", { month: "short", day: "numeric" })
-    : isOver   ? `${Math.abs(daysLeft)}d overdue`
-    : daysLeft === 0 ? "Due today"
-    : daysLeft === 1 ? "Due tomorrow"
-    : `Due ${localDue.toLocaleDateString("en-US", { month: "short", day: "numeric" })}`;
+    : isOver ? `${Math.abs(daysLeft)}d overdue`
+      : daysLeft === 0 ? "Due today"
+        : daysLeft === 1 ? "Due tomorrow"
+          : `Due ${localDue.toLocaleDateString("en-US", { month: "short", day: "numeric" })}`;
 
   const dueColor = task.isCompleted ? colors.mutedForeground : isOver ? "#ef4444" : isSoon ? "#f59e0b" : colors.mutedForeground;
 
@@ -1052,8 +1052,8 @@ function TaskCard({ task, onToggle, onEdit, onDelete }: {
           {/* Completion circle */}
           <TouchableOpacity onPress={onToggle} hitSlop={8}>
             <View style={[ts.check, {
-              borderColor:       task.isCompleted ? colors.primary : colors.border,
-              backgroundColor:   task.isCompleted ? colors.primary : "transparent",
+              borderColor: task.isCompleted ? colors.primary : colors.border,
+              backgroundColor: task.isCompleted ? colors.primary : "transparent",
             }]}>
               {task.isCompleted && <Feather name="check" size={11} color="#fff" />}
             </View>
@@ -1198,7 +1198,7 @@ function parseNaturalDate(str: string): Date | null {
 function parseYodaCommand(command: string): { title: string; dueDate: Date; repeat: "once" | "daily" | "weekly" | "monthly" } | null {
   const cmd = command.trim();
   const cmdLower = cmd.toLowerCase();
-  
+
   let trigger = "";
   if (cmdLower.startsWith("yoda add task")) {
     trigger = "yoda add task";
@@ -1258,51 +1258,6 @@ function parseYodaCommand(command: string): { title: string; dueDate: Date; repe
   };
 }
 
-// ─── Month Grouping Helper ────────────────────────────────────────────────────
-const FULL_MONTH_NAMES = ["January", "February", "March", "April", "May", "June", "July", "August", "September", "October", "November", "December"];
-
-function groupTasksByMonth(tasks: Task[]): { label: string; key: string; tasks: Task[] }[] {
-  const map = new Map<string, { label: string; key: string; tasks: Task[] }>();
-  for (const t of tasks) {
-    const d = parseLocalDate(t.dueDate);
-    const key = `${d.getFullYear()}-${String(d.getMonth()).padStart(2, '0')}`;
-    if (!map.has(key)) {
-      const label = `${FULL_MONTH_NAMES[d.getMonth()]} ${d.getFullYear()}`;
-      map.set(key, { label, key, tasks: [] });
-    }
-    map.get(key)!.tasks.push(t);
-  }
-  return Array.from(map.values()).sort((a, b) => a.key.localeCompare(b.key));
-}
-
-// ─── MonthSectionHeader ───────────────────────────────────────────────────────
-function MonthSectionHeader({ label, count, isCurrentMonth }: { label: string; count: number; isCurrentMonth: boolean }) {
-  const colors = useColors();
-  return (
-    <View style={[
-      ts.monthHeader,
-      { backgroundColor: isCurrentMonth ? colors.primary + '15' : colors.card, borderColor: isCurrentMonth ? colors.primary + '40' : colors.border },
-    ]}>
-      <View style={{ flexDirection: 'row', alignItems: 'center', gap: 8, flex: 1 }}>
-        <View style={[ts.monthDot, { backgroundColor: isCurrentMonth ? colors.primary : colors.mutedForeground }]} />
-        <Text style={[ts.monthLabel, { color: isCurrentMonth ? colors.primary : colors.foreground }]}>
-          {label}
-        </Text>
-        {isCurrentMonth && (
-          <View style={[ts.nowBadge, { backgroundColor: colors.primary }]}>
-            <Text style={ts.nowBadgeTxt}>Now</Text>
-          </View>
-        )}
-      </View>
-      <View style={[ts.monthCountBadge, { backgroundColor: isCurrentMonth ? colors.primary + '20' : colors.border + 'aa' }]}>
-        <Text style={[ts.monthCountTxt, { color: isCurrentMonth ? colors.primary : colors.mutedForeground }]}>
-          {count} task{count !== 1 ? 's' : ''}
-        </Text>
-      </View>
-    </View>
-  );
-}
-
 // ─── Main Screen ──────────────────────────────────────────────────────────────
 export default function TasksScreen() {
   const colors = useColors();
@@ -1310,11 +1265,11 @@ export default function TasksScreen() {
   const { tasks, addTask, updateTask, deleteTask } = useApp();
 
   const [completedExpanded, setCompletedExpanded] = useState(false);
-  const [sortBy,            setSortBy]            = useState<"date" | "title" | "priority">("date");
-  const [viewMode,          setViewMode]          = useState<"list" | "board">("list");
-  const [showForm,          setShowForm]          = useState(false);
-  const [editTask,          setEditTask]          = useState<Task | null>(null);
-  const [yodaText,          setYodaText]          = useState("");
+  const [sortBy, setSortBy] = useState<"date" | "title" | "priority">("date");
+  const [viewMode, setViewMode] = useState<"list" | "board">("list");
+  const [showForm, setShowForm] = useState(false);
+  const [editTask, setEditTask] = useState<Task | null>(null);
+  const [yodaText, setYodaText] = useState("");
 
   const PRIORITY_VAL = { high: 3, medium: 2, low: 1 };
 
@@ -1333,22 +1288,13 @@ export default function TasksScreen() {
     return list;
   }, [tasks, sortBy]);
 
-  // Group pending tasks by month
-  const pendingByMonth = useMemo(() => groupTasksByMonth(pendingTasks), [pendingTasks]);
-
-  // Current month key for highlighting
-  const currentMonthKey = useMemo(() => {
-    const now = new Date();
-    return `${now.getFullYear()}-${String(now.getMonth()).padStart(2, '0')}`;
-  }, []);
-
   const completedTasks = useMemo(() => {
     let list = tasks.filter((t) => t.isCompleted);
     list.sort((a, b) => parseLocalDate(b.dueDate).getTime() - parseLocalDate(a.dueDate).getTime());
     return list;
   }, [tasks]);
 
-  const openAdd  = () => { setEditTask(null); setShowForm(true); };
+  const openAdd = () => { setEditTask(null); setShowForm(true); };
   const openEdit = (t: Task) => { setEditTask(t); setShowForm(true); };
 
   const handleToggle = (t: Task) => {
@@ -1404,8 +1350,8 @@ export default function TasksScreen() {
         <Text style={[ts.headerTitle, { color: colors.foreground }]}>Inbox</Text>
         <View style={{ flexDirection: "row", alignItems: "center", gap: 8 }}>
           <TouchableOpacity
-             style={[ts.viewToggle, { backgroundColor: viewMode === "board" ? colors.primary + "18" : colors.card, borderColor: colors.border }]}
-             onPress={() => { Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light); setViewMode(v => v === "list" ? "board" : "list"); }}
+            style={[ts.viewToggle, { backgroundColor: viewMode === "board" ? colors.primary + "18" : colors.card, borderColor: colors.border }]}
+            onPress={() => { Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light); setViewMode(v => v === "list" ? "board" : "list"); }}
           >
             <Feather name={viewMode === "list" ? "columns" : "list"} size={16} color={viewMode === "board" ? colors.primary : colors.mutedForeground} />
           </TouchableOpacity>
@@ -1489,24 +1435,14 @@ export default function TasksScreen() {
               </TouchableOpacity>
             </View>
           ) : (
-            // ── Month-Grouped Pending Tasks ──
-            pendingByMonth.map(({ key, label, tasks: monthTasks }) => (
-              <View key={key} style={{ gap: 8 }}>
-                <MonthSectionHeader
-                  label={label}
-                  count={monthTasks.length}
-                  isCurrentMonth={key === currentMonthKey}
-                />
-                {monthTasks.map((t) => (
-                  <TaskCard
-                    key={t.id}
-                    task={t}
-                    onToggle={() => handleToggle(t)}
-                    onEdit={() => openEdit(t)}
-                    onDelete={() => handleDelete(t)}
-                  />
-                ))}
-              </View>
+            pendingTasks.map((t) => (
+              <TaskCard
+                key={t.id}
+                task={t}
+                onToggle={() => handleToggle(t)}
+                onEdit={() => openEdit(t)}
+                onDelete={() => handleDelete(t)}
+              />
             ))
           )}
 
@@ -1562,124 +1498,115 @@ export default function TasksScreen() {
 
 // ─── Styles ───────────────────────────────────────────────────────────────────
 const f = StyleSheet.create({
-  sheet:       { borderTopLeftRadius: 24, borderTopRightRadius: 24, maxHeight: "92%" },
-  header:      { flexDirection: "row", alignItems: "center", justifyContent: "space-between", paddingHorizontal: 20, paddingVertical: 16, borderBottomWidth: StyleSheet.hairlineWidth },
+  sheet: { borderTopLeftRadius: 24, borderTopRightRadius: 24, maxHeight: "92%" },
+  header: { flexDirection: "row", alignItems: "center", justifyContent: "space-between", paddingHorizontal: 20, paddingVertical: 16, borderBottomWidth: StyleSheet.hairlineWidth },
   headerTitle: { fontSize: 17, fontFamily: "Inter_600SemiBold" },
-  cancel:      { fontSize: 15, fontFamily: "Inter_400Regular" },
-  save:        { fontSize: 15, fontFamily: "Inter_600SemiBold" },
-  body:        { paddingHorizontal: 20, paddingTop: 14, paddingBottom: 24, gap: 4 },
-  label:       { fontSize: 12, fontFamily: "Inter_500Medium", letterSpacing: 0.4, textTransform: "uppercase", marginTop: 14, marginBottom: 6 },
-  input:       { height: 46, borderRadius: 10, borderWidth: 1, paddingHorizontal: 14, fontSize: 15, fontFamily: "Inter_400Regular" },
-  textArea:    { paddingTop: 12, paddingBottom: 12 },
+  cancel: { fontSize: 15, fontFamily: "Inter_400Regular" },
+  save: { fontSize: 15, fontFamily: "Inter_600SemiBold" },
+  body: { paddingHorizontal: 20, paddingTop: 14, paddingBottom: 24, gap: 4 },
+  label: { fontSize: 12, fontFamily: "Inter_500Medium", letterSpacing: 0.4, textTransform: "uppercase", marginTop: 14, marginBottom: 6 },
+  input: { height: 46, borderRadius: 10, borderWidth: 1, paddingHorizontal: 14, fontSize: 15, fontFamily: "Inter_400Regular" },
+  textArea: { paddingTop: 12, paddingBottom: 12 },
   checklistHeader: { flexDirection: "row", alignItems: "center", justifyContent: "space-between", marginTop: 14, marginBottom: 8 },
-  checklistCount:  { fontSize: 12, fontFamily: "Inter_600SemiBold" },
+  checklistCount: { fontSize: 12, fontFamily: "Inter_600SemiBold" },
   progressBarWrap: { height: 4, borderRadius: 2, marginBottom: 10, overflow: "hidden" },
   progressBarFill: { height: 4, borderRadius: 2 },
-  checklistItem:   { flexDirection: "row", alignItems: "center", gap: 10, borderRadius: 10, borderWidth: 1, paddingHorizontal: 12, paddingVertical: 10, marginBottom: 6 },
-  itemCheck:       { width: 20, height: 20, borderRadius: 10, borderWidth: 2, alignItems: "center", justifyContent: "center" },
-  itemTextInput:   { flex: 1, fontSize: 14, fontFamily: "Inter_400Regular", paddingVertical: 0 },
-  addItemRow:      { flexDirection: "row", alignItems: "center", gap: 10, borderRadius: 10, borderWidth: 1.5, borderStyle: "dashed", paddingHorizontal: 12, paddingVertical: 12, marginBottom: 4 },
-  addItemInput:    { flex: 1, fontSize: 14, fontFamily: "Inter_400Regular", paddingVertical: 0 },
-  chipRow:     { gap: 8, paddingBottom: 4 },
-  chip:        { paddingHorizontal: 14, paddingVertical: 8, borderRadius: 20, borderWidth: 1 },
-  chipTxt:     { fontSize: 13, fontFamily: "Inter_500Medium" },
+  checklistItem: { flexDirection: "row", alignItems: "center", gap: 10, borderRadius: 10, borderWidth: 1, paddingHorizontal: 12, paddingVertical: 10, marginBottom: 6 },
+  itemCheck: { width: 20, height: 20, borderRadius: 10, borderWidth: 2, alignItems: "center", justifyContent: "center" },
+  itemTextInput: { flex: 1, fontSize: 14, fontFamily: "Inter_400Regular", paddingVertical: 0 },
+  addItemRow: { flexDirection: "row", alignItems: "center", gap: 10, borderRadius: 10, borderWidth: 1.5, borderStyle: "dashed", paddingHorizontal: 12, paddingVertical: 12, marginBottom: 4 },
+  addItemInput: { flex: 1, fontSize: 14, fontFamily: "Inter_400Regular", paddingVertical: 0 },
+  chipRow: { gap: 8, paddingBottom: 4 },
+  chip: { paddingHorizontal: 14, paddingVertical: 8, borderRadius: 20, borderWidth: 1 },
+  chipTxt: { fontSize: 13, fontFamily: "Inter_500Medium" },
   priorityRow: { flexDirection: "row", gap: 10 },
   priorityBtn: { flex: 1, height: 40, borderRadius: 10, borderWidth: 1.5, alignItems: "center", justifyContent: "center" },
   priorityBtnTxt: { fontSize: 14, fontFamily: "Inter_600SemiBold" },
-  datePick:    { flexDirection: "row", alignItems: "center", gap: 10, height: 46, borderRadius: 10, borderWidth: 1, paddingHorizontal: 14 },
+  datePick: { flexDirection: "row", alignItems: "center", gap: 10, height: 46, borderRadius: 10, borderWidth: 1, paddingHorizontal: 14 },
   datePickTxt: { fontSize: 14, fontFamily: "Inter_400Regular" },
   reminderRow: { flexDirection: "row", alignItems: "center", gap: 12, marginTop: 14, paddingVertical: 12, borderBottomWidth: StyleSheet.hairlineWidth },
   reminderSub: { fontSize: 12, fontFamily: "Inter_400Regular", marginTop: 3 },
-  dropdown:        { flexDirection: "row", alignItems: "center", gap: 10, height: 46, borderRadius: 10, borderWidth: 1, paddingHorizontal: 14 },
-  dropdownTxt:     { fontSize: 15, fontFamily: "Inter_400Regular" },
-  dropdownList:    { borderRadius: 12, borderWidth: 1, overflow: "hidden", marginTop: 4 },
-  dropdownItem:    { flexDirection: "row", alignItems: "center", gap: 10, paddingHorizontal: 14, paddingVertical: 13 },
-  dropdownItemIcon:{ width: 28, height: 28, borderRadius: 8, alignItems: "center", justifyContent: "center" },
+  dropdown: { flexDirection: "row", alignItems: "center", gap: 10, height: 46, borderRadius: 10, borderWidth: 1, paddingHorizontal: 14 },
+  dropdownTxt: { fontSize: 15, fontFamily: "Inter_400Regular" },
+  dropdownList: { borderRadius: 12, borderWidth: 1, overflow: "hidden", marginTop: 4 },
+  dropdownItem: { flexDirection: "row", alignItems: "center", gap: 10, paddingHorizontal: 14, paddingVertical: 13 },
+  dropdownItemIcon: { width: 28, height: 28, borderRadius: 8, alignItems: "center", justifyContent: "center" },
   dropdownItemTxt: { flex: 1, fontSize: 14 },
-  devBadge:        { paddingHorizontal: 6, paddingVertical: 2, borderRadius: 6 },
-  devBadgeTxt:     { fontSize: 10, fontFamily: "Inter_600SemiBold" },
-  devBanner:       { flexDirection: "row", alignItems: "center", gap: 8, borderRadius: 10, borderWidth: 1, paddingHorizontal: 12, paddingVertical: 10, marginTop: 8 },
-  devBannerTxt:    { flex: 1, fontSize: 12, fontFamily: "Inter_500Medium" },
-  addItemBtn:      { width: 28, height: 28, borderRadius: 8, alignItems: "center", justifyContent: "center" },
+  devBadge: { paddingHorizontal: 6, paddingVertical: 2, borderRadius: 6 },
+  devBadgeTxt: { fontSize: 10, fontFamily: "Inter_600SemiBold" },
+  devBanner: { flexDirection: "row", alignItems: "center", gap: 8, borderRadius: 10, borderWidth: 1, paddingHorizontal: 12, paddingVertical: 10, marginTop: 8 },
+  devBannerTxt: { flex: 1, fontSize: 12, fontFamily: "Inter_500Medium" },
+  addItemBtn: { width: 28, height: 28, borderRadius: 8, alignItems: "center", justifyContent: "center" },
   swipeBackground: { ...StyleSheet.absoluteFillObject, flexDirection: "row", alignItems: "center", paddingHorizontal: 14, borderRadius: 10 },
-  itemNoteInput:   { fontSize: 12, fontFamily: "Inter_400Regular", paddingVertical: 6, paddingHorizontal: 2, borderTopWidth: StyleSheet.hairlineWidth, marginTop: 4 },
+  itemNoteInput: { fontSize: 12, fontFamily: "Inter_400Regular", paddingVertical: 6, paddingHorizontal: 2, borderTopWidth: StyleSheet.hairlineWidth, marginTop: 4 },
 });
 
 const ts = StyleSheet.create({
-  root:       { flex: 1 },
-  header:     { flexDirection: "row", alignItems: "center", paddingHorizontal: 16, paddingVertical: 14, borderBottomWidth: StyleSheet.hairlineWidth },
-  headerTitle:{ flex: 1, fontSize: 22, fontFamily: "Inter_700Bold", marginLeft: 12 },
-  addBtn:     { width: 36, height: 36, borderRadius: 10, alignItems: "center", justifyContent: "center" },
+  root: { flex: 1 },
+  header: { flexDirection: "row", alignItems: "center", paddingHorizontal: 16, paddingVertical: 14, borderBottomWidth: StyleSheet.hairlineWidth },
+  headerTitle: { flex: 1, fontSize: 22, fontFamily: "Inter_700Bold", marginLeft: 12 },
+  addBtn: { width: 36, height: 36, borderRadius: 10, alignItems: "center", justifyContent: "center" },
 
-  filterRow:  { flexDirection: "row", borderBottomWidth: StyleSheet.hairlineWidth },
-  filterTab:  { flex: 1, flexDirection: "row", alignItems: "center", justifyContent: "center", gap: 6, paddingVertical: 12, borderBottomWidth: 2, borderBottomColor: "transparent" },
-  filterTxt:  { fontSize: 13, fontFamily: "Inter_500Medium" },
+  filterRow: { flexDirection: "row", borderBottomWidth: StyleSheet.hairlineWidth },
+  filterTab: { flex: 1, flexDirection: "row", alignItems: "center", justifyContent: "center", gap: 6, paddingVertical: 12, borderBottomWidth: 2, borderBottomColor: "transparent" },
+  filterTxt: { fontSize: 13, fontFamily: "Inter_500Medium" },
   countBadge: { paddingHorizontal: 6, paddingVertical: 2, borderRadius: 8 },
-  countTxt:   { fontSize: 11, fontFamily: "Inter_600SemiBold" },
+  countTxt: { fontSize: 11, fontFamily: "Inter_600SemiBold" },
 
-  scroll:     { paddingHorizontal: 14, paddingTop: 12, paddingBottom: 120, gap: 10 },
+  scroll: { paddingHorizontal: 14, paddingTop: 12, paddingBottom: 120, gap: 10 },
 
-  card:       { flexDirection: "row", borderRadius: 14, borderWidth: 1, overflow: "hidden" },
-  priorityBar:{ width: 4 },
-  cardContent:{ flex: 1, padding: 12, gap: 8 },
-  cardRow:    { flexDirection: "row", alignItems: "flex-start", gap: 10 },
-  check:      { width: 22, height: 22, borderRadius: 11, borderWidth: 2, alignItems: "center", justifyContent: "center", marginTop: 1 },
-  cardTitle:  { fontSize: 15, fontFamily: "Inter_600SemiBold" },
-  metaRow:    { flexDirection: "row", alignItems: "center", gap: 8 },
-  catBadge:   { paddingHorizontal: 8, paddingVertical: 3, borderRadius: 6 },
-  catBadgeTxt:{ fontSize: 11, fontFamily: "Inter_500Medium" },
-  dueTxt:     { fontSize: 12, fontFamily: "Inter_400Regular" },
-  subRow:     { flexDirection: "row", flexWrap: "wrap", gap: 10 },
-  subItem:    { flexDirection: "row", alignItems: "center", gap: 4 },
-  subTxt:     { fontSize: 11, fontFamily: "Inter_400Regular" },
-  checklistWrap:     { gap: 5 },
-  checklistMeta:     { flexDirection: "row", alignItems: "center", gap: 4 },
-  checklistTxt:      { fontSize: 11, fontFamily: "Inter_500Medium" },
-  cardProgressBar:   { height: 3, borderRadius: 2, overflow: "hidden" },
-  cardProgressFill:  { height: 3, borderRadius: 2 },
+  card: { flexDirection: "row", borderRadius: 14, borderWidth: 1, overflow: "hidden" },
+  priorityBar: { width: 4 },
+  cardContent: { flex: 1, padding: 12, gap: 8 },
+  cardRow: { flexDirection: "row", alignItems: "flex-start", gap: 10 },
+  check: { width: 22, height: 22, borderRadius: 11, borderWidth: 2, alignItems: "center", justifyContent: "center", marginTop: 1 },
+  cardTitle: { fontSize: 15, fontFamily: "Inter_600SemiBold" },
+  metaRow: { flexDirection: "row", alignItems: "center", gap: 8 },
+  catBadge: { paddingHorizontal: 8, paddingVertical: 3, borderRadius: 6 },
+  catBadgeTxt: { fontSize: 11, fontFamily: "Inter_500Medium" },
+  dueTxt: { fontSize: 12, fontFamily: "Inter_400Regular" },
+  subRow: { flexDirection: "row", flexWrap: "wrap", gap: 10 },
+  subItem: { flexDirection: "row", alignItems: "center", gap: 4 },
+  subTxt: { fontSize: 11, fontFamily: "Inter_400Regular" },
+  checklistWrap: { gap: 5 },
+  checklistMeta: { flexDirection: "row", alignItems: "center", gap: 4 },
+  checklistTxt: { fontSize: 11, fontFamily: "Inter_500Medium" },
+  cardProgressBar: { height: 3, borderRadius: 2, overflow: "hidden" },
+  cardProgressFill: { height: 3, borderRadius: 2 },
   viewToggle: { width: 32, height: 32, borderRadius: 8, borderWidth: 1, alignItems: "center", justifyContent: "center" },
-  remBadge:   { flexDirection: "row", alignItems: "center", gap: 5, paddingHorizontal: 8, paddingVertical: 4, borderRadius: 6, alignSelf: "flex-start" },
-  remTxt:     { fontSize: 11, fontFamily: "Inter_500Medium" },
-  kCard:        { flexDirection: "row", borderRadius: 12, borderWidth: 1, overflow: "hidden", marginBottom: 0 },
+  remBadge: { flexDirection: "row", alignItems: "center", gap: 5, paddingHorizontal: 8, paddingVertical: 4, borderRadius: 6, alignSelf: "flex-start" },
+  remTxt: { fontSize: 11, fontFamily: "Inter_500Medium" },
+  kCard: { flexDirection: "row", borderRadius: 12, borderWidth: 1, overflow: "hidden", marginBottom: 0 },
   kPriorityBar: { width: 3 },
-  kBody:        { flex: 1, padding: 10, gap: 6 },
-  kTitle:       { fontSize: 13, fontFamily: "Inter_600SemiBold", lineHeight: 18 },
-  kProgress:    { gap: 4 },
+  kBody: { flex: 1, padding: 10, gap: 6 },
+  kTitle: { fontSize: 13, fontFamily: "Inter_600SemiBold", lineHeight: 18 },
+  kProgress: { gap: 4 },
   kProgressBar: { height: 3, borderRadius: 2, overflow: "hidden" },
-  kProgressFill:{ height: 3, borderRadius: 2 },
+  kProgressFill: { height: 3, borderRadius: 2 },
   kProgressTxt: { fontSize: 10, fontFamily: "Inter_400Regular" },
-  kFooter:      { flexDirection: "row", justifyContent: "space-between", alignItems: "center", marginTop: 2 },
-  kCheck:       { width: 18, height: 18, borderRadius: 9, borderWidth: 2, alignItems: "center", justifyContent: "center" },
-  boardScroll:  { paddingHorizontal: 12, paddingVertical: 12, gap: 10, flexDirection: "row", alignItems: "flex-start" },
-  boardCol:     { borderRadius: 16, borderWidth: 1, overflow: "hidden", flexShrink: 0, maxHeight: "90%" },
+  kFooter: { flexDirection: "row", justifyContent: "space-between", alignItems: "center", marginTop: 2 },
+  kCheck: { width: 18, height: 18, borderRadius: 9, borderWidth: 2, alignItems: "center", justifyContent: "center" },
+  boardScroll: { paddingHorizontal: 12, paddingVertical: 12, gap: 10, flexDirection: "row", alignItems: "flex-start" },
+  boardCol: { borderRadius: 16, borderWidth: 1, overflow: "hidden", flexShrink: 0, maxHeight: "90%" },
   boardColHeader: { flexDirection: "row", alignItems: "center", gap: 8, paddingHorizontal: 14, paddingVertical: 12, borderBottomWidth: StyleSheet.hairlineWidth },
-  boardColDot:  { width: 10, height: 10, borderRadius: 5 },
-  boardColTitle:{ flex: 1, fontSize: 13, fontFamily: "Inter_600SemiBold" },
-  boardColBadge:{ paddingHorizontal: 7, paddingVertical: 2, borderRadius: 8 },
+  boardColDot: { width: 10, height: 10, borderRadius: 5 },
+  boardColTitle: { flex: 1, fontSize: 13, fontFamily: "Inter_600SemiBold" },
+  boardColBadge: { paddingHorizontal: 7, paddingVertical: 2, borderRadius: 8 },
   boardColBadgeTxt: { fontSize: 11, fontFamily: "Inter_700Bold" },
-  boardEmpty:   { alignItems: "center", gap: 8, paddingVertical: 28 },
-  boardEmptyTxt:{ fontSize: 12, fontFamily: "Inter_400Regular" },
+  boardEmpty: { alignItems: "center", gap: 8, paddingVertical: 28 },
+  boardEmptyTxt: { fontSize: 12, fontFamily: "Inter_400Regular" },
 
-  empty:      { alignItems: "center", gap: 12, paddingVertical: 60 },
-  emptyIcon:  { width: 72, height: 72, borderRadius: 22, alignItems: "center", justifyContent: "center" },
+  empty: { alignItems: "center", gap: 12, paddingVertical: 60 },
+  emptyIcon: { width: 72, height: 72, borderRadius: 22, alignItems: "center", justifyContent: "center" },
   emptyTitle: { fontSize: 18, fontFamily: "Inter_700Bold" },
-  emptySub:   { fontSize: 14, fontFamily: "Inter_400Regular", textAlign: "center" },
-  emptyBtn:   { flexDirection: "row", alignItems: "center", gap: 8, paddingHorizontal: 24, paddingVertical: 12, borderRadius: 12, marginTop: 4 },
-  emptyBtnTxt:{ fontSize: 15, fontFamily: "Inter_600SemiBold", color: "#fff" },
+  emptySub: { fontSize: 14, fontFamily: "Inter_400Regular", textAlign: "center" },
+  emptyBtn: { flexDirection: "row", alignItems: "center", gap: 8, paddingHorizontal: 24, paddingVertical: 12, borderRadius: 12, marginTop: 4 },
+  emptyBtnTxt: { fontSize: 15, fontFamily: "Inter_600SemiBold", color: "#fff" },
 
   sortBar: { flexDirection: "row", alignItems: "center", gap: 8, paddingHorizontal: 16, paddingVertical: 12, borderBottomWidth: StyleSheet.hairlineWidth },
   sortLabel: { fontSize: 13, fontFamily: "Inter_500Medium" },
   sortChip: { paddingHorizontal: 12, paddingVertical: 6, borderRadius: 16, borderWidth: 1, borderColor: "transparent" },
   sortChipTxt: { fontSize: 12, fontFamily: "Inter_600SemiBold" },
-
-  // Month section header styles
-  monthHeader: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', borderRadius: 12, borderWidth: 1, paddingHorizontal: 14, paddingVertical: 10, marginTop: 6, marginBottom: 2 },
-  monthDot: { width: 8, height: 8, borderRadius: 4 },
-  monthLabel: { fontSize: 14, fontFamily: 'Inter_700Bold' },
-  nowBadge: { paddingHorizontal: 7, paddingVertical: 2, borderRadius: 6 },
-  nowBadgeTxt: { fontSize: 10, fontFamily: 'Inter_700Bold', color: '#fff' },
-  monthCountBadge: { paddingHorizontal: 10, paddingVertical: 3, borderRadius: 10 },
-  monthCountTxt: { fontSize: 11, fontFamily: 'Inter_600SemiBold' },
 
   completedHeader: { flexDirection: "row", alignItems: "center", justifyContent: "space-between", paddingVertical: 14, borderBottomWidth: StyleSheet.hairlineWidth },
   completedTitle: { fontSize: 16, fontFamily: "Inter_600SemiBold" },
