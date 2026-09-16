@@ -1258,6 +1258,51 @@ function parseYodaCommand(command: string): { title: string; dueDate: Date; repe
   };
 }
 
+// ─── Month Grouping Helper ────────────────────────────────────────────────────
+const FULL_MONTH_NAMES = ["January", "February", "March", "April", "May", "June", "July", "August", "September", "October", "November", "December"];
+
+function groupTasksByMonth(tasks: Task[]): { label: string; key: string; tasks: Task[] }[] {
+  const map = new Map<string, { label: string; key: string; tasks: Task[] }>();
+  for (const t of tasks) {
+    const d = parseLocalDate(t.dueDate);
+    const key = `${d.getFullYear()}-${String(d.getMonth()).padStart(2, '0')}`;
+    if (!map.has(key)) {
+      const label = `${FULL_MONTH_NAMES[d.getMonth()]} ${d.getFullYear()}`;
+      map.set(key, { label, key, tasks: [] });
+    }
+    map.get(key)!.tasks.push(t);
+  }
+  return Array.from(map.values()).sort((a, b) => a.key.localeCompare(b.key));
+}
+
+// ─── MonthSectionHeader ───────────────────────────────────────────────────────
+function MonthSectionHeader({ label, count, isCurrentMonth }: { label: string; count: number; isCurrentMonth: boolean }) {
+  const colors = useColors();
+  return (
+    <View style={[
+      ts.monthHeader,
+      { backgroundColor: isCurrentMonth ? colors.primary + '15' : colors.card, borderColor: isCurrentMonth ? colors.primary + '40' : colors.border },
+    ]}>
+      <View style={{ flexDirection: 'row', alignItems: 'center', gap: 8, flex: 1 }}>
+        <View style={[ts.monthDot, { backgroundColor: isCurrentMonth ? colors.primary : colors.mutedForeground }]} />
+        <Text style={[ts.monthLabel, { color: isCurrentMonth ? colors.primary : colors.foreground }]}>
+          {label}
+        </Text>
+        {isCurrentMonth && (
+          <View style={[ts.nowBadge, { backgroundColor: colors.primary }]}>
+            <Text style={ts.nowBadgeTxt}>Now</Text>
+          </View>
+        )}
+      </View>
+      <View style={[ts.monthCountBadge, { backgroundColor: isCurrentMonth ? colors.primary + '20' : colors.border + 'aa' }]}>
+        <Text style={[ts.monthCountTxt, { color: isCurrentMonth ? colors.primary : colors.mutedForeground }]}>
+          {count} task{count !== 1 ? 's' : ''}
+        </Text>
+      </View>
+    </View>
+  );
+}
+
 // ─── Main Screen ──────────────────────────────────────────────────────────────
 export default function TasksScreen() {
   const colors = useColors();
@@ -1287,6 +1332,15 @@ export default function TasksScreen() {
     });
     return list;
   }, [tasks, sortBy]);
+
+  // Group pending tasks by month
+  const pendingByMonth = useMemo(() => groupTasksByMonth(pendingTasks), [pendingTasks]);
+
+  // Current month key for highlighting
+  const currentMonthKey = useMemo(() => {
+    const now = new Date();
+    return `${now.getFullYear()}-${String(now.getMonth()).padStart(2, '0')}`;
+  }, []);
 
   const completedTasks = useMemo(() => {
     let list = tasks.filter((t) => t.isCompleted);
@@ -1435,14 +1489,24 @@ export default function TasksScreen() {
               </TouchableOpacity>
             </View>
           ) : (
-            pendingTasks.map((t) => (
-              <TaskCard
-                key={t.id}
-                task={t}
-                onToggle={() => handleToggle(t)}
-                onEdit={() => openEdit(t)}
-                onDelete={() => handleDelete(t)}
-              />
+            // ── Month-Grouped Pending Tasks ──
+            pendingByMonth.map(({ key, label, tasks: monthTasks }) => (
+              <View key={key} style={{ gap: 8 }}>
+                <MonthSectionHeader
+                  label={label}
+                  count={monthTasks.length}
+                  isCurrentMonth={key === currentMonthKey}
+                />
+                {monthTasks.map((t) => (
+                  <TaskCard
+                    key={t.id}
+                    task={t}
+                    onToggle={() => handleToggle(t)}
+                    onEdit={() => openEdit(t)}
+                    onDelete={() => handleDelete(t)}
+                  />
+                ))}
+              </View>
             ))
           )}
 
@@ -1607,6 +1671,15 @@ const ts = StyleSheet.create({
   sortLabel: { fontSize: 13, fontFamily: "Inter_500Medium" },
   sortChip: { paddingHorizontal: 12, paddingVertical: 6, borderRadius: 16, borderWidth: 1, borderColor: "transparent" },
   sortChipTxt: { fontSize: 12, fontFamily: "Inter_600SemiBold" },
+
+  // Month section header styles
+  monthHeader: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', borderRadius: 12, borderWidth: 1, paddingHorizontal: 14, paddingVertical: 10, marginTop: 6, marginBottom: 2 },
+  monthDot: { width: 8, height: 8, borderRadius: 4 },
+  monthLabel: { fontSize: 14, fontFamily: 'Inter_700Bold' },
+  nowBadge: { paddingHorizontal: 7, paddingVertical: 2, borderRadius: 6 },
+  nowBadgeTxt: { fontSize: 10, fontFamily: 'Inter_700Bold', color: '#fff' },
+  monthCountBadge: { paddingHorizontal: 10, paddingVertical: 3, borderRadius: 10 },
+  monthCountTxt: { fontSize: 11, fontFamily: 'Inter_600SemiBold' },
 
   completedHeader: { flexDirection: "row", alignItems: "center", justifyContent: "space-between", paddingVertical: 14, borderBottomWidth: StyleSheet.hairlineWidth },
   completedTitle: { fontSize: 16, fontFamily: "Inter_600SemiBold" },

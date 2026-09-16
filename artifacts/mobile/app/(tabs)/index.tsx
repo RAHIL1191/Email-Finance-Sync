@@ -27,6 +27,8 @@ import { useTheme } from "@/context/ThemeContext";
 import { useColors } from "@/hooks/useColors";
 import { parseLocalDate } from "@/hooks/useLocalDate";
 import { CatHeaderIllustration, CatBannerIllustration } from "@/components/CatIllustration";
+
+const TASK_PRIORITY_COLORS: Record<string, string> = { low: "#22c55e", medium: "#f59e0b", high: "#ef4444" };
 // ─── Donut Chart Component ───────────────────────────────────────────────────
 function DonutChart({
   segments,
@@ -111,6 +113,8 @@ export default function HomeScreen() {
     accounts,
     transactions,
     bills,
+    tasks,
+    updateTask,
     totalBalance,
     monthlyIncome,
     monthlyExpense,
@@ -256,6 +260,13 @@ export default function HomeScreen() {
     if (previousBalance <= 0) return 0;
     return (netChange / previousBalance) * 100;
   }, [netChange, previousBalance]);
+
+  // Upcoming tasks — flat sorted list for home widget
+  const upcomingTasksList = useMemo(() =>
+    tasks
+      .filter(t => !t.isCompleted)
+      .sort((a, b) => parseLocalDate(a.dueDate).getTime() - parseLocalDate(b.dueDate).getTime()),
+  [tasks]);
 
   return (
     <SafeAreaView edges={["top"]} style={[styles.container, { backgroundColor: colors.background }]}>
@@ -543,7 +554,64 @@ export default function HomeScreen() {
           </View>
         </View>
 
-        {/* ── 5. Streak / Motivation Banner Widget ── */}
+        {/* ── 5. Upcoming Tasks Widget ── */}
+        <View style={[styles.widgetCard, { backgroundColor: colors.card, borderColor: colors.border }]}>
+          <View style={styles.sectionHeaderRow}>
+            <Text style={[styles.sectionTitle, { color: colors.foreground }]}>Upcoming tasks</Text>
+            <TouchableOpacity onPress={() => router.push("/(tabs)/tasks" as any)} style={{ flexDirection: "row", alignItems: "center", gap: 4 }}>
+              <Text style={[styles.sectionLink, { color: colors.mutedForeground }]}>View all</Text>
+              <Feather name="chevron-right" size={14} color={colors.mutedForeground} />
+            </TouchableOpacity>
+          </View>
+
+          {upcomingTasksList.length === 0 ? (
+            <View style={styles.taskEmptyWrap}>
+              <Feather name="check-square" size={22} color={colors.primary} />
+              <Text style={[styles.taskEmptyTxt, { color: colors.mutedForeground }]}>No upcoming tasks 🎉</Text>
+            </View>
+          ) : (
+            <ScrollView
+              style={styles.taskWidgetScroll}
+              nestedScrollEnabled
+              showsVerticalScrollIndicator={false}
+            >
+              {upcomingTasksList.map((t) => {
+                const due = parseLocalDate(t.dueDate);
+                const todayMs = new Date().setHours(0, 0, 0, 0);
+                const dueCopy = new Date(due);
+                const daysLeft = Math.round((dueCopy.setHours(0, 0, 0, 0) - todayMs) / 86400000);
+                // Inline date label: "Today", "Tomorrow", or "Sep 16"
+                const dateLabel = daysLeft === 0 ? "Today" : daysLeft === 1 ? "Tomorrow"
+                  : due.toLocaleDateString("en-US", { month: "short", day: "numeric" });
+                const dueColor = daysLeft < 0 ? "#ef4444" : daysLeft <= 3 ? "#f59e0b" : colors.mutedForeground;
+
+                return (
+                  <View key={t.id} style={[styles.taskWidgetRow, { borderBottomColor: colors.border }]}>
+                    {/* Check button — marks complete + spawns next instance for recurring tasks */}
+                    <TouchableOpacity
+                      onPress={() => {
+                        Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
+                        updateTask(t.id, { isCompleted: true });
+                      }}
+                      hitSlop={8}
+                      style={[styles.taskCheckBtn, { borderColor: TASK_PRIORITY_COLORS[t.priority] }]}
+                    >
+                      <Feather name="check" size={11} color={TASK_PRIORITY_COLORS[t.priority]} />
+                    </TouchableOpacity>
+
+                    {/* Title */}
+                    <Text style={[styles.taskWidgetTitle, { color: colors.foreground }]} numberOfLines={1}>{t.title}</Text>
+
+                    {/* Inline date */}
+                    <Text style={[styles.taskWidgetDue, { color: dueColor }]}>{dateLabel}</Text>
+                  </View>
+                );
+              })}
+            </ScrollView>
+          )}
+        </View>
+
+        {/* ── 6. Streak / Motivation Banner Widget ── */}
         <View style={[styles.bannerCard, { backgroundColor: colors.incomeBg }]}>
           <View style={[styles.bannerIconBadge, { backgroundColor: colors.income + "22" }]}>
             <Feather name="shield" size={18} color={colors.income} />
@@ -868,4 +936,13 @@ const styles = StyleSheet.create({
     fontFamily: "Inter_400Regular",
     marginTop: 2,
   },
+
+  // Tasks widget styles
+  taskWidgetScroll: { maxHeight: 260 },
+  taskEmptyWrap: { flexDirection: "row", alignItems: "center", gap: 8, paddingVertical: 16, justifyContent: "center" },
+  taskEmptyTxt: { fontSize: 14, fontFamily: "Inter_400Regular" },
+  taskWidgetRow: { flexDirection: "row", alignItems: "center", gap: 10, paddingVertical: 10, borderBottomWidth: StyleSheet.hairlineWidth },
+  taskCheckBtn: { width: 22, height: 22, borderRadius: 11, borderWidth: 2, alignItems: "center", justifyContent: "center", flexShrink: 0 },
+  taskWidgetTitle: { flex: 1, fontSize: 13, fontFamily: "Inter_500Medium" },
+  taskWidgetDue: { fontSize: 12, fontFamily: "Inter_400Regular", flexShrink: 0 },
 });
