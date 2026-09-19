@@ -22,6 +22,7 @@ import DateTimePicker from "@react-native-community/datetimepicker";
 import CategoryPickerModal from "./CategoryPickerModal";
 import MerchantPickerModal from "./MerchantPickerModal";
 import { ProjectPickerModal } from "./AddEntrySheet";
+import SimilarTransactionsModal from "./SimilarTransactionsModal";
 
 function parseNoteAndTag(raw: string | undefined): { cleanNote: string; tag: string } {
   if (!raw) return { cleanNote: "", tag: "" };
@@ -138,7 +139,7 @@ interface Props {
 export default function TransactionDetailModal({ visible, onClose, transaction }: Props) {
   const colors = useColors();
   const insets = useSafeAreaInsets();
-  const { transactions, accounts, addTransaction, updateTransaction, deleteTransaction } = useApp();
+  const { transactions, accounts, addTransaction, updateTransaction, updateTransactionsCategory, deleteTransaction } = useApp();
 
   const [editing, setEditing] = useState(false);
   const [editType, setEditType] = useState<EditType>("EXPENSE");
@@ -161,6 +162,15 @@ export default function TransactionDetailModal({ visible, onClose, transaction }
   const [tag, setTag] = useState("");
   const [projectId, setProjectId] = useState<string | undefined>(undefined);
   const [projectName, setProjectName] = useState<string | undefined>(undefined);
+
+  const [showSimilarModal, setShowSimilarModal] = useState(false);
+  const [similarMatches, setSimilarMatches] = useState<Transaction[]>([]);
+  const [pendingUpdates, setPendingUpdates] = useState<{
+    targetCategory: string;
+    pattern: string;
+    merchantExact: string;
+    currentTxUpdates: Partial<Transaction>;
+  } | null>(null);
 
   useEffect(() => {
     if (transaction) {
@@ -258,8 +268,7 @@ export default function TransactionDetailModal({ visible, onClose, transaction }
       onClose();
     } else {
       const builtNote = [note.trim(), tag.trim() ? `Tag: ${tag.trim()}` : ""].filter(Boolean).join(" · ");
-      Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
-      updateTransaction(transaction.id, {
+      const currentTxUpdates: Partial<Transaction> = {
         title: merchant.trim() || title.trim(),
         merchant: merchant.trim() || undefined,
         amount: parsed,
@@ -271,9 +280,118 @@ export default function TransactionDetailModal({ visible, onClose, transaction }
         projectId: projectId || undefined,
         projectName: projectName || undefined,
         isRefund: tag.trim().toLowerCase() === "refund" ? true : undefined,
-      });
+      };
+
+      // Check if category changed and if similar transactions exist
+      const isCategoryChanged = resolvedCategory !== transaction.category;
+      if (isCategoryChanged) {
+        const isCategoryRelated = (catA: string | undefined, catB: string | undefined): boolean => {
+          if (!catA || !catB) return false;
+          const a = catA.toLowerCase().trim();
+          const b = catB.toLowerCase().trim();
+          if (a === b) return true;
+
+          // Same parent category (e.g. "Gifts & Donations - Donations" and "Gifts & Donations")
+          const aParent = a.split(" - ")[0].trim();
+          const bParent = b.split(" - ")[0].trim();
+          if (aParent && bParent && aParent === bParent) return true;
+
+          return false;
+        };
+
+        const targetMerchant = (merchant.trim() || transaction.merchant?.trim() || "");
+        const targetTitle = (title.trim() || transaction.title?.trim() || "");
+
+        const cleanStr = (s: string) =>
+          s.toLowerCase().replace(/[^a-z0-9\s]/g, " ").replace(/\s+/g, " ").trim();
+
+        // Prefer merchant, otherwise fall back to title
+        const patternToMatch = cleanStr(targetMerchant || targetTitle);
+
+        if (patternToMatch.length >= 2) {
+          const matches = transactions.filter((tx) => {
+            if (tx.id === transaction.id) return false;
+            // Only find transactions that are currently in the SAME / RELATED category
+            if (!isCategoryRelated(tx.category, transaction.category)) return false;
+            // Already in the target category
+            if (tx.category === resolvedCategory) return false;
+
+            const txMerchant = tx.merchant ? cleanStr(tx.merchant) : "";
+            const txTitle = tx.title ? cleanStr(tx.title) : "";
+
+            const matchesPattern = (str: string) => {
+              if (!str || str.length < 2) return false;
+              if (patternToMatch.length <= 3 || str.length <= 3) {
+                if (str === patternToMatch) return true;
+                const words = str.split(" ");
+                return words.includes(patternToMatch);
+              }
+              return str.includes(patternToMatch) || patternToMatch.includes(str);
+            };
+
+            const merchantMatched = txMerchant ? matchesPattern(txMerchant) : false;
+            const titleMatched = txTitle ? matchesPattern(txTitle) : false;
+
+            return merchantMatched || titleMatched;
+          });
+
+          if (matches.length > 0) {
+            // Sort: same exact category first, then newest date first
+            matches.sort((a, b) => {
+              const aExact = a.category === transaction.category ? 1 : 0;
+              const bExact = b.category === transaction.category ? 1 : 0;
+              if (aExact !== bExact) return bExact - aExact;
+              return new Date(b.date).getTime() - new Date(a.date).getTime();
+            });
+
+            setSimilarMatches(matches);
+            setPendingUpdates({
+              targetCategory: resolvedCategory,
+              pattern: patternToMatch,
+              merchantExact: targetMerchant || targetTitle,
+              currentTxUpdates,
+            });
+            setShowSimilarModal(true);
+            return;
+          }
+        }
+      }
+
+      Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
+      updateTransaction(transaction.id, currentTxUpdates);
       setEditing(false);
     }
+  };
+
+  const handleConfirmBatchUpdate = (selectedIds: string[]) => {
+    if (!pendingUpdates) return;
+    Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
+    updateTransaction(transaction.id, pendingUpdates.currentTxUpdates);
+    if (selectedIds.length > 0) {
+      updateTransactionsCategory(
+        selectedIds,
+        pendingUpdates.targetCategory,
+        pendingUpdates.pattern,
+        pendingUpdates.merchantExact
+      );
+    }
+    setShowSimilarModal(false);
+    setPendingUpdates(null);
+    setEditing(false);
+  };
+
+  const handleConfirmOnlyThis = () => {
+    if (!pendingUpdates) return;
+    Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
+    updateTransaction(transaction.id, pendingUpdates.currentTxUpdates);
+    setShowSimilarModal(false);
+    setPendingUpdates(null);
+    setEditing(false);
+  };
+
+  const handleCloseSimilarModal = () => {
+    setShowSimilarModal(false);
+    setPendingUpdates(null);
   };
 
   const handleDelete = () => {
@@ -667,7 +785,7 @@ export default function TransactionDetailModal({ visible, onClose, transaction }
                 visible={showSplitCatPicker}
                 onClose={() => setShowSplitCatPicker(false)}
                 onSelect={(cat) => { addSplitCategory(cat); setShowSplitCatPicker(false); }}
-                type={editType === "INCOME" ? "income" : "expense"}
+                type="both"
               />
               <CalculatorModal
                 visible={showCalculator}
@@ -859,7 +977,7 @@ export default function TransactionDetailModal({ visible, onClose, transaction }
         visible={showCatPicker}
         onClose={() => setShowCatPicker(false)}
         onSelect={(cat, sub) => setCategory(sub ? `${cat} - ${sub}` : cat)}
-        type={editType === "INCOME" ? "income" : "expense"}
+        type="both"
       />
 
       {/* Account picker sheet */}
@@ -894,6 +1012,20 @@ export default function TransactionDetailModal({ visible, onClose, transaction }
           </View>
         </TouchableOpacity>
       </Modal>
+
+      {pendingUpdates && (
+        <SimilarTransactionsModal
+          visible={showSimilarModal}
+          onClose={handleCloseSimilarModal}
+          merchantName={pendingUpdates.merchantExact}
+          previousCategory={transaction.category}
+          newCategory={pendingUpdates.targetCategory}
+          similarTransactions={similarMatches}
+          accounts={accounts}
+          onConfirmUpdateSelected={handleConfirmBatchUpdate}
+          onConfirmOnlyThis={handleConfirmOnlyThis}
+        />
+      )}
     </Modal>
   );
 }

@@ -1,6 +1,6 @@
 import { Feather } from "@expo/vector-icons";
 import * as Haptics from "expo-haptics";
-import React, { useEffect, useState } from "react";
+import React, { useEffect, useMemo, useState } from "react";
 import {
   KeyboardAvoidingView,
   Modal,
@@ -14,7 +14,7 @@ import {
 } from "react-native";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 
-import { useApp } from "@/context/AppContext";
+import { Category, useApp, buildDefaultCategories } from "@/context/AppContext";
 import { useColors } from "@/hooks/useColors";
 
 export interface TxFilterSettings {
@@ -119,7 +119,21 @@ export default function TransactionFilterModal({ visible, current, onApply, onCl
   const removeCategory = (cat: string) => setSelCategories((p) => p.filter((c) => c !== cat));
   const removeAccount = (id: string) => setSelAccountIds((p) => p.filter((a) => a !== id));
 
-  const topLevelCats = categories.filter((c) => !c.parentId).map((c) => c.name);
+  const topLevelCats = useMemo<string[]>(() => {
+    const defaults = buildDefaultCategories("local");
+    const existing = categories || [];
+    const list: Category[] = [...defaults];
+    const defaultNames = new Set(defaults.map((d) => d.name.toLowerCase().trim()));
+    existing.forEach((c) => {
+      if (c && c.name && !defaultNames.has(c.name.toLowerCase().trim())) {
+        list.push(c);
+      }
+    });
+    return list
+      .filter((c) => !c.parentId || c.parentId === "null" || c.parentId === "")
+      .map((c) => c.name)
+      .sort((a, b) => a.localeCompare(b));
+  }, [categories]);
 
   return (
     <Modal visible={visible} transparent animationType="slide" onRequestClose={onClose}>

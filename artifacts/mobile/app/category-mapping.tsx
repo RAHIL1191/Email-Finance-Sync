@@ -16,7 +16,7 @@ import {
 } from "react-native";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 
-import { useApp } from "@/context/AppContext";
+import { useApp, buildDefaultCategories } from "@/context/AppContext";
 import { useColors } from "@/hooks/useColors";
 import CategoryPickerModal from "@/components/CategoryPickerModal";
 import MerchantPickerModal from "@/components/MerchantPickerModal";
@@ -74,6 +74,7 @@ export default function CategoryMappingScreen() {
 
   const [categoriesEnabled, setCategoriesEnabled] = useState(false);
   const [categoriesList, setCategoriesList] = useState<string[]>([]);
+  const [categoryFilterSearch, setCategoryFilterSearch] = useState("");
 
   const [accountsEnabled, setAccountsEnabled] = useState(false);
   const [accountsList, setAccountsList] = useState<string[]>([]);
@@ -1123,34 +1124,88 @@ export default function CategoryMappingScreen() {
 
             {categoriesEnabled && (
               <>
+                <View style={{ flexDirection: "row", alignItems: "center", backgroundColor: colors.card, borderColor: colors.border, borderWidth: 1, borderRadius: 10, paddingHorizontal: 12, paddingVertical: 8, marginTop: 16 }}>
+                  <Feather name="search" size={16} color={colors.mutedForeground} style={{ marginRight: 8 }} />
+                  <TextInput
+                    style={{ flex: 1, fontSize: 14, color: colors.foreground, padding: 0 }}
+                    placeholder="Search categories..."
+                    placeholderTextColor={colors.mutedForeground}
+                    value={categoryFilterSearch}
+                    onChangeText={setCategoryFilterSearch}
+                    autoCorrect={false}
+                  />
+                  {categoryFilterSearch.length > 0 && (
+                    <TouchableOpacity onPress={() => setCategoryFilterSearch("")} hitSlop={8}>
+                      <Feather name="x-circle" size={16} color={colors.mutedForeground} />
+                    </TouchableOpacity>
+                  )}
+                </View>
+
                 <Text style={[s.sectionHeader, { color: colors.mutedForeground, marginTop: 16 }]}>If categories are</Text>
                 <View style={[s.formGroup, { backgroundColor: colors.card, borderColor: colors.border, paddingVertical: 4 }]}>
-                  {categories.map((cat, i) => {
-                    const catName = cat.parentId ? `${cat.parentId} - ${cat.name}` : cat.name;
-                    const isSelected = categoriesList.includes(catName);
-                    return (
-                      <TouchableOpacity
-                        key={cat.id}
-                        style={[
-                          s.multiselectRow,
-                          {
-                            borderBottomWidth: i < categories.length - 1 ? 1 : 0,
-                            borderBottomColor: colors.border,
-                          },
-                        ]}
-                        activeOpacity={0.7}
-                        onPress={() => {
-                          Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
-                          setCategoriesList((prev) =>
-                            isSelected ? prev.filter((c) => c !== catName) : [...prev, catName]
-                          );
-                        }}
-                      >
-                        <Text style={[s.multiselectText, { color: colors.foreground }]}>{catName}</Text>
-                        {isSelected && <Feather name="check" size={16} color="#f97316" />}
-                      </TouchableOpacity>
-                    );
-                  })}
+                  {(() => {
+                    const defaults = buildDefaultCategories("local");
+                    const existing = categories || [];
+                    const allCats = [...defaults];
+                    const defaultNames = new Set(defaults.map((d) => d.name.toLowerCase().trim()));
+                    existing.forEach((c) => {
+                      if (c && c.name && !defaultNames.has(c.name.toLowerCase().trim())) {
+                        allCats.push(c);
+                      }
+                    });
+                    const parentMap = new Map<string, string>();
+                    allCats.forEach((c) => {
+                      if (!c.parentId || c.parentId === "null" || c.parentId === "") {
+                        parentMap.set(c.id, c.name);
+                        parentMap.set(c.name.toLowerCase().trim(), c.name);
+                      }
+                    });
+
+                    const displayed = allCats
+                      .map((cat) => {
+                        let parentName: string | undefined = undefined;
+                        if (cat.parentId && cat.parentId !== "null" && cat.parentId !== "") {
+                          parentName = parentMap.get(cat.parentId) || parentMap.get(cat.parentId.toLowerCase().trim());
+                          if (!parentName) {
+                            const found = allCats.find((p) => p.id === cat.parentId);
+                            if (found) parentName = found.name;
+                          }
+                        }
+                        const fullName = parentName ? `${parentName} - ${cat.name}` : cat.name;
+                        return { cat, fullName, isSub: !!parentName };
+                      })
+                      .filter((item) => {
+                        if (!categoryFilterSearch.trim()) return true;
+                        return item.fullName.toLowerCase().includes(categoryFilterSearch.toLowerCase().trim());
+                      })
+                      .sort((a, b) => a.fullName.localeCompare(b.fullName));
+
+                    return displayed.map(({ cat, fullName }, i) => {
+                      const isSelected = categoriesList.includes(fullName);
+                      return (
+                        <TouchableOpacity
+                          key={cat.id + "_" + fullName}
+                          style={[
+                            s.multiselectRow,
+                            {
+                              borderBottomWidth: i < displayed.length - 1 ? 1 : 0,
+                              borderBottomColor: colors.border,
+                            },
+                          ]}
+                          activeOpacity={0.7}
+                          onPress={() => {
+                            Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
+                            setCategoriesList((prev) =>
+                              isSelected ? prev.filter((c) => c !== fullName) : [...prev, fullName]
+                            );
+                          }}
+                        >
+                          <Text style={[s.multiselectText, { color: colors.foreground }]}>{fullName}</Text>
+                          {isSelected && <Feather name="check" size={16} color="#f97316" />}
+                        </TouchableOpacity>
+                      );
+                    });
+                  })()}
                 </View>
               </>
             )}

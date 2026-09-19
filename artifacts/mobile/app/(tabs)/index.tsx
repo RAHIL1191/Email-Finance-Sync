@@ -1,7 +1,7 @@
 import { Feather } from "@expo/vector-icons";
 import * as Haptics from "expo-haptics";
 import { router } from "expo-router";
-import React, { useMemo, useState } from "react";
+import React, { useEffect, useMemo, useState } from "react";
 import {
   ActivityIndicator,
   FlatList,
@@ -119,9 +119,32 @@ export default function HomeScreen() {
     userName,
     alerts,
     currentMonth,
+    billReviewMatches,
+    approveBillReviewMatch,
+    dismissBillReviewMatch,
+    detectBillPayments,
   } = useApp();
 
   const [refreshing, setRefreshing] = useState(false);
+
+  useEffect(() => {
+    detectBillPayments?.();
+  }, [detectBillPayments]);
+
+  const pendingBillReviews = useMemo(() => {
+    return (billReviewMatches || []).filter((m) => {
+      if (m.status !== "pending") return false;
+      const b = bills.find((bill) => bill.id === m.billId);
+      return b && !b.isPaid;
+    });
+  }, [billReviewMatches, bills]);
+
+  const formatReviewDate = (dateStr: string) => {
+    if (!dateStr) return "";
+    const d = parseLocalDate(dateStr);
+    const months = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
+    return `${months[d.getMonth()]} ${d.getDate()}`;
+  };
 
   const now = useMemo(() => {
     const d = new Date();
@@ -134,6 +157,7 @@ export default function HomeScreen() {
     if (emailSync.isConnected && emailSync.syncTransactions) {
       await syncEmailTransactions();
     }
+    await detectBillPayments?.();
     setRefreshing(false);
   };
 
@@ -503,6 +527,109 @@ export default function HomeScreen() {
           </View>
         </View>
 
+        {/* ── Bills Under Review Widget (near Upcoming Bills) ── */}
+        {pendingBillReviews.length > 0 && (
+          <View style={[styles.widgetCard, { backgroundColor: colors.card, borderColor: "#F59E0B77", borderWidth: 1.5 }]}>
+            <View style={styles.sectionHeaderRow}>
+              <View style={{ flexDirection: "row", alignItems: "center", gap: 8 }}>
+                <View style={{ width: 26, height: 26, borderRadius: 13, backgroundColor: "#F59E0B22", alignItems: "center", justifyContent: "center" }}>
+                  <Feather name="alert-circle" size={15} color="#F59E0B" />
+                </View>
+                <Text style={[styles.sectionTitle, { color: colors.foreground }]}>Bills under review</Text>
+              </View>
+              <View style={{ backgroundColor: "#F59E0B22", paddingHorizontal: 8, paddingVertical: 3, borderRadius: 10 }}>
+                <Text style={{ fontSize: 11, fontFamily: "Inter_700Bold", color: "#F59E0B" }}>
+                  {pendingBillReviews.length} pending
+                </Text>
+              </View>
+            </View>
+
+            <View style={{ gap: 14, marginTop: 6 }}>
+              {pendingBillReviews.map((item) => (
+                <View key={item.id} style={[styles.reviewMatchCard, { backgroundColor: colors.background, borderColor: colors.border }]}>
+                  <Text style={[styles.reviewPromptText, { color: colors.foreground }]}>
+                    I noticed this transaction resembling your pending bill with a different amount. Should I mark it as paid?
+                  </Text>
+
+                  <View style={[styles.reviewComparisonRow, { backgroundColor: colors.card, borderColor: colors.border }]}>
+                    {/* Pending Bill column */}
+                    <View style={{ flex: 1 }}>
+                      <Text style={[styles.reviewSubHeader, { color: colors.mutedForeground }]}>Pending Bill</Text>
+                      <Text style={[styles.reviewItemTitle, { color: colors.foreground }]} numberOfLines={1}>
+                        {item.billTitle}
+                      </Text>
+                      <Text style={[styles.reviewItemMeta, { color: colors.mutedForeground }]}>
+                        Due {formatReviewDate(item.billDueDate)} • {item.billCategory}
+                      </Text>
+                      <Text style={[styles.reviewItemAmt, { color: colors.foreground }]}>
+                        ${item.billAmount.toFixed(2)}
+                      </Text>
+                    </View>
+
+                    {/* Arrow Divider */}
+                    <View style={{ alignItems: "center", justifyContent: "center", paddingHorizontal: 6 }}>
+                      <Feather name="arrow-right" size={16} color={colors.mutedForeground} />
+                    </View>
+
+                    {/* Found Transaction column */}
+                    <View style={{ flex: 1 }}>
+                      <Text style={[styles.reviewSubHeader, { color: colors.mutedForeground }]}>Found Transaction</Text>
+                      <Text style={[styles.reviewItemTitle, { color: colors.foreground }]} numberOfLines={1}>
+                        {item.transactionTitle}
+                      </Text>
+                      <Text style={[styles.reviewItemMeta, { color: colors.mutedForeground }]}>
+                        {formatReviewDate(item.transactionDate)} • {item.transactionCategory}
+                      </Text>
+                      <View style={{ flexDirection: "row", alignItems: "center", gap: 6 }}>
+                        <Text style={[styles.reviewItemAmt, { color: colors.foreground }]}>
+                          ${item.transactionAmount.toFixed(2)}
+                        </Text>
+                        <View style={[styles.diffBadge, { backgroundColor: item.difference > 0 ? "#EF444422" : "#10B98122" }]}>
+                          <Text style={{ fontSize: 10, fontFamily: "Inter_700Bold", color: item.difference > 0 ? "#EF4444" : "#10B981" }}>
+                            {item.difference > 0 ? `+` : ""}${item.difference.toFixed(2)}
+                          </Text>
+                        </View>
+                      </View>
+                    </View>
+                  </View>
+
+                  {/* Recurring note */}
+                  {item.isRecurring && (
+                    <Text style={[styles.reviewRecurringNote, { color: colors.mutedForeground }]}>
+                      💡 Approving will mark this paid & update recurring bill to ${item.transactionAmount.toFixed(2)}.
+                    </Text>
+                  )}
+
+                  {/* Action buttons */}
+                  <View style={styles.reviewActionsRow}>
+                    <TouchableOpacity
+                      style={[styles.reviewDismissBtn, { borderColor: colors.border }]}
+                      onPress={() => {
+                        Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
+                        dismissBillReviewMatch(item.id);
+                      }}
+                    >
+                      <Feather name="x" size={14} color={colors.mutedForeground} />
+                      <Text style={[styles.reviewDismissTxt, { color: colors.mutedForeground }]}>Not this bill</Text>
+                    </TouchableOpacity>
+
+                    <TouchableOpacity
+                      style={[styles.reviewApproveBtn, { backgroundColor: colors.primary }]}
+                      onPress={() => {
+                        Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
+                        approveBillReviewMatch(item.id);
+                      }}
+                    >
+                      <Feather name="check" size={14} color="#FFFFFF" />
+                      <Text style={styles.reviewApproveTxt}>Mark as Paid</Text>
+                    </TouchableOpacity>
+                  </View>
+                </View>
+              ))}
+            </View>
+          </View>
+        )}
+
         {/* ── 4. Upcoming Bills Widget ── */}
         <View style={[styles.widgetCard, { backgroundColor: colors.card, borderColor: colors.border }]}>
           <View style={styles.sectionHeaderRow}>
@@ -867,5 +994,88 @@ const styles = StyleSheet.create({
     fontSize: 12,
     fontFamily: "Inter_400Regular",
     marginTop: 2,
+  },
+  reviewMatchCard: {
+    borderRadius: 14,
+    borderWidth: 1,
+    padding: 14,
+    gap: 10,
+  },
+  reviewPromptText: {
+    fontSize: 13,
+    fontFamily: "Inter_500Medium",
+    lineHeight: 18,
+  },
+  reviewComparisonRow: {
+    flexDirection: "row",
+    borderRadius: 10,
+    borderWidth: 1,
+    padding: 10,
+    alignItems: "center",
+  },
+  reviewSubHeader: {
+    fontSize: 10,
+    fontFamily: "Inter_600SemiBold",
+    textTransform: "uppercase",
+    letterSpacing: 0.5,
+    marginBottom: 2,
+  },
+  reviewItemTitle: {
+    fontSize: 13,
+    fontFamily: "Inter_600SemiBold",
+  },
+  reviewItemMeta: {
+    fontSize: 11,
+    fontFamily: "Inter_400Regular",
+    marginTop: 1,
+    marginBottom: 4,
+  },
+  reviewItemAmt: {
+    fontSize: 14,
+    fontFamily: "Inter_700Bold",
+  },
+  diffBadge: {
+    paddingHorizontal: 5,
+    paddingVertical: 1,
+    borderRadius: 6,
+  },
+  reviewRecurringNote: {
+    fontSize: 11,
+    fontFamily: "Inter_400Regular",
+    fontStyle: "italic",
+  },
+  reviewActionsRow: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 10,
+    marginTop: 4,
+  },
+  reviewDismissBtn: {
+    flex: 1,
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "center",
+    gap: 6,
+    paddingVertical: 9,
+    borderRadius: 10,
+    borderWidth: 1,
+  },
+  reviewDismissTxt: {
+    fontSize: 12,
+    fontFamily: "Inter_600SemiBold",
+  },
+  reviewApproveBtn: {
+    flex: 1,
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "center",
+    gap: 6,
+    paddingVertical: 9,
+    borderRadius: 10,
+  },
+  reviewApproveTxt: {
+    fontSize: 12,
+    fontFamily: "Inter_600SemiBold",
+    color: "#FFFFFF",
   },
 });

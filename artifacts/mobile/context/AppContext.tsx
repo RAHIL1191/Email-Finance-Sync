@@ -308,6 +308,25 @@ export interface AlertLog {
   stableKey?: string;
 }
 
+export interface BillReviewMatch {
+  id: string;
+  billId: string;
+  billTitle: string;
+  billAmount: number;
+  billDueDate: string;
+  billCategory: string;
+  isRecurring?: boolean;
+  frequency?: "daily" | "weekly" | "biweekly" | "monthly" | "quarterly" | "semiannual" | "yearly";
+  transactionId: string;
+  transactionTitle: string;
+  transactionAmount: number;
+  transactionDate: string;
+  transactionCategory: string;
+  difference: number;
+  status: "pending" | "approved" | "dismissed";
+  createdAt: string;
+}
+
 interface AppContextType {
   transactions: Transaction[];
   accounts: Account[];
@@ -329,6 +348,7 @@ interface AppContextType {
   markTransactionReviewed: (id: string) => void;
   addTransaction: (t: Omit<Transaction, "id">) => void;
   updateTransaction: (id: string, t: Partial<Transaction>) => void;
+  updateTransactionsCategory: (ids: string[], newCategory: string, merchantPattern?: string, merchantExact?: string) => void;
   deleteTransaction: (id: string) => void;
   addAccount: (a: Omit<Account, "id"> & { forceCreate?: boolean }) => string;
   remapEmailTransactions: (bankPattern: string, accountId: string) => void;
@@ -337,7 +357,11 @@ interface AppContextType {
   addBill: (b: Omit<Bill, "id">) => void;
   updateBill: (id: string, b: Partial<Bill>) => void;
   deleteBill: (id: string) => void;
-  markBillPaid: (id: string) => void;
+  markBillPaid: (id: string, newAmount?: number, options?: { skipAddTransaction?: boolean }) => void;
+  billReviewMatches: BillReviewMatch[];
+  approveBillReviewMatch: (matchId: string) => void;
+  dismissBillReviewMatch: (matchId: string) => void;
+  detectBillPayments: () => Promise<void>;
   addBudget: (b: Omit<Budget, "id" | "createdAt" | "updatedAt">) => void;
   updateBudget: (id: string, b: Partial<Budget>) => void;
   deleteBudget: (id: string) => void;
@@ -420,6 +444,7 @@ const STORAGE_KEYS = {
   rrspLimit: "@fintrack/rrspLimit",
   alerts: "@fintrack/alerts",
   dismissedAlertKeys: "@fintrack/dismissedAlertKeys",
+  billReviewMatches: "@fintrack/billReviewMatches",
 };
 
 // ── Helpers ──────────────────────────────────────────────────────────────────
@@ -434,9 +459,9 @@ function generateDeviceId() {
 
 // ── Default categories (seeded locally on first launch) ───────────────────────
 
-type DefaultCat = { name: string; icon: string; color: string; type: "expense" | "income" | "both"; subs?: string[] };
+export type DefaultCat = { name: string; icon: string; color: string; type: "expense" | "income" | "both"; subs?: string[] };
 
-const DEFAULT_CAT_DEFS: DefaultCat[] = [
+export const DEFAULT_CAT_DEFS: DefaultCat[] = [
   { name: "Bills & Utilities", icon: "file-text", color: "#6366f1", type: "expense", subs: ["Electricity", "Gas", "Internet", "Mobile", "Phone", "Sewage & Garbage", "Water"] },
   { name: "Drink & Dine",      icon: "coffee",    color: "#f97316", type: "expense", subs: ["Restaurant", "Cafe", "Fast Food", "Bar", "Delivery"] },
   { name: "Education",         icon: "book-open", color: "#8b5cf6", type: "expense", subs: ["Tuition", "Books", "Courses", "Supplies"] },
@@ -470,25 +495,150 @@ const DEFAULT_CAT_DEFS: DefaultCat[] = [
   { name: "Gift Received",     icon: "gift",      color: "#f43f5e", type: "income" },
 ];
 
-function buildDefaultCategories(householdId: string): Category[] {
+export function buildDefaultCategories(householdId: string): Category[] {
   const result: Category[] = [];
   const now = new Date().toISOString();
   for (const def of DEFAULT_CAT_DEFS) {
-    const catId = genId();
+    const catId = `def_${def.name.toLowerCase().replace(/[^a-z0-9]/g, "_")}`;
     result.push({
       id: catId, householdId, name: def.name, type: def.type,
       icon: def.icon, iconType: "icon", color: def.color,
       isDefault: true, createdAt: now, updatedAt: now,
     });
     for (const sub of (def.subs ?? [])) {
+      const subId = `def_${catId}_${sub.toLowerCase().replace(/[^a-z0-9]/g, "_")}`;
       result.push({
-        id: genId(), householdId, name: sub, type: def.type,
+        id: subId, householdId, name: sub, type: def.type,
         icon: def.icon, iconType: "icon", color: def.color,
         parentId: catId, isDefault: true, createdAt: now, updatedAt: now,
       });
     }
   }
   return result;
+}
+
+export function ensureAllDefaultCategories(existingCats: Category[], householdId: string): Category[] {
+  const hId = householdId || "local";
+  const now = new Date().toISOString();
+
+  // 1. Separate existing into top-level and subcategories
+  const existingTopByName = new Map<string, Category>();
+  const existingSubs: Category[] = [];
+
+  (existingCats || []).forEach((c) => {
+    if (!c || !c.name) return;
+    const parentIdVal = c.parentId || (c as any).parent_id;
+    const isTop = !parentIdVal || parentIdVal === "null" || parentIdVal === "";
+    if (isTop) {
+      existingTopByName.set(c.name.toLowerCase().trim(), { ...c, parentId: undefined });
+    } else {
+      existingSubs.push({ ...c, parentId: parentIdVal });
+    }
+  });
+
+  const finalCats: Category[] = [];
+  const topIdByName = new Map<string, string>(); // lowerName -> actual id
+
+  // 2. Build or merge all 32 top-level defaults
+  for (const def of DEFAULT_CAT_DEFS) {
+    const lower = def.name.toLowerCase().trim();
+    const existing = existingTopByName.get(lower);
+    const catId = existing?.id || `def_${def.name.toLowerCase().replace(/[^a-z0-9]/g, "_")}`;
+    topIdByName.set(lower, catId);
+
+    finalCats.push({
+      id: catId,
+      householdId: existing?.householdId || hId,
+      name: existing?.name || def.name,
+      type: (existing?.type as any) || def.type,
+      icon: existing?.icon || def.icon,
+      iconType: existing?.iconType || "icon",
+      color: existing?.color || def.color,
+      isDefault: true,
+      createdAt: existing?.createdAt || now,
+      updatedAt: existing?.updatedAt || now,
+    });
+  }
+
+  // 3. Keep any custom top-level categories that aren't in defaults
+  existingTopByName.forEach((c, lower) => {
+    const isDefault = DEFAULT_CAT_DEFS.some((d) => d.name.toLowerCase().trim() === lower);
+    if (!isDefault) {
+      finalCats.push(c);
+      if (c.id) topIdByName.set(lower, c.id);
+    }
+  });
+
+  // Map of parent ID to parent lower name
+  const parentIdToName = new Map<string, string>();
+  finalCats.forEach((c) => {
+    if (!c.parentId || c.parentId === "null" || c.parentId === "") {
+      parentIdToName.set(c.id, c.name.toLowerCase().trim());
+    }
+  });
+
+  // 4. Build or merge subcategories
+  // Map of `parentLowerName|subLowerName` -> Category (prevents collision across different parents!)
+  const subMap = new Map<string, Category>();
+
+  // Seed with default subcategories
+  for (const def of DEFAULT_CAT_DEFS) {
+    const parentLower = def.name.toLowerCase().trim();
+    const actualParentId = topIdByName.get(parentLower)!;
+    for (const sub of (def.subs ?? [])) {
+      const subLower = sub.toLowerCase().trim();
+      const subId = `def_${actualParentId}_${sub.toLowerCase().replace(/[^a-z0-9]/g, "_")}`;
+      const key = `${parentLower}|${subLower}`;
+      subMap.set(key, {
+        id: subId,
+        householdId: hId,
+        name: sub,
+        type: def.type,
+        icon: def.icon,
+        iconType: "icon",
+        color: def.color,
+        parentId: actualParentId,
+        isDefault: true,
+        createdAt: now,
+        updatedAt: now,
+      });
+    }
+  }
+
+  // Overlay existing subcategories
+  for (const sub of existingSubs) {
+    if (!sub || !sub.name) continue;
+    const subLower = sub.name.toLowerCase().trim();
+    const parentLower = sub.parentId ? parentIdToName.get(sub.parentId) : null;
+    if (parentLower) {
+      const key = `${parentLower}|${subLower}`;
+      const defaultSub = subMap.get(key);
+      const actualParentId = topIdByName.get(parentLower) || sub.parentId;
+      if (defaultSub) {
+        subMap.set(key, {
+          ...defaultSub,
+          ...sub,
+          id: sub.id || defaultSub.id,
+          parentId: actualParentId,
+          isDefault: true,
+        });
+      } else {
+        subMap.set(`${parentLower}|${subLower}|${sub.id}`, {
+          ...sub,
+          parentId: actualParentId,
+        });
+      }
+    } else {
+      subMap.set(`unknown|${subLower}|${sub.id}`, sub);
+    }
+  }
+
+  // Add all subcategories
+  subMap.forEach((sub) => {
+    finalCats.push(sub);
+  });
+
+  return finalCats;
 }
 
 const HOUSEHOLD_CHARS = "ABCDEFGHJKLMNPQRSTUVWXYZ23456789";
@@ -1176,7 +1326,7 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
   const [goals, setGoals] = useState<Goal[]>([]);
   const [tasks, setTasks] = useState<Task[]>([]);
   const [projects, setProjects] = useState<Project[]>([]);
-  const [categories, setCategories] = useState<Category[]>([]);
+  const [categories, setCategories] = useState<Category[]>(() => buildDefaultCategories("local"));
   const [categoryRules, setCategoryRules] = useState<CategoryRule[]>([]);
   const [emailSync, setEmailSync] = useState<EmailSync>({ email: "", appPassword: "", isConnected: false });
   const [plaidSync, setPlaidSync] = useState<PlaidSync>({ items: [] });
@@ -1195,6 +1345,9 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
   const [dismissedAlertKeys, setDismissedAlertKeys] = useState<Set<string>>(new Set());
   const dismissedAlertKeysRef = useRef<Set<string>>(new Set());
   useEffect(() => { dismissedAlertKeysRef.current = dismissedAlertKeys; }, [dismissedAlertKeys]);
+  const [billReviewMatches, setBillReviewMatches] = useState<BillReviewMatch[]>([]);
+  const billReviewMatchesRef = useRef<BillReviewMatch[]>([]);
+  useEffect(() => { billReviewMatchesRef.current = billReviewMatches; }, [billReviewMatches]);
   
   const deviceIdRef = useRef<string>("");
   const householdIdRef = useRef<string>("");
@@ -1209,10 +1362,15 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
   const holdingsRef = useRef<Holding[]>([]);
   const investmentTransactionsRef = useRef<InvestmentTransaction[]>([]);
   const categoryRulesRef = useRef<CategoryRule[]>([]);
-  const alertsRef = useRef<AlertLog[]>([]);
   useEffect(() => { categoryRulesRef.current = categoryRules; }, [categoryRules]);
-  const categoriesRef = useRef<Category[]>([]);
-  useEffect(() => { categoriesRef.current = categories; }, [categories]);
+  const alertsRef = useRef<AlertLog[]>([]);
+  const categoriesRef = useRef<Category[]>(buildDefaultCategories("local"));
+  useEffect(() => {
+    categoriesRef.current = categories;
+    if (categories.length > 0) {
+      AsyncStorage.setItem(STORAGE_KEYS.categories, JSON.stringify(categories)).catch(() => {});
+    }
+  }, [categories]);
   const plaidSyncRef = useRef<PlaidSync>({ items: [] });
   useEffect(() => { plaidSyncRef.current = plaidSync; }, [plaidSync]);
   useEffect(() => { transactionsRef.current = transactions; }, [transactions]);
@@ -1274,7 +1432,7 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
   useEffect(() => {
     (async () => {
       try {
-        const [storedVersion, txRaw, accRaw, billRaw, budgetRaw, goalRaw, projectRaw, catRaw, rulesRaw, emailRaw, plaidRaw, storedDeviceId, storedHouseholdId, storedUserName, storedReviewedIds, taskRaw, invTxRaw, holdRaw, rrspLimitRaw, alertsRaw, dismissedKeysRaw] =
+        const [storedVersion, txRaw, accRaw, billRaw, budgetRaw, goalRaw, projectRaw, catRaw, rulesRaw, emailRaw, plaidRaw, storedDeviceId, storedHouseholdId, storedUserName, storedReviewedIds, taskRaw, invTxRaw, holdRaw, rrspLimitRaw, alertsRaw, dismissedKeysRaw, billReviewMatchesRaw] =
           await Promise.all([
             AsyncStorage.getItem(STORAGE_KEYS.version),
             AsyncStorage.getItem(STORAGE_KEYS.transactions),
@@ -1297,6 +1455,7 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
             AsyncStorage.getItem(STORAGE_KEYS.rrspLimit),
             AsyncStorage.getItem(STORAGE_KEYS.alerts),
             AsyncStorage.getItem(STORAGE_KEYS.dismissedAlertKeys),
+            AsyncStorage.getItem(STORAGE_KEYS.billReviewMatches),
           ]);
 
         const dId = storedDeviceId || generateDeviceId();
@@ -1444,6 +1603,11 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
             }
           } catch {}
         }
+        if (billReviewMatchesRaw) {
+          try {
+            setBillReviewMatches(JSON.parse(billReviewMatchesRaw));
+          } catch {}
+        }
         
         // Sync any notifications that arrived while app was closed
         setTimeout(() => {
@@ -1452,7 +1616,9 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
 
         // ── Load categories ───────────────────────────────────────────────────
         const savedCats: Category[] = catRaw ? JSON.parse(catRaw) : [];
-        if (savedCats.length > 0) setCategories(savedCats);
+        const mergedSaved = ensureAllDefaultCategories(savedCats, hId);
+        setCategories(mergedSaved);
+        categoriesRef.current = mergedSaved;
         try {
           const catFetch = await fetch(`${getApiBase()}/api/categories`, {
             headers: { "X-Household-ID": hId, "X-Device-ID": dId },
@@ -1460,21 +1626,19 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
           });
           if (catFetch.ok) {
             const remoteCats: Category[] = await catFetch.json();
-            if (remoteCats.length > 0) {
-              setCategories(remoteCats);
-            } else if (savedCats.length === 0) {
-              const defaults = buildDefaultCategories(hId);
-              setCategories(defaults);
+            if (Array.isArray(remoteCats) && remoteCats.length > 0) {
+              const merged = ensureAllDefaultCategories([...savedCats, ...remoteCats], hId);
+              setCategories(merged);
+              categoriesRef.current = merged;
+            } else {
               fetch(`${getApiBase()}/api/categories/seed`, {
                 method: "POST",
                 headers: { "Content-Type": "application/json", "X-Household-ID": hId, "X-Device-ID": dId },
               }).catch(() => {});
             }
-          } else if (savedCats.length === 0) {
-            setCategories(buildDefaultCategories(hId));
           }
         } catch {
-          if (savedCats.length === 0) setCategories(buildDefaultCategories(hId));
+          // Offline or network timeout — keep mergedSaved
         }
 
         // ── Load category rules ───────────────────────────────────────────────
@@ -1643,6 +1807,11 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
       AsyncStorage.setItem(STORAGE_KEYS.dismissedAlertKeys, JSON.stringify(Array.from(dismissedAlertKeys))).catch(() => {});
     }
   }, [dismissedAlertKeys, initialized]);
+  useEffect(() => {
+    if (initialized) {
+      AsyncStorage.setItem(STORAGE_KEYS.billReviewMatches, JSON.stringify(billReviewMatches)).catch(() => {});
+    }
+  }, [billReviewMatches, initialized]);
 
   // ── Auto backup ──────────────────────────────────────────────────────────
   useEffect(() => {
@@ -1782,9 +1951,14 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
   // ── CRUD: Transactions ────────────────────────────────────────────────────
   const addTransaction = useCallback((t: Omit<Transaction, "id">) => {
     const newT: Transaction = { ...t, id: genId() };
+    const updated = upsertTransactions(transactionsRef.current, [newT]);
+    transactionsRef.current = updated;
     setTransactions((prev) => upsertTransactions(prev, [newT]));
-    checkBudgetAndNotify([...transactionsRef.current, newT], budgetsRef.current);
+    checkBudgetAndNotify(updated, budgetsRef.current);
     apiCall("/api/transactions", "POST", householdIdRef.current, deviceIdRef.current, newT);
+    setTimeout(() => {
+      detectBillPaymentsRef.current?.();
+    }, 50);
   }, []);
 
   const updateTransaction = useCallback((id: string, updates: Partial<Transaction>) => {
@@ -1839,6 +2013,78 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
       );
     }
     apiCall(`/api/transactions/${id}`, "PUT", householdIdRef.current, deviceIdRef.current, updates);
+  }, []);
+
+  const updateTransactionsCategory = useCallback((
+    ids: string[],
+    newCategory: string,
+    merchantPattern?: string,
+    merchantExact?: string
+  ) => {
+    if (!ids.length || !newCategory) return;
+    const now = new Date().toISOString();
+    const idSet = new Set(ids);
+    let updatedList: Transaction[] = [];
+
+    setTransactions((prev) => {
+      const next = prev.map((t) => (idSet.has(t.id) ? { ...t, category: newCategory, updatedAt: now } : t));
+      updatedList = next;
+      AsyncStorage.setItem(STORAGE_KEYS.transactions, JSON.stringify(next)).catch(() => {});
+      return next;
+    });
+
+    if (updatedList.length > 0) {
+      checkBudgetAndNotify(updatedList, budgetsRef.current);
+    }
+
+    // Call API for each transaction in the background
+    ids.forEach((id) => {
+      bgCall(`/api/transactions/${id}`, "PUT", householdIdRef.current, deviceIdRef.current, { category: newCategory });
+    });
+
+    // Also synchronize/upsert category rule for this merchant pattern if provided
+    if (merchantPattern) {
+      const rules = categoryRulesRef.current;
+      const exRule = rules.find((r) => r.merchantPattern === merchantPattern);
+      if (exRule) {
+        setCategoryRules((rs) =>
+          rs.map((r) =>
+            r.merchantPattern === merchantPattern
+              ? {
+                  ...r,
+                  category: newCategory,
+                  hitCount: r.hitCount + ids.length,
+                  source: "manual" as const,
+                  applyScope: "past_and_future" as const,
+                  updatedAt: now,
+                }
+              : r
+          )
+        );
+        bgCall("/api/category-rules", "POST", householdIdRef.current, deviceIdRef.current, {
+          ...exRule,
+          category: newCategory,
+          hitCount: exRule.hitCount + ids.length,
+          source: "manual",
+          applyScope: "past_and_future",
+        });
+      } else {
+        const newRule: CategoryRule = {
+          id: genId(),
+          householdId: householdIdRef.current,
+          merchantPattern: merchantPattern,
+          merchantExact: merchantExact || merchantPattern,
+          category: newCategory,
+          hitCount: ids.length + 1,
+          source: "manual",
+          applyScope: "past_and_future",
+          createdAt: now,
+          updatedAt: now,
+        };
+        setCategoryRules((rs) => [...rs, newRule]);
+        bgCall("/api/category-rules", "POST", householdIdRef.current, deviceIdRef.current, newRule);
+      }
+    }
   }, []);
 
   const deleteTransaction = useCallback((id: string) => {
@@ -2068,16 +2314,24 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
   const addBill = useCallback((b: Omit<Bill, "id">) => {
     const now = new Date().toISOString();
     const newB: Bill = { ...b, id: genId(), createdAt: now, updatedAt: now };
+    billsRef.current = [...billsRef.current, newB];
     setBills((prev) => [...prev, newB]);
     apiCall("/api/bills", "POST", householdIdRef.current, deviceIdRef.current, newB);
     scheduleBillNotifications(newB);
+    setTimeout(() => {
+      detectBillPaymentsRef.current?.();
+    }, 50);
   }, []);
 
   const updateBill = useCallback((id: string, updates: Partial<Bill>) => {
+    billsRef.current = billsRef.current.map((b) => (b.id === id ? { ...b, ...updates, updatedAt: new Date().toISOString() } : b));
     setBills((prev) => prev.map((b) => (b.id === id ? { ...b, ...updates, updatedAt: new Date().toISOString() } : b)));
     apiCall(`/api/bills/${id}`, "PUT", householdIdRef.current, deviceIdRef.current, updates);
     const existing = billsRef.current.find((b) => b.id === id);
     if (existing) scheduleBillNotifications({ ...existing, ...updates });
+    setTimeout(() => {
+      detectBillPaymentsRef.current?.();
+    }, 50);
   }, []);
 
   const deleteBill = useCallback((id: string) => {
@@ -2345,7 +2599,9 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
         });
         const catsData = await catsRes.json();
         if (Array.isArray(catsData) && catsData.length > 0) {
-          setCategories(catsData);
+          const merged = ensureAllDefaultCategories(catsData, householdIdRef.current);
+          setCategories(merged);
+          categoriesRef.current = merged;
           return;
         }
       }
@@ -2355,11 +2611,13 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
       setIsSyncing(false);
     }
     // Fallback: seed locally
-    setCategories(buildDefaultCategories(householdIdRef.current));
+    const localDefaults = buildDefaultCategories(householdIdRef.current);
+    setCategories(localDefaults);
+    categoriesRef.current = localDefaults;
   }, []);
 
   const markBillPaid = useCallback(
-    (id: string) => {
+    (id: string, newAmount?: number, options?: { skipAddTransaction?: boolean }) => {
       // Resolve virtual occurrence IDs (e.g. "bill-123_occ_1716148800000")
       let actualId = id;
       let occDueDate: string | null = null;
@@ -2372,6 +2630,8 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
 
       const bill = bills.find((b) => b.id === actualId);
       if (!bill) return;
+
+      const finalAmount = newAmount !== undefined ? newAmount : bill.amount;
 
       if (bill.isRecurring && bill.frequency) {
         const baseDue = new Date(occDueDate ?? bill.dueDate);
@@ -2389,30 +2649,33 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
           ...bill,
           id: `${actualId}_paid_${Date.now()}`,
           dueDate: baseDue.toISOString(),
+          amount: finalAmount,
           isPaid: true,
           isRecurring: false,
           frequency: undefined,
         };
         setBills((prev) => [
-          ...prev.map((b) => b.id === actualId ? { ...b, dueDate: d.toISOString(), isPaid: false } : b),
+          ...prev.map((b) => b.id === actualId ? { ...b, dueDate: d.toISOString(), isPaid: false, amount: finalAmount } : b),
           paidRecord,
         ]);
       } else {
-        setBills((prev) => prev.map((b) => (b.id === actualId ? { ...b, isPaid: true } : b)));
+        setBills((prev) => prev.map((b) => (b.id === actualId ? { ...b, isPaid: true, amount: finalAmount } : b)));
       }
 
       apiCall(`/api/bills/${actualId}/pay`, "POST", householdIdRef.current, deviceIdRef.current);
       cancelBillNotifications(actualId);
-      addTransaction({
-        title: bill.title,
-        amount: bill.amount,
-        type: "expense",
-        category: bill.category,
-        accountId: bill.accountId || accounts[0]?.id || "acc1",
-        date: new Date().toISOString(),
-        note: "Bill payment",
-        source: "manual",
-      });
+      if (!options?.skipAddTransaction) {
+        addTransaction({
+          title: bill.title,
+          amount: finalAmount,
+          type: "expense",
+          category: bill.category,
+          accountId: bill.accountId || accounts[0]?.id || "acc1",
+          date: new Date().toISOString(),
+          note: "Bill payment",
+          source: "manual",
+        });
+      }
     },
     [bills, accounts, addTransaction]
   );
@@ -3238,6 +3501,7 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
   useEffect(() => { syncPlaidTransactionsRef.current = syncPlaidTransactions; }, [syncPlaidTransactions]);
   const markBillPaidRef = useRef(markBillPaid);
   useEffect(() => { markBillPaidRef.current = markBillPaid; }, [markBillPaid]);
+  const detectBillPaymentsRef = useRef<() => Promise<void>>(async () => {});
 
   // ── Auto-sync every 3 hours, and on app foreground ─────────────────────────
   const isAutoSyncingRef = useRef(false);
@@ -3253,60 +3517,7 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
       if (now - lastBillCheckRef.current < ONE_HOUR) return;
       lastBillCheckRef.current = now;
       try { await setupNotificationsOnInit(billsRef.current); } catch { /* ignore */ }
-      await detectBillPayments();
-    };
-
-    const detectBillPayments = async () => {
-      const today = new Date(); today.setHours(0, 0, 0, 0);
-      const bills = billsRef.current;
-      const txs = transactionsRef.current;
-      let notified: Record<string, boolean> = {};
-      try {
-        const raw = await AsyncStorage.getItem(BILL_DETECT_KEY);
-        if (raw) notified = JSON.parse(raw);
-      } catch {}
-      let dirty = false;
-      for (const bill of bills) {
-        if (bill.isPaid) continue;
-        const due = parseLocalDate(bill.dueDate); due.setHours(0, 0, 0, 0);
-        const diffDays = Math.round((due.getTime() - today.getTime()) / 86400000);
-        if (diffDays > 3 || diffDays < -3) continue;
-        const key = `${bill.id}|${bill.dueDate.slice(0, 10)}`;
-        if (notified[key]) continue;
-        const WINDOW = 3 * 86400000;
-        const match = txs.find((t) => {
-          if (t.type !== "expense") return false;
-          const td = parseLocalDate(t.date); td.setHours(0, 0, 0, 0);
-          if (Math.abs(td.getTime() - due.getTime()) > WINDOW) return false;
-          if (bill.accountId && t.accountId !== bill.accountId) return false;
-          return t.amount === bill.amount;
-        });
-        notified[key] = true;
-        dirty = true;
-        if (match) {
-          markBillPaidRef.current(bill.id);
-          const paidDate = parseLocalDate(match.date); paidDate.setHours(0, 0, 0, 0);
-          const paidLate = paidDate.getTime() > due.getTime();
-          const daysLate = paidLate ? Math.round((paidDate.getTime() - due.getTime()) / 86400000) : 0;
-          fireImmediateNotification(
-            paidLate ? "✅ Bill Paid (Late)" : "✅ Bill Paid",
-            paidLate
-              ? `${bill.title} ($${bill.amount.toFixed(2)}) paid ${daysLate} day${daysLate !== 1 ? "s" : ""} late — you may have been charged interest or late fees.`
-              : `${bill.title} ($${bill.amount.toFixed(2)}) — a matching payment was found.`,
-            { billId: bill.id, type: paidLate ? "auto_paid_late" : "auto_paid" }
-          );
-        } else if (diffDays <= 0) {
-          const ago = diffDays === 0 ? "today" : `${Math.abs(diffDays)} day${Math.abs(diffDays) !== 1 ? "s" : ""} ago`;
-          fireImmediateNotification(
-            "⚠️ Bill May Be Unpaid",
-            `${bill.title} ($${bill.amount.toFixed(2)}) was due ${ago} — no matching payment found.`,
-            { billId: bill.id, type: "unpaid_warning" }
-          );
-        }
-      }
-      if (dirty) {
-        try { await AsyncStorage.setItem(BILL_DETECT_KEY, JSON.stringify(notified)); } catch {}
-      }
+      try { await detectBillPaymentsRef.current(); } catch { /* ignore */ }
     };
 
     const doAutoSync = async () => {
@@ -3436,6 +3647,266 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
     alertsRef.current = alertsRef.current.filter((a) => a.id !== id);
     setAlerts((prev) => prev.filter((a) => a.id !== id));
   }, []);
+
+  const approveBillReviewMatch = useCallback(
+    (matchId: string) => {
+      const match = billReviewMatchesRef.current.find((m) => m.id === matchId);
+      if (!match) return;
+
+      // Mark the bill as paid, updating recurring bill amount to transactionAmount
+      markBillPaid(match.billId, match.transactionAmount, { skipAddTransaction: true });
+
+      // Update match status to approved
+      setBillReviewMatches((prev) =>
+        prev.map((m) => (m.id === matchId ? { ...m, status: "approved" } : m))
+      );
+
+      // Add alert
+      addAlert(
+        "✅ Bill Payment Confirmed",
+        `${match.billTitle} marked as paid ($${match.transactionAmount.toFixed(2)})${match.isRecurring ? " and future recurring bill updated." : "."}`,
+        "bill",
+        `approved_${match.id}`
+      );
+    },
+    [markBillPaid, addAlert]
+  );
+
+  const dismissBillReviewMatch = useCallback((matchId: string) => {
+    setBillReviewMatches((prev) =>
+      prev.map((m) => (m.id === matchId ? { ...m, status: "dismissed" } : m))
+    );
+  }, []);
+
+  // ── Smart Bill Detection (Auto-Pay exact match +-4 days & Resemblance Review) ──
+  const isDetectingBillsRef = useRef(false);
+  const detectBillPayments = useCallback(async () => {
+    if (isDetectingBillsRef.current) return;
+    isDetectingBillsRef.current = true;
+    try {
+      const currentBills = billsRef.current;
+      const currentTxs = transactionsRef.current;
+      if (!currentBills.length || !currentTxs.length) return;
+
+      let notified: Record<string, boolean> = {};
+      try {
+        const raw = await AsyncStorage.getItem(BILL_DETECT_KEY);
+        if (raw) notified = JSON.parse(raw);
+      } catch {}
+
+      let dirtyNotified = false;
+      const currentReviews = [...billReviewMatchesRef.current];
+      let newReviewsAdded = false;
+
+      const FOUR_DAYS_MS = 4 * 86400000;
+
+      const getLocalDateMidnight = (str: string): Date => {
+        if (!str) return new Date();
+        const datePart = str.slice(0, 10);
+        const parts = datePart.split("-").map(Number);
+        if (parts.length === 3 && !parts.some(isNaN)) {
+          return new Date(parts[0], parts[1] - 1, parts[2]);
+        }
+        const d = parseLocalDate(str);
+        d.setHours(0, 0, 0, 0);
+        return d;
+      };
+
+      const categoriesMatch = (billCategory: string, txCategory: string) => {
+        if (!billCategory || !txCategory) return false;
+        const b = billCategory.toLowerCase().trim();
+        const t = txCategory.toLowerCase().trim();
+        if (b === t || b.includes(t) || t.includes(b)) return true;
+
+        // Utility / Telecom / Bill umbrella
+        const isUtil = (c: string) =>
+          /utilit|bill|electric|hydro|water|power|gas|internet|wifi|phone|mobile|telecom|cellular|broadband|energy/i.test(c);
+        if (isUtil(b) && isUtil(t)) return true;
+
+        // Housing / Rent umbrella
+        const isHousing = (c: string) =>
+          /house|home|rent|mortgage|lease|condo|apartment|maintenance/i.test(c);
+        if (isHousing(b) && isHousing(t)) return true;
+
+        // Insurance umbrella
+        const isInsurance = (c: string) => /insur/i.test(c);
+        if (isInsurance(b) && isInsurance(t)) return true;
+
+        // Subscriptions / Entertainment umbrella
+        const isSub = (c: string) =>
+          /entertain|stream|subscript|music|movie|game|tv/i.test(c);
+        if (isSub(b) && isSub(t)) return true;
+
+        // Check against DEFAULT_CAT_DEFS hierarchy
+        for (const def of DEFAULT_CAT_DEFS) {
+          const parentMatchesB = def.name.toLowerCase() === b || b.includes(def.name.toLowerCase());
+          const parentMatchesT = def.name.toLowerCase() === t || t.includes(def.name.toLowerCase());
+          if (def.subs) {
+            const hasSubB = def.subs.some((sub) => b.includes(sub.toLowerCase()));
+            const hasSubT = def.subs.some((sub) => t.includes(sub.toLowerCase()));
+            if ((parentMatchesB && hasSubT) || (parentMatchesT && hasSubB) || (hasSubB && hasSubT)) {
+              return true;
+            }
+          }
+        }
+        return false;
+      };
+
+      const titlesMatch = (billTitle: string, txTitle: string, txMerchant?: string, txNote?: string) => {
+        if (!billTitle) return false;
+        const bLower = billTitle.toLowerCase().trim();
+        const tLower = (txTitle || "").toLowerCase().trim();
+        const mLower = (txMerchant || "").toLowerCase().trim();
+        const nLower = (txNote || "").toLowerCase().trim();
+
+        if (tLower && (tLower.includes(bLower) || bLower.includes(tLower))) return true;
+        if (mLower && (mLower.includes(bLower) || bLower.includes(mLower))) return true;
+        if (nLower && (nLower.includes(bLower) || bLower.includes(nLower))) return true;
+
+        const stopWords = new Set([
+          "the", "and", "for", "bill", "payment", "fee", "sub", "subscription",
+          "monthly", "inc", "ltd", "llc", "corp", "co", "com", "due", "online"
+        ]);
+        const tokenize = (s: string) =>
+          s
+            .toLowerCase()
+            .replace(/[^a-z0-9]/g, " ")
+            .split(/\s+/)
+            .filter((w) => w.length >= 2 && !stopWords.has(w));
+
+        const bTokens = tokenize(billTitle);
+        const targetTokens = new Set([
+          ...tokenize(txTitle || ""),
+          ...tokenize(txMerchant || ""),
+          ...tokenize(txNote || ""),
+        ]);
+        return bTokens.some((tok) => targetTokens.has(tok));
+      };
+
+      const doesCategoryRelate = (bill: Bill, t: Transaction) => {
+        return (
+          categoriesMatch(bill.category, t.category) ||
+          categoriesMatch(bill.title, t.category) ||
+          categoriesMatch(bill.category, t.title)
+        );
+      };
+
+      const doesTitleRelate = (bill: Bill, t: Transaction) => {
+        return (
+          titlesMatch(bill.title, t.title, t.merchant, t.note) ||
+          categoriesMatch(bill.title, t.category) ||
+          categoriesMatch(bill.title, t.title)
+        );
+      };
+
+      for (const bill of currentBills) {
+        if (bill.isPaid) continue;
+        const due = getLocalDateMidnight(bill.dueDate);
+
+        const cycleKey = `${bill.id}|${bill.dueDate.slice(0, 10)}`;
+
+        // 1. Exact amount match within +- 4 days
+        const exactMatch = currentTxs.find((t) => {
+          if (t.type !== "expense") return false;
+          const td = getLocalDateMidnight(t.date);
+          if (Math.abs(td.getTime() - due.getTime()) > FOUR_DAYS_MS) return false;
+          const amountMatches = Math.abs(t.amount - bill.amount) < 0.01;
+          const related = doesCategoryRelate(bill, t) || doesTitleRelate(bill, t);
+          return amountMatches && related;
+        });
+
+        if (exactMatch) {
+          // Always mark bill as paid
+          markBillPaidRef.current(bill.id, undefined, { skipAddTransaction: true });
+
+          if (!notified[cycleKey]) {
+            notified[cycleKey] = true;
+            dirtyNotified = true;
+
+            const paidDate = getLocalDateMidnight(exactMatch.date);
+            const paidLate = paidDate.getTime() > due.getTime();
+
+            const notifTitle = paidLate ? "✅ Bill Paid (Late)" : "✅ Bill Paid";
+            const notifBody = `${bill.title} ($${bill.amount.toFixed(2)}) was marked as paid via matching transaction '${exactMatch.title}'.`;
+
+            fireImmediateNotification(notifTitle, notifBody, { billId: bill.id, type: paidLate ? "auto_paid_late" : "auto_paid" });
+            addAlert(notifTitle, notifBody, "bill", `autopaid_${cycleKey}`);
+          }
+          continue;
+        }
+
+        // 2. Resemblance Match (both category AND title match, but amount differs/increased)
+        const candidateTxs = currentTxs.filter((t) => {
+          if (t.type !== "expense") return false;
+          const td = getLocalDateMidnight(t.date);
+          if (Math.abs(td.getTime() - due.getTime()) > FOUR_DAYS_MS) return false;
+          if (Math.abs(t.amount - bill.amount) < 0.01) return false;
+          return doesCategoryRelate(bill, t) && doesTitleRelate(bill, t);
+        });
+
+        for (const cand of candidateTxs) {
+          const matchKey = `review_${bill.id}_${cand.id}_${bill.dueDate.slice(0, 10)}`;
+          const exists = currentReviews.some(
+            (r) => r.billId === bill.id && r.transactionId === cand.id && r.billDueDate === bill.dueDate
+          );
+          if (exists) continue;
+
+          const newMatch: BillReviewMatch = {
+            id: matchKey,
+            billId: bill.id,
+            billTitle: bill.title,
+            billAmount: bill.amount,
+            billDueDate: bill.dueDate,
+            billCategory: bill.category,
+            isRecurring: bill.isRecurring,
+            frequency: bill.frequency,
+            transactionId: cand.id,
+            transactionTitle: cand.title,
+            transactionAmount: cand.amount,
+            transactionDate: cand.date,
+            transactionCategory: cand.category,
+            difference: Number((cand.amount - bill.amount).toFixed(2)),
+            status: "pending",
+            createdAt: new Date().toISOString(),
+          };
+
+          currentReviews.push(newMatch);
+          newReviewsAdded = true;
+
+          const diffStr = newMatch.difference > 0 ? `+$${newMatch.difference.toFixed(2)} (increased)` : `-$${Math.abs(newMatch.difference).toFixed(2)}`;
+          const alertTitle = "⚠️ Bill Under Review";
+          const alertBody = `I found transaction '${cand.title}' ($${cand.amount.toFixed(2)}, ${diffStr}) in ${cand.category} resembling pending bill '${bill.title}' ($${bill.amount.toFixed(2)}). Should I mark it as paid?`;
+
+          fireImmediateNotification(alertTitle, alertBody, { billId: bill.id, transactionId: cand.id, type: "bill_review" });
+          addAlert(alertTitle, alertBody, "bill", matchKey);
+        }
+      }
+
+      if (dirtyNotified) {
+        try { await AsyncStorage.setItem(BILL_DETECT_KEY, JSON.stringify(notified)); } catch {}
+      }
+      if (newReviewsAdded) {
+        billReviewMatchesRef.current = currentReviews;
+        setBillReviewMatches([...currentReviews]);
+        try { await AsyncStorage.setItem(STORAGE_KEYS.billReviewMatches, JSON.stringify(currentReviews)); } catch {}
+      }
+    } finally {
+      isDetectingBillsRef.current = false;
+    }
+  }, [addAlert]);
+
+  useEffect(() => {
+    detectBillPaymentsRef.current = detectBillPayments;
+  }, [detectBillPayments]);
+
+  // Automatically trigger smart bill detection when transactions or bills update
+  useEffect(() => {
+    if (!initialized) return;
+    const timer = setTimeout(() => {
+      detectBillPaymentsRef.current?.();
+    }, 400);
+    return () => clearTimeout(timer);
+  }, [transactions, bills, initialized]);
 
   // ── Automatic Alerts check (bills, budgets & tasks) ────────────────────────
   useEffect(() => {
@@ -3760,7 +4231,7 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
         investmentTransactions, holdings, rrspLimit, setRrspLimit,
         userName, setUserName,
         reviewedTransactionIds, markTransactionReviewed,
-        addTransaction, updateTransaction, deleteTransaction,
+        addTransaction, updateTransaction, updateTransactionsCategory, deleteTransaction,
         addAccount, remapEmailTransactions, updateAccount, deleteAccount,
         addBill, updateBill, deleteBill, markBillPaid,
         addBudget, updateBudget, deleteBudget,
@@ -3777,6 +4248,7 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
         snoozeEntity, setSnoozeEntity,
         deviceId, householdId, changeHouseholdId,
         alerts, addAlert, markAlertRead, markAllAlertsRead, clearAllAlerts, deleteAlert,
+        billReviewMatches, approveBillReviewMatch, dismissBillReviewMatch, detectBillPayments,
       }}
     >
       {children}

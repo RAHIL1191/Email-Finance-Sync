@@ -12,7 +12,7 @@ import {
 } from "react-native";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 
-import { Category, useApp } from "@/context/AppContext";
+import { Category, useApp, buildDefaultCategories } from "@/context/AppContext";
 import { useColors } from "@/hooks/useColors";
 import AddCategoryModal from "./AddCategoryModal";
 
@@ -41,25 +41,125 @@ export default function CategoryPickerModal({ visible, onClose, onSelect, type =
     }
   }, [visible]);
 
+  // Guaranteed full list of categories: ALWAYS includes all default categories merged with any custom ones
+  const allCategories = useMemo(() => {
+    const defaults = buildDefaultCategories("local");
+    const existing = categories || [];
+
+    const map = new Map<string, Category>();
+
+    // 1. Put all default categories first
+    defaults.forEach((cat) => {
+      const isTop = !cat.parentId || cat.parentId === "null" || cat.parentId === "";
+      const key = isTop
+        ? `top_${cat.name.toLowerCase().trim()}`
+        : `sub_${cat.name.toLowerCase().trim()}_${cat.parentId}`;
+      map.set(key, cat);
+    });
+
+    // 2. Overlay any categories from context (custom categories and user edits)
+    existing.forEach((cat) => {
+      if (!cat || !cat.name) return;
+      const parentIdVal = cat.parentId || (cat as any).parent_id;
+      const isTop = !parentIdVal || parentIdVal === "null" || parentIdVal === "";
+      const key = isTop
+        ? `top_${cat.name.toLowerCase().trim()}`
+        : `sub_${cat.name.toLowerCase().trim()}_${parentIdVal}`;
+      const ex = map.get(key);
+      if (ex) {
+        map.set(key, { ...ex, ...cat, parentId: isTop ? undefined : parentIdVal });
+      } else {
+        map.set(key, { ...cat, parentId: isTop ? undefined : parentIdVal });
+      }
+    });
+
+    return Array.from(map.values());
+  }, [categories]);
+
   // Filter top-level categories by type
   const topLevelCategories = useMemo(() => {
-    const base = categories.filter(
-      (c) => !c.parentId && (type === "both" || c.type === type || c.type === "both")
-    );
-    if (!search.trim()) return base;
-    return base.filter((c) => c.name.toLowerCase().includes(search.toLowerCase()));
-  }, [categories, type, search]);
+    const base = allCategories.filter((c) => {
+      const isTop = !c.parentId || c.parentId === "null" || c.parentId === "";
+      if (!isTop) return false;
+      if (type === "both") return true;
+      if (!c.type) return true;
+      const catType = c.type.toLowerCase();
+      const targetType = type.toLowerCase();
+      return catType === targetType || catType === "both";
+    });
 
-  // Get subcategories for selected parent
+    if (!search.trim()) {
+      return base.sort((a, b) => a.name.localeCompare(b.name));
+    }
+
+    const q = search.toLowerCase().trim();
+    return base
+      .filter((c) => {
+        if (c.name.toLowerCase().includes(q)) return true;
+        const pLower = c.name.toLowerCase().trim();
+        const pSlug = pLower.replace(/[^a-z0-9]/g, "_");
+        return allCategories.some((sub) => {
+          const pId = sub.parentId || (sub as any).parent_id;
+          if (!pId || pId === "null" || pId === "") return false;
+          const matchesParent =
+            pId === c.id ||
+            pId.toLowerCase().trim() === pLower ||
+            pId.toLowerCase().includes(pSlug) ||
+            pSlug.includes(pId.toLowerCase());
+          return matchesParent && sub.name.toLowerCase().includes(q);
+        });
+      })
+      .sort((a, b) => a.name.localeCompare(b.name));
+  }, [allCategories, type, search]);
+
+  // Get subcategories for selected parent (matched by parentId, name, or slug)
   const subcategories = useMemo(() => {
     if (!selectedParent) return [];
-    const subs = categories.filter((c) => c.parentId === selectedParent.id);
-    if (!search.trim()) return subs;
-    return subs.filter((c) => c.name.toLowerCase().includes(search.toLowerCase()));
-  }, [categories, selectedParent, search]);
+    const parentNameLower = selectedParent.name.toLowerCase().trim();
+    const parentSlug = parentNameLower.replace(/[^a-z0-9]/g, "_");
+
+    const subs = allCategories.filter((c) => {
+      const pId = c.parentId || (c as any).parent_id;
+      if (!pId || pId === "null" || pId === "") return false;
+      if (pId === selectedParent.id) return true;
+      const pLower = pId.toLowerCase().trim();
+      if (pLower === parentNameLower) return true;
+      if (pLower.includes(parentSlug) || parentSlug.includes(pLower)) return true;
+      return false;
+    });
+
+    // Deduplicate by subcategory name
+    const seen = new Set<string>();
+    const uniqueSubs: Category[] = [];
+    subs.forEach((s) => {
+      const k = s.name.toLowerCase().trim();
+      if (!seen.has(k)) {
+        seen.add(k);
+        uniqueSubs.push(s);
+      }
+    });
+
+    uniqueSubs.sort((a, b) => a.name.localeCompare(b.name));
+
+    if (!search.trim()) return uniqueSubs;
+    const q = search.toLowerCase().trim();
+    return uniqueSubs.filter((c) => c.name.toLowerCase().includes(q));
+  }, [allCategories, selectedParent, search]);
 
   const handleCategoryPress = (cat: Category) => {
-    const hasSubcats = categories.some((c) => c.parentId === cat.id);
+    const parentNameLower = cat.name.toLowerCase().trim();
+    const parentSlug = parentNameLower.replace(/[^a-z0-9]/g, "_");
+
+    const hasSubcats = allCategories.some((c) => {
+      const pId = c.parentId || (c as any).parent_id;
+      if (!pId || pId === "null" || pId === "") return false;
+      if (pId === cat.id) return true;
+      const pLower = pId.toLowerCase().trim();
+      if (pLower === parentNameLower) return true;
+      if (pLower.includes(parentSlug) || parentSlug.includes(pLower)) return true;
+      return false;
+    });
+
     if (hasSubcats) {
       Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
       setSelectedParent(cat);
