@@ -28,16 +28,17 @@ function getLevenshteinDistance(a: string, b: string): number {
 }
 
 function findClosestCategory(target: string, categories: Array<{ id: string; name: string; parentId: string | null }>): string {
-  if (!target || categories.length === 0) return target || "Others";
+  if (!target) return "Others";
+  if (categories.length === 0) return target;
 
   const cleanTarget = target.trim().toLowerCase();
 
+  // 1. Exact case-insensitive match across all categories
+  const exact = categories.find((c) => c.name.trim().toLowerCase() === cleanTarget);
+  if (exact) return exact.name;
+
   const subcats = categories.filter((c) => c.parentId !== null && c.parentId !== undefined);
   const parentCats = categories.filter((c) => c.parentId === null || c.parentId === undefined);
-
-  // 1. Subcategory exact case-insensitive match
-  const subExact = subcats.find((c) => c.name.trim().toLowerCase() === cleanTarget);
-  if (subExact) return subExact.name;
 
   // 2. Subcategory substring/inclusion match
   const subSub = subcats.find((c) => {
@@ -46,18 +47,14 @@ function findClosestCategory(target: string, categories: Array<{ id: string; nam
   });
   if (subSub) return subSub.name;
 
-  // 3. Parent category exact case-insensitive match
-  const parentExact = parentCats.find((c) => c.name.trim().toLowerCase() === cleanTarget);
-  if (parentExact) return parentExact.name;
-
-  // 4. Parent category substring/inclusion match
+  // 3. Parent category substring/inclusion match
   const parentSub = parentCats.find((c) => {
     const name = c.name.trim().toLowerCase();
     return name.includes(cleanTarget) || cleanTarget.includes(name);
   });
   if (parentSub) return parentSub.name;
 
-  // 5. Fuzzy distance in subcategories
+  // 4. Fuzzy distance in subcategories (strict threshold)
   if (subcats.length > 0) {
     let closestSubName = subcats[0].name;
     let minSubDist = Infinity;
@@ -68,13 +65,12 @@ function findClosestCategory(target: string, categories: Array<{ id: string; nam
         closestSubName = c.name.trim();
       }
     }
-    // Accept fuzzy subcategory if it is relatively close (e.g. distance <= 4)
-    if (minSubDist <= 4) {
+    if (minSubDist <= 2) {
       return closestSubName;
     }
   }
 
-  // 6. Fuzzy distance in parent categories
+  // 5. Fuzzy distance in parent categories (strict threshold)
   if (parentCats.length > 0) {
     let closestParentName = parentCats[0].name;
     let minParentDist = Infinity;
@@ -85,10 +81,13 @@ function findClosestCategory(target: string, categories: Array<{ id: string; nam
         closestParentName = c.name.trim();
       }
     }
-    return closestParentName;
+    if (minParentDist <= 2) {
+      return closestParentName;
+    }
   }
 
-  return target || "Others";
+  // Preserve the caller's target category if no close category was found in DB
+  return target;
 }
 
 /** GET /api/transactions — list all transactions for this household */
