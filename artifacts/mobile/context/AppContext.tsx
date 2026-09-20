@@ -58,6 +58,48 @@ export interface Transaction {
   pendingTransactionId?: string | null;
 }
 
+export function parseNoteAndTag(raw: string | undefined): { cleanNote: string; tag: string } {
+  if (!raw) return { cleanNote: "", tag: "" };
+  const sep = " · Tag: ";
+  const idx = raw.indexOf(sep);
+  if (idx !== -1) return { cleanNote: raw.slice(0, idx), tag: raw.slice(idx + sep.length) };
+  if (raw.startsWith("Tag: ")) return { cleanNote: "", tag: raw.slice(5) };
+  return { cleanNote: raw, tag: "" };
+}
+
+/**
+ * A transaction qualifies as a refund transaction if:
+ * 1. It is an expense (refunds being awaited are expenses/claims, not incoming income payments)
+ * 2. It is explicitly marked isRefund === true, OR
+ *    It has a tag === "refund" (e.g. from parseNoteAndTag), OR
+ *    Its category is "refund" (case-insensitive singular "refund")
+ * Note: Category "refunds" (plural, standard income category) is NEVER treated as a pending refund.
+ * Note: Plain note text without "Tag: refund" is NOT treated as a refund.
+ */
+export function isRefundTransaction(t: Transaction | null | undefined): boolean {
+  if (!t) return false;
+  // Income is incoming money (e.g. received refund amount), never an expense awaiting refund
+  if (t.type === "income") return false;
+
+  if (t.isRefund) return true;
+
+  const cat = (t.category || "").trim().toLowerCase();
+  if (cat === "refund") return true;
+
+  const { tag } = parseNoteAndTag(t.note);
+  if (tag.trim().toLowerCase() === "refund") return true;
+
+  return false;
+}
+
+/**
+ * A pending refund is any refund transaction that has NOT been marked complete.
+ * This is 100% identical to what appears in the "Pending" tab of the Refunds screen.
+ */
+export function isPendingRefund(t: Transaction | null | undefined): boolean {
+  return !!t && isRefundTransaction(t) && !t.isRefundComplete;
+}
+
 export interface Account {
   id: string;
   name: string;
@@ -76,6 +118,12 @@ export interface Account {
   /** Set when this account was imported via Plaid */
   plaidItemId?: string;
   plaidAccountId?: string;
+  /** When an account is shared/joint between multiple Plaid items */
+  sharedPlaidAccounts?: Array<{
+    plaidItemId: string;
+    plaidAccountId: string;
+    isPrimary?: boolean;
+  }>;
 }
 
 export interface Bill {
@@ -302,7 +350,7 @@ export interface AlertLog {
   id: string;
   title: string;
   body: string;
-  type: "bill" | "budget" | "task" | "sync" | "general";
+  type: "bill" | "budget" | "task" | "sync" | "refund" | "general";
   date: string; // ISO string
   isRead: boolean;
   stableKey?: string;
@@ -415,12 +463,13 @@ interface AppContextType {
   markAllAlertsRead: () => void;
   clearAllAlerts: () => void;
   deleteAlert: (id: string) => void;
+  refreshTransactionsFromServer: () => Promise<void>;
 }
 
 const AppContext = createContext<AppContextType | null>(null);
 
 // Bump this whenever a breaking change requires wiping stale local transactions.
-const STORAGE_VERSION = "2";
+const STORAGE_VERSION = "3";
 
 const STORAGE_KEYS = {
   version: "@fintrack/storageVersion",
@@ -715,29 +764,72 @@ function bgCall(
 const SOURCE_PRIORITY: Record<string, number> = { plaid: 3, manual: 2, email: 1 };
 
 /**
- * Dedup key: accountId + amount (cents) + date (day-precision).
- * Intentionally excludes title/bank — Gmail parses "Transaction at X" while Plaid
- * returns "X"; the three stable fields catch cross-source duplicates cleanly.
+ * Helper to check if two titles/merchants from different sources refer to the same logical merchant.
+ */
+function isCrossSourceTitleMatch(titleA?: string, titleB?: string): boolean {
+  if (!titleA || !titleB) return true;
+  const a = titleA.toLowerCase().trim();
+  const b = titleB.toLowerCase().trim();
+  if (!a || !b) return true;
+  if (a.includes(b) || b.includes(a)) return true;
+  const wordA = a.split(/[^a-zA-Z0-9]/)[0] || "";
+  const wordB = b.split(/[^a-zA-Z0-9]/)[0] || "";
+  if (wordA.length >= 3 && wordB.length >= 3 && wordA === wordB) return true;
+  return false;
+}
+
+/**
+ * Dedup key: type + accountId + amount (cents) + date (day-precision).
+ * Including type ("expense" vs "income") ensures bank fees and fee waivers/refunds/reversals
+ * never collide or get discarded.
  *
  * Amount is normalised to integer cents via Math.round(amount * 100) so that
  * float4 (PostgreSQL `real`) round-trip precision drift (e.g. 49.99 → 49.9900016784668)
  * never causes a false-negative during dedup.
  */
-function dedupKey(t: { amount: number; date: string; accountId?: string }): string {
-  return `${(t.accountId ?? "").toLowerCase()}|${Math.round((t.amount ?? 0) * 100)}|${t.date.slice(0, 10)}`;
+function dedupKey(t: { amount: number; date: string; accountId?: string; type?: string }): string {
+  const type = (t.type ?? "expense").toLowerCase();
+  const acc = (t.accountId ?? "").toLowerCase();
+  const cents = Math.round((t.amount ?? 0) * 100);
+  const day = (t.date ?? "").slice(0, 10);
+  return `${type}|${acc}|${cents}|${day}`;
 }
 
 /**
- * Merge incoming transactions into prev, deduplicating by both dedupKey (content)
- * and id. This prevents the same logical transaction from appearing twice when its
- * accountId changes (e.g., Plaid raw account ID → local UUID after remapping).
- * Higher-priority sources (plaid > manual > email) win on collision.
+ * Merge incoming transactions into prev.
+ * - Same-source transactions with distinct IDs (e.g. two $5 ice cream charges from Plaid or manual)
+ *   are NEVER discarded.
+ * - Exact duplicates (matching ID or matching plaidTransactionId) are collapsed.
+ * - Cross-source duplicates (e.g. lower-priority email receipt matching a higher-priority Plaid charge)
+ *   are matched 1-to-1 when type, amount, date, and merchant/title align.
+ * - Opposites (fee charge expense vs fee waiver income) never match.
  */
 function upsertTransactions(prev: Transaction[], incoming: Transaction[]): Transaction[] {
+  // Build lookup of previous transactions to preserve local user flags (e.g. isRefund, isRefundComplete)
+  // which are not stored on the backend PostgreSQL schema.
+  const prevById = new Map<string, Transaction>();
+  const prevByPlaidId = new Map<string, Transaction>();
+  for (const t of prev) {
+    if (t.id) prevById.set(t.id, t);
+    if (t.plaidTransactionId) prevByPlaidId.set(t.plaidTransactionId, t);
+  }
+
   // To avoid mutating input parameters, perform deep clone of both arrays
   const allTxs = [
     ...prev.map((t) => ({ ...t })),
-    ...incoming.map((t) => ({ ...t })),
+    ...incoming.map((t) => {
+      const cloned = { ...t };
+      const existing = (cloned.id ? prevById.get(cloned.id) : undefined) ?? (cloned.plaidTransactionId ? prevByPlaidId.get(cloned.plaidTransactionId) : undefined);
+      if (existing) {
+        if (cloned.isRefund === undefined && existing.isRefund !== undefined) {
+          cloned.isRefund = existing.isRefund;
+        }
+        if (cloned.isRefundComplete === undefined && existing.isRefundComplete !== undefined) {
+          cloned.isRefundComplete = existing.isRefundComplete;
+        }
+      }
+      return cloned;
+    }),
   ];
 
   // Helper score to prioritize source and status: Plaid > Manual > Email, Posted > Pending
@@ -750,49 +842,61 @@ function upsertTransactions(prev: Transaction[], incoming: Transaction[]): Trans
   // Sort: higher priority score transactions first
   allTxs.sort((a, b) => getPriorityScore(b) - getPriorityScore(a));
 
-  // Pass A: Strict exact ID, plaidTransactionId, and content deduplication based on priority score.
-  // This collapses exact duplicates from overlapping sync sources.
+  // Pass A: Strict exact ID, plaidTransactionId, and 1-to-1 cross-source deduplication.
   const uniqueTxs: Transaction[] = [];
   const byId = new Map<string, Transaction>();
-  const byContent = new Map<string, Transaction>();
   const byPlaidTxId = new Map<string, Transaction>();
+  // Accepted transactions grouped by content key to allow 1-to-1 cross-source matching
+  const acceptedByContentKey = new Map<string, Transaction[]>();
+  const matchedCrossSourceIds = new Set<string>();
 
   for (const t of allTxs) {
-    const key = dedupKey(t);
-    const existingById = t.id ? byId.get(t.id) : null;
-    const existingByContent = byContent.get(key);
-    const existingByPlaidTxId = t.plaidTransactionId ? byPlaidTxId.get(t.plaidTransactionId) : null;
-
-    if (existingById || existingByContent || existingByPlaidTxId) {
-      // Re-attribution or duplicate: skip since we already have a higher/equal priority version
-      continue;
+    if (t.id && byId.has(t.id)) {
+      continue; // exact ID duplicate
+    }
+    if (t.plaidTransactionId && byPlaidTxId.has(t.plaidTransactionId)) {
+      continue; // exact Plaid ID duplicate
     }
 
+    // Check for 1-to-1 collision (cross-source, or same joint account synced by two different Plaid credentials)
+    const key = dedupKey(t);
+    const candidates = acceptedByContentKey.get(key);
+    if (candidates && candidates.length > 0) {
+      const matchIndex = candidates.findIndex(
+        (c) =>
+          !matchedCrossSourceIds.has(c.id) &&
+          (c.type || "expense") === (t.type || "expense") &&
+          isCrossSourceTitleMatch(c.merchant || c.title, t.merchant || t.title) &&
+          (c.source !== t.source ||
+            (c.source === "plaid" &&
+              t.source === "plaid" &&
+              Boolean(c.plaidAccountId && t.plaidAccountId && c.plaidAccountId !== t.plaidAccountId)))
+      );
+
+      if (matchIndex !== -1) {
+        // Collision: mark candidate as matched and skip duplicate
+        matchedCrossSourceIds.add(candidates[matchIndex].id);
+        continue;
+      }
+    }
+
+    // Accept transaction
     uniqueTxs.push(t);
     if (t.id) byId.set(t.id, t);
-    byContent.set(key, t);
     if (t.plaidTransactionId) byPlaidTxId.set(t.plaidTransactionId, t);
+    if (!acceptedByContentKey.has(key)) {
+      acceptedByContentKey.set(key, []);
+    }
+    acceptedByContentKey.get(key)!.push(t);
   }
 
   // Pass B: Fuzzy Pending-Posted Collapsing across the combined list.
-  // 1. Gather all pending transaction dates by ID and Plaid ID so we can preserve them.
-  const pendingDatesMap = new Map<string, string>();
-  uniqueTxs.forEach((t) => {
-    if (t.pending && t.date) {
-      if (t.id) pendingDatesMap.set(t.id, t.date);
-      if (t.plaidTransactionId) pendingDatesMap.set(t.plaidTransactionId, t.date);
-    }
-  });
-
-  // 2. Direct ID-based pending eviction: remove matching pending transactions when a posted
+  // 1. Direct ID-based pending eviction: remove matching pending transactions when a posted
   // transaction references its pending transaction ID.
   const pendingTxIdsToEvict = new Set<string>();
   uniqueTxs.forEach((t) => {
     if (!t.pending && t.pendingTransactionId) {
       pendingTxIdsToEvict.add(t.pendingTransactionId);
-      // Do NOT copy the pending date — the posted transaction already has the correct
-      // authorized_date (purchase date as shown in the bank app) from mapPlaidTransaction.
-      // Overwriting it caused 1-3 day mismatches vs what the bank displays.
     }
   });
 
@@ -806,18 +910,19 @@ function upsertTransactions(prev: Transaction[], incoming: Transaction[]): Trans
     });
   }
 
-  // 3. Smart fuzzy matching: a posted transaction replaces an older pending transaction
-  // within a +/- 3 days window, having exact same amount, account, and fuzzy title match.
+  // 2. Smart fuzzy matching: a posted transaction replaces an older pending transaction
+  // within a +/- 3 days window, having exact same amount, account, matching type, and fuzzy title match.
   const postedTxs = remainingTxs.filter((t) => !t.pending);
   const pendingTxsToEvictFuzzy = new Set<string>();
 
   postedTxs.forEach((postedTx) => {
-    remainingTxs.forEach((pendingTx) => {
-      if (!pendingTx.pending) return;
-      if (pendingTxsToEvictFuzzy.has(pendingTx.id)) return; // already marked for eviction
+    for (const pendingTx of remainingTxs) {
+      if (!pendingTx.pending) continue;
+      if (pendingTxsToEvictFuzzy.has(pendingTx.id)) continue; // already marked for eviction
 
       const isReplaced = (
         pendingTx.accountId === postedTx.accountId &&
+        (pendingTx.type || "expense") === (postedTx.type || "expense") &&
         Math.abs(pendingTx.amount - postedTx.amount) < 0.001 &&
         Math.abs(new Date(pendingTx.date).getTime() - new Date(postedTx.date).getTime()) / (1000 * 60 * 60 * 24) <= 3
       );
@@ -833,36 +938,32 @@ function upsertTransactions(prev: Transaction[], incoming: Transaction[]): Trans
           (firstWord(oldTitle).length >= 4 && firstWord(oldTitle) === firstWord(newTitle));
 
         if (isTitleMatch) {
-          // Do NOT copy pending date — posted tx already has authorized_date (correct bank date).
           pendingTxsToEvictFuzzy.add(pendingTx.id); // evict old pending transaction
+          break; // This posted tx matched its pending counterpart; move to next posted tx
         }
       }
-    });
+    }
   });
 
   if (pendingTxsToEvictFuzzy.size > 0) {
     remainingTxs = remainingTxs.filter((t) => !pendingTxsToEvictFuzzy.has(t.id));
   }
 
-  // Final Pass: Re-deduplicate remaining transactions by content key to ensure that any date-modified
-  // posted transactions (which copied a pending date and might now collide) are cleanly collapsed.
-  const finalUnique = new Map<string, Transaction>();
-  remainingTxs.forEach((t) => {
-    const key = dedupKey(t);
-    const existing = finalUnique.get(key);
-    if (!existing) {
-      finalUnique.set(key, t);
-    } else {
-      // Collision due to date update: keep the one with higher priority score
-      const existingScore = getPriorityScore(existing);
-      const currentScore = getPriorityScore(t);
-      if (currentScore > existingScore) {
-        finalUnique.set(key, t);
-      }
-    }
-  });
+  // Final Pass: Ensure identity uniqueness by id and plaidTransactionId.
+  // Preserves all distinct transactions (including multiple same-day same-amount purchases).
+  const finalById = new Map<string, Transaction>();
+  const finalByPlaidId = new Map<string, Transaction>();
+  const finalResult: Transaction[] = [];
 
-  return Array.from(finalUnique.values()).sort((a, b) => b.date.localeCompare(a.date));
+  for (const t of remainingTxs) {
+    if (t.id && finalById.has(t.id)) continue;
+    if (t.plaidTransactionId && finalByPlaidId.has(t.plaidTransactionId)) continue;
+    finalResult.push(t);
+    if (t.id) finalById.set(t.id, t);
+    if (t.plaidTransactionId) finalByPlaidId.set(t.plaidTransactionId, t);
+  }
+
+  return finalResult.sort((a, b) => b.date.localeCompare(a.date));
 }
 
 
@@ -1667,22 +1768,28 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
               const serverTxs: Transaction[] = await serverRes.json();
               // Build a set of server-known keys for fast lookup
               const serverIdSet = new Set(serverTxs.map((t) => t.id));
-              const serverContentKeys = new Set(serverTxs.map(dedupKey));
               const serverPlaidIds = new Set(
                 serverTxs.map((t) => t.plaidTransactionId).filter(Boolean)
               );
 
-              // Merge server txs into local state
+              // Reconcile server transactions:
+              // Server is authoritative for server/Plaid transactions.
+              // Prune any Plaid or server-persisted transactions from local state that no longer exist on the server.
               if (serverTxs.length > 0) {
-                setTransactions((prev) => upsertTransactions(prev, serverTxs));
+                setTransactions((prev) => {
+                  const localOnlyNonPlaid = prev.filter(
+                    (t) => t.source !== "plaid" && !t.plaidTransactionId && !serverIdSet.has(t.id)
+                  );
+                  return upsertTransactions(localOnlyNonPlaid, serverTxs);
+                });
               }
 
-              // Compute the local-only diff: txs that the server doesn't have by any key
+              // Compute the local-only diff: ONLY truly non-plaid, offline user-created txs
               const localOnly = dedupedLocalTxs.filter(
                 (t) =>
-                  !serverIdSet.has(t.id) &&
-                  !serverContentKeys.has(dedupKey(t)) &&
-                  !(t.plaidTransactionId && serverPlaidIds.has(t.plaidTransactionId))
+                  t.source !== "plaid" &&
+                  !t.plaidTransactionId &&
+                  !serverIdSet.has(t.id)
               );
 
               // Push only the diff
@@ -2011,6 +2118,23 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
         transactionsRef.current.map((t) => (t.id === id ? mergedTx! : t)),
         budgetsRef.current
       );
+    }
+    if (updates.isRefundComplete) {
+      // Clear any active refund alert for this transaction from state
+      setAlerts((prevAlerts) =>
+        prevAlerts.filter(
+          (a) => !a.stableKey || !a.stableKey.startsWith(`refund_match_${id}_`)
+        )
+      );
+      setDismissedAlertKeys((prev) => {
+        const next = new Set(prev);
+        alertsRef.current.forEach((a) => {
+          if (a.stableKey && a.stableKey.startsWith(`refund_match_${id}_`)) {
+            next.add(a.stableKey);
+          }
+        });
+        return next;
+      });
     }
     apiCall(`/api/transactions/${id}`, "PUT", householdIdRef.current, deviceIdRef.current, updates);
   }, []);
@@ -2932,9 +3056,12 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
       // Count truly new entries (didn't already exist in the store in any form)
       let actuallyNew = 0;
       if (importedTransactions.length > 0) {
-        const prevKeys = new Set(transactionsRef.current.map(dedupKey));
-        actuallyNew = importedTransactions.filter((t) => !prevKeys.has(dedupKey(t))).length;
-        setTransactions((prev) => upsertTransactions(prev, importedTransactions));
+        const prevCount = transactionsRef.current.length;
+        setTransactions((prev) => {
+          const next = upsertTransactions(prev, importedTransactions);
+          actuallyNew = Math.max(0, next.length - prev.length);
+          return next;
+        });
         processReviewStatusForTransactions(importedTransactions);
         // Push to server outside the state updater to avoid side effects
         bgCall(
@@ -2989,23 +3116,48 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
       const toMerge: { id: string; updates: Partial<Account> }[] = [];
 
       for (const a of newAccounts) {
-        // 1. Exact plaidAccountId match — already synced
+        // 1. Exact plaidAccountId match (including shared accounts) — already synced
         if (a.plaidAccountId) {
-          const byPlaidId = current.find((e) => e.plaidAccountId === a.plaidAccountId);
+          const byPlaidId = current.find((e) =>
+            e.plaidAccountId === a.plaidAccountId ||
+            e.sharedPlaidAccounts?.some((s) => s.plaidAccountId === a.plaidAccountId)
+          );
           if (byPlaidId) {
             plaidAccMap[a.plaidAccountId] = byPlaidId.id;
             continue;
           }
         }
-        // 2. lastFour + bank name match — manual account that should be linked
+        // 2. lastFour + bank name match
         if (a.lastFour && a.bank) {
           const existing = findAccountMatch(current, a.bank, a.lastFour);
-          if (existing && !existing.plaidAccountId) {
+          if (existing) {
             plaidAccMap[a.plaidAccountId ?? ""] = existing.id;
-            toMerge.push({
-              id: existing.id,
-              updates: { plaidAccountId: a.plaidAccountId, plaidItemId: item.itemId },
-            });
+            if (!existing.plaidAccountId) {
+              // Manual account being linked to Plaid for the first time
+              toMerge.push({
+                id: existing.id,
+                updates: { plaidAccountId: a.plaidAccountId, plaidItemId: item.itemId },
+              });
+            } else if (existing.plaidItemId && existing.plaidItemId !== item.itemId && a.plaidAccountId) {
+              // Existing Plaid account from ANOTHER item with the same bank and lastFour -> Joint/Shared account!
+              const currentShared = existing.sharedPlaidAccounts ? [...existing.sharedPlaidAccounts] : [
+                { plaidItemId: existing.plaidItemId, plaidAccountId: existing.plaidAccountId, isPrimary: true }
+              ];
+              if (!currentShared.some((s) => s.plaidItemId === item.itemId)) {
+                currentShared.push({
+                  plaidItemId: item.itemId,
+                  plaidAccountId: a.plaidAccountId,
+                  isPrimary: false,
+                });
+              }
+              toMerge.push({
+                id: existing.id,
+                updates: {
+                  isJoint: true,
+                  sharedPlaidAccounts: currentShared,
+                },
+              });
+            }
             continue;
           }
         }
@@ -3052,7 +3204,25 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
       // Fallback: first account in THIS item's plaidAccMap, never a random unrelated account
       const fallbackId = Object.values(plaidAccMap)[0] ?? "";
       const rules = categoryRulesRef.current;
-      const txsToAdd: Transaction[] = initialTransactions.flatMap((t) =>
+
+      // Filter out transactions for secondary shared accounts so we do not duplicate them
+      const secondaryPlaidAccountIds = new Set<string>();
+      for (const a of newAccounts) {
+        if (!a.plaidAccountId) continue;
+        const localId = plaidAccMap[a.plaidAccountId];
+        const existing = current.find((c) => c.id === localId) || toCreate.find((c) => c.id === localId);
+        if (existing?.isJoint && existing.sharedPlaidAccounts) {
+          const entry = existing.sharedPlaidAccounts.find((s) => s.plaidItemId === item.itemId);
+          if (entry && entry.isPrimary === false) {
+            secondaryPlaidAccountIds.add(a.plaidAccountId);
+          }
+        }
+      }
+      const initialTxsToProcess = secondaryPlaidAccountIds.size > 0
+        ? initialTransactions.filter((t: any) => !secondaryPlaidAccountIds.has(t.plaidAccountId || t.account_id))
+        : initialTransactions;
+
+      const txsToAdd: Transaction[] = initialTxsToProcess.flatMap((t) =>
         normalizeImportedTxs(
           { ...t, id: (t as any).plaidTransactionId || genId() },
           "plaid",
@@ -3063,8 +3233,13 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
         )
       );
 
-      const existingKeys = new Set(transactionsRef.current.map(dedupKey));
-      const freshToAdd = txsToAdd.filter((t) => !existingKeys.has(dedupKey(t)));
+      const existingIds = new Set(transactionsRef.current.map((t) => t.id).filter(Boolean));
+      const existingPlaidIds = new Set(transactionsRef.current.map((t) => t.plaidTransactionId).filter(Boolean));
+      const freshToAdd = txsToAdd.filter(
+        (t) =>
+          !existingIds.has(t.id) &&
+          !(t.plaidTransactionId && existingPlaidIds.has(t.plaidTransactionId))
+      );
       imported = freshToAdd.length;
       setTransactions((prev) => upsertTransactions(prev, freshToAdd));
       processReviewStatusForTransactions(freshToAdd);
@@ -3147,11 +3322,22 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
       try {
         // Build the account map first (before API call) so we can detect mismatches.
         const _plaidAccounts = accounts.filter(
-          (a) => item.accountIds.includes(a.id) || a.plaidItemId === item.itemId
+          (a) =>
+            item.accountIds.includes(a.id) ||
+            a.plaidItemId === item.itemId ||
+            (a.sharedPlaidAccounts && a.sharedPlaidAccounts.some((s) => s.plaidItemId === item.itemId))
         );
         const _preMap: Record<string, string> = { ...(item.plaidAccountMap ?? {}) };
         _plaidAccounts.forEach((a) => {
-          if (a.plaidAccountId && !_preMap[a.plaidAccountId]) _preMap[a.plaidAccountId] = a.id;
+          if (a.plaidItemId === item.itemId && a.plaidAccountId && !_preMap[a.plaidAccountId]) {
+            _preMap[a.plaidAccountId] = a.id;
+          }
+          if (a.sharedPlaidAccounts) {
+            const entry = a.sharedPlaidAccounts.find((s) => s.plaidItemId === item.itemId);
+            if (entry?.plaidAccountId && !_preMap[entry.plaidAccountId]) {
+              _preMap[entry.plaidAccountId] = a.id;
+            }
+          }
         });
         const _validIds = new Set(Object.values(_preMap));
 
@@ -3215,13 +3401,22 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
         // Start from item.plaidAccountMap (persisted), then enrich from local accounts.
         const plaidAccMap: Record<string, string> = { ...(item.plaidAccountMap ?? {}) };
 
-        // Enrich from accounts that already have plaidAccountId or plaidItemId set
+        // Enrich from accounts that already have plaidAccountId or plaidItemId set (including shared accounts)
         const knownPlaidAccounts = accounts.filter(
-          (a) => item.accountIds.includes(a.id) || a.plaidItemId === item.itemId
+          (a) =>
+            item.accountIds.includes(a.id) ||
+            a.plaidItemId === item.itemId ||
+            (a.sharedPlaidAccounts && a.sharedPlaidAccounts.some((s) => s.plaidItemId === item.itemId))
         );
         knownPlaidAccounts.forEach((a) => {
-          if (a.plaidAccountId && !plaidAccMap[a.plaidAccountId]) {
+          if (a.plaidItemId === item.itemId && a.plaidAccountId && !plaidAccMap[a.plaidAccountId]) {
             plaidAccMap[a.plaidAccountId] = a.id;
+          }
+          if (a.sharedPlaidAccounts) {
+            const entry = a.sharedPlaidAccounts.find((s) => s.plaidItemId === item.itemId);
+            if (entry?.plaidAccountId && !plaidAccMap[entry.plaidAccountId]) {
+              plaidAccMap[entry.plaidAccountId] = a.id;
+            }
           }
         });
 
@@ -3231,8 +3426,11 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
         if (Array.isArray(data.plaidAccounts) && data.plaidAccounts.length > 0) {
           for (const pa of data.plaidAccounts as Array<{ plaidAccountId: string; lastFour: string; name: string; balance?: number }>) {
             if (plaidAccMap[pa.plaidAccountId]) continue; // already mapped
-            // Match by plaidAccountId first
-            const byPlaidId = accounts.find((a) => a.plaidAccountId === pa.plaidAccountId);
+            // Match by plaidAccountId first (including shared accounts)
+            const byPlaidId = accounts.find((a) =>
+              a.plaidAccountId === pa.plaidAccountId ||
+              (a.sharedPlaidAccounts && a.sharedPlaidAccounts.some((s) => s.plaidAccountId === pa.plaidAccountId))
+            );
             if (byPlaidId) { plaidAccMap[pa.plaidAccountId] = byPlaidId.id; continue; }
             // Match by lastFour + bank (item.bankName)
             const byLastFour = findAccountMatch(accounts, item.bankName, pa.lastFour);
@@ -3267,9 +3465,10 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
           }
         }
 
-        // If accountIds is empty but we just rebuilt plaidAccMap, update the item
+        // If accountIds is empty or missing newly mapped accounts, update the item
         const rebuiltAccountIds = Array.from(new Set(Object.values(plaidAccMap)));
-        if (item.accountIds.length === 0 && rebuiltAccountIds.length > 0) {
+        const isMissingAccounts = rebuiltAccountIds.some((id) => !item.accountIds.includes(id));
+        if (item.accountIds.length === 0 || isMissingAccounts) {
           setPlaidSync((prev) => ({
             items: prev.items.map((i) =>
               i.itemId === itemId
@@ -3307,7 +3506,23 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
           // Build list of existing pending transactions to preserve their original creation dates
           const existingPending = transactionsRef.current.filter((t) => t.pending);
 
-          const candidates = (data.transactions as any[]).flatMap((t) => {
+          // Identify secondary shared accounts for THIS item so we skip importing transactions
+          const secondaryPlaidAccountIds = new Set<string>();
+          for (const [paId, localAccId] of Object.entries(plaidAccMap)) {
+            const acc = accounts.find((a) => a.id === localAccId);
+            if (acc?.isJoint && acc.sharedPlaidAccounts) {
+              const entry = acc.sharedPlaidAccounts.find((s) => s.plaidItemId === itemId);
+              if (entry && entry.isPrimary === false) {
+                secondaryPlaidAccountIds.add(paId);
+              }
+            }
+          }
+
+          const rawTxList = (data.transactions as any[]).filter(
+            (t) => !secondaryPlaidAccountIds.has(t.account_id) && !secondaryPlaidAccountIds.has(t.accountId)
+          );
+
+          const candidates = rawTxList.flatMap((t) => {
             let targetDate = t.date;
             
             // If the transaction from Plaid is posted, check if it replaces an existing pending one
@@ -3346,15 +3561,14 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
               { plaidAccMap, plaidItemId: itemId, fallbackAccountId: fallbackId }
             );
           });
-          const currentKeys = new Set(transactionsRef.current.map(dedupKey));
           const currentIds = new Set(transactionsRef.current.map((t) => t.id).filter(Boolean));
           const currentPlaidIds = new Set(transactionsRef.current.map((t) => t.plaidTransactionId).filter(Boolean));
 
           precomputedFresh = candidates.filter(
             (t) =>
-              !currentKeys.has(dedupKey(t)) &&
               !currentIds.has(t.id) &&
-              !(t.plaidTransactionId && currentPlaidIds.has(t.plaidTransactionId))
+              !(t.plaidTransactionId && currentPlaidIds.has(t.plaidTransactionId)) &&
+              !(t.plaidAccountId && secondaryPlaidAccountIds.has(t.plaidAccountId))
           );
           imported = precomputedFresh.length;
 
@@ -3410,8 +3624,13 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
           }
 
           // 2. Merge precomputed fresh transactions (re-filter against remapped for accuracy)
-          const remappedKeys = new Set(remapped.map(dedupKey));
-          const fresh = precomputedFresh.filter((t) => !remappedKeys.has(dedupKey(t)));
+          const remappedIds = new Set(remapped.map((t) => t.id).filter(Boolean));
+          const remappedPlaidIds = new Set(remapped.map((t) => t.plaidTransactionId).filter(Boolean));
+          const fresh = precomputedFresh.filter(
+            (t) =>
+              !remappedIds.has(t.id) &&
+              !(t.plaidTransactionId && remappedPlaidIds.has(t.plaidTransactionId))
+          );
 
           return upsertTransactions(remapped, fresh);
         });
@@ -3986,6 +4205,29 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
         );
       }
     });
+
+    // 4. Pending Refunds with matching income transactions
+    // MUST ONLY show alerts for transactions that are currently pending on the Refund screen
+    const pendingRefundsList = transactions.filter(isPendingRefund);
+    pendingRefundsList.forEach((refund) => {
+      const refundDateMs = parseLocalDate(refund.date).getTime();
+      const match = transactions.find(
+        (t) =>
+          t.id !== refund.id &&
+          t.type === "income" &&
+          !isRefundTransaction(t) &&
+          Math.abs(t.amount - refund.amount) / refund.amount < 0.01 &&
+          parseLocalDate(t.date).getTime() >= refundDateMs
+      );
+
+      if (match) {
+        const stableKey = `refund_match_${refund.id}_${match.id}`;
+        const alertTitle = "💰 Refund Match Detected";
+        const alertBody = `A matching refund amount ($${match.amount.toFixed(2)}) for "${refund.title}" was received on ${match.date}. Do you want to mark this refund as complete?`;
+        addAlert(alertTitle, alertBody, "refund", stableKey);
+        fireImmediateNotification(alertTitle, alertBody, { refundId: refund.id, matchId: match.id, type: "refund" });
+      }
+    });
   }, [initialized, bills, transactions, budgets, tasks, addAlert]);
 
   // ── Notification listeners: bridge OS notifications → alerts + deep link ───
@@ -4003,10 +4245,11 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
         if (!title) return;
         if (data?.app !== "fintrack") return;
         const notifType = (data?.type as string) || "general";
-        const entityId = (data?.taskId || data?.billId || data?.budgetId || "") as string;
+        const entityId = (data?.taskId || data?.billId || data?.budgetId || data?.refundId || "") as string;
         const alertType: AlertLog["type"] = notifType.startsWith("task") ? "task"
           : notifType === "upcoming" || notifType === "overdue" ? "bill"
           : notifType.startsWith("budget") ? "budget"
+          : notifType === "refund" || notifType.startsWith("refund") ? "refund"
           : "general";
         const stableKey = `notif_${notifType}_${entityId}_${event.request.identifier}`;
         addAlert(title, body || "", alertType, stableKey);
@@ -4016,7 +4259,7 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
       responseSub = Notifications.addNotificationResponseReceivedListener((response) => {
         const { title, body, data } = response.notification.request.content;
         const notifType = (data?.type as string) || "";
-        const entityId = (data?.taskId || data?.billId || data?.budgetId || "") as string;
+        const entityId = (data?.taskId || data?.billId || data?.budgetId || data?.refundId || "") as string;
 
         if (data?.app !== "fintrack") return;
 
@@ -4024,6 +4267,7 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
           const alertType: AlertLog["type"] = notifType.startsWith("task") ? "task"
             : notifType === "upcoming" || notifType === "overdue" ? "bill"
             : notifType.startsWith("budget") ? "budget"
+            : notifType === "refund" || notifType.startsWith("refund") ? "refund"
             : "general";
           const stableKey = `notif_${notifType}_${entityId}_${response.notification.request.identifier}`;
           addAlert(title, body || "", alertType, stableKey);
@@ -4036,6 +4280,8 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
             router.push("/(tabs)/bills");
           } else if (notifType.startsWith("budget")) {
             router.push("/(tabs)/budget");
+          } else if (notifType === "refund" || notifType.startsWith("refund")) {
+            router.push("/refunds");
           } else {
             router.push("/alerts");
           }
@@ -4081,6 +4327,8 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
                     router.push("/(tabs)/tasks");
                   } else if (entityType === "bill") {
                     router.push("/(tabs)/bills");
+                  } else if (entityType === "refund") {
+                    router.push("/refunds");
                   } else {
                     router.push("/alerts");
                   }
@@ -4111,6 +4359,7 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
           if (type === EventType.DELIVERED) {
             const alertType: AlertLog["type"] = notifType === 'task' ? "task"
               : notifType === 'bill' ? "bill"
+              : notifType === 'refund' ? "refund"
               : "general";
             const stableKey = `notif_${fullNotifType}_${entityId}_${notification.id}`;
             addAlert(notification.title, notification.body || "", alertType, stableKey);
@@ -4120,6 +4369,7 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
             // Also ensure it is logged in inbox if user missed the delivery handler
             const alertType: AlertLog["type"] = notifType === 'task' ? "task"
               : notifType === 'bill' ? "bill"
+              : notifType === 'refund' ? "refund"
               : "general";
             const stableKey = `notif_${fullNotifType}_${entityId}_${notification.id}`;
             addAlert(notification.title, notification.body || "", alertType, stableKey);
@@ -4130,6 +4380,8 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
                 router.push("/(tabs)/tasks");
               } else if (notifType === "bill") {
                 router.push("/(tabs)/bills");
+              } else if (notifType === "refund") {
+                router.push("/refunds");
               } else {
                 router.push("/alerts");
               }
@@ -4146,6 +4398,8 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
               updateTask(entityId, { isCompleted: true });
             } else if (entityType === 'bill') {
               markBillPaid(entityId);
+            } else if (entityType === 'refund') {
+              updateTransaction(entityId, { isRefundComplete: true });
             }
           }
 
@@ -4184,14 +4438,23 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
 
   const disconnectPlaid = useCallback((itemId: string) => {
     const item = plaidSync.items.find((i) => i.itemId === itemId);
-    // Remove accounts by BOTH accountIds list AND plaidItemId (handles stale/incomplete accountIds)
+    // Remove accounts by BOTH accountIds list AND plaidItemId, but preserve joint accounts if another item remains attached
     setAccounts((prev) =>
-      prev.filter((a) => !(item?.accountIds.includes(a.id) || a.plaidItemId === itemId))
+      prev.filter((a) => {
+        if (a.isJoint && a.sharedPlaidAccounts && a.sharedPlaidAccounts.some((s) => s.plaidItemId !== itemId)) {
+          return true;
+        }
+        return !(item?.accountIds.includes(a.id) || a.plaidItemId === itemId);
+      })
     );
     setTransactions((prev) =>
-      prev.filter((t) =>
-        !(item?.accountIds.includes(t.accountId) && t.source === "plaid") && t.plaidItemId !== itemId
-      )
+      prev.filter((t) => {
+        const acc = accounts.find((a) => a.id === t.accountId);
+        if (acc?.isJoint && acc.sharedPlaidAccounts && acc.sharedPlaidAccounts.some((s) => s.plaidItemId !== itemId)) {
+          return true;
+        }
+        return !(item?.accountIds.includes(t.accountId) && t.source === "plaid") && t.plaidItemId !== itemId;
+      })
     );
     setHoldings((prev) => prev.filter((h) => h.plaidItemId !== itemId));
     setInvestmentTransactions((prev) => prev.filter((t) => t.plaidItemId !== itemId));
@@ -4203,8 +4466,31 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
       householdIdRef.current,
       deviceIdRef.current
     );
-  }, [plaidSync]);
+  }, [plaidSync, accounts]);
 
+  const refreshTransactionsFromServer = useCallback(async () => {
+    const hId = householdIdRef.current;
+    const dId = deviceIdRef.current;
+    if (!hId) return;
+    try {
+      const serverRes = await fetch(`${getApiBase()}/api/transactions`, {
+        headers: { "X-Household-ID": hId, "X-Device-ID": dId },
+        signal: createTimeoutSignal(10000),
+      });
+      if (serverRes.ok) {
+        const serverTxs: Transaction[] = await serverRes.json();
+        const serverIdSet = new Set(serverTxs.map((t) => t.id));
+        setTransactions((prev) => {
+          const localOnlyNonPlaid = prev.filter(
+            (t) => t.source !== "plaid" && !t.plaidTransactionId && !serverIdSet.has(t.id)
+          );
+          const updated = upsertTransactions(localOnlyNonPlaid, serverTxs);
+          AsyncStorage.setItem(STORAGE_KEYS.transactions, JSON.stringify(updated)).catch(() => {});
+          return updated;
+        });
+      }
+    } catch {}
+  }, []);
 
   // ── Computed values ───────────────────────────────────────────────────────
   const now = new Date();
@@ -4249,6 +4535,7 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
         deviceId, householdId, changeHouseholdId,
         alerts, addAlert, markAlertRead, markAllAlertsRead, clearAllAlerts, deleteAlert,
         billReviewMatches, approveBillReviewMatch, dismissBillReviewMatch, detectBillPayments,
+        refreshTransactionsFromServer,
       }}
     >
       {children}

@@ -158,6 +158,12 @@ function PremiumAccountCard({ account }: { account: Account }) {
             {account.lastFour ? (
               <Text style={[styles.premiumLastFour, { color: colors.mutedForeground }]}>••••{account.lastFour}</Text>
             ) : null}
+            {account.isJoint ? (
+              <View style={[styles.premiumTypeBadge, { backgroundColor: "#6366f118" }]}>
+                <Feather name="users" size={9} color="#6366f1" />
+                <Text style={[styles.premiumTypeText, { color: "#6366f1" }]}>Joint</Text>
+              </View>
+            ) : null}
           </View>
           <View style={{ flexDirection: "row", alignItems: "center", gap: 8, flexWrap: "wrap" }}>
             {account.bank && !account.name.toLowerCase().includes(account.bank.toLowerCase()) ? (
@@ -382,11 +388,15 @@ function EmailConnectModal({ onClose }: { onClose: () => void }) {
 
 function PlaidItemPanel({ item, onRelink }: { item: PlaidItem; onRelink: (item: PlaidItem) => void }) {
   const colors = useColors();
-  const { syncPlaidTransactions, delinkPlaid, disconnectPlaid, isSyncing } = useApp();
+  const { syncPlaidTransactions, delinkPlaid, disconnectPlaid, isSyncing, accounts } = useApp();
   const [syncResult, setSyncResult] = useState<{ imported: number; importedTransactions?: any[]; parsed?: Array<{ title?: string; merchant?: string; amount: number; type?: string; bank?: string; rawSubject?: string }>; error?: string } | null>(null);
   const [showImportedDetails, setShowImportedDetails] = useState(false);
   const [showDelinkConfirm, setShowDelinkConfirm] = useState(false);
   const [showRemoveConfirm, setShowRemoveConfirm] = useState(false);
+
+  const jointCount = accounts.filter(
+    (a) => item.accountIds.includes(a.id) && a.isJoint
+  ).length;
 
   const handleSync = async () => {
     Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium);
@@ -411,7 +421,7 @@ function PlaidItemPanel({ item, onRelink }: { item: PlaidItem; onRelink: (item: 
             </View>
           </View>
           <Text style={[styles.plaidSub, { color: colors.mutedForeground }]}>
-            {item.accountIds.length} account{item.accountIds.length !== 1 ? "s" : ""} linked
+            {item.accountIds.length} account{item.accountIds.length !== 1 ? "s" : ""} linked{jointCount > 0 ? ` (${jointCount} joint)` : ""}
           </Text>
         </View>
       </View>

@@ -65,10 +65,19 @@ export default function AlertsScreen() {
     return [...alerts].sort((a, b) => new Date(b.date).getTime() - new Date(a.date).getTime());
   }, [alerts]);
 
-  const handleRowPress = (id: string, isRead: boolean) => {
-    if (!isRead) {
+  const handleRowPress = (alert: (typeof alerts)[0]) => {
+    if (!alert.isRead) {
       Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
-      markAlertRead(id);
+      markAlertRead(alert.id);
+    }
+    if (alert.type === "refund") {
+      router.push("/refunds");
+    } else if (alert.type === "bill") {
+      router.push("/(tabs)/bills");
+    } else if (alert.type === "budget") {
+      router.push("/(tabs)/budget");
+    } else if (alert.type === "task") {
+      router.push("/(tabs)/tasks");
     }
   };
 
@@ -102,6 +111,8 @@ export default function AlertsScreen() {
         return { name: "refresh-cw" as const, bg: colors.muted, iconColor: colors.primary };
       case "task":
         return { name: "check-square" as const, bg: colors.muted, iconColor: "#8b5cf6" };
+      case "refund":
+        return { name: "rotate-ccw" as const, bg: colors.muted, iconColor: "#10b981" };
       default:
         return { name: "bell" as const, bg: colors.muted, iconColor: colors.mutedForeground };
     }
@@ -157,7 +168,7 @@ export default function AlertsScreen() {
             const iconMeta = getAlertIcon(item.type);
             return (
               <Pressable
-                onPress={() => handleRowPress(item.id, item.isRead)}
+                onPress={() => handleRowPress(item)}
                 style={({ pressed }) => [
                   s.row,
                   {

@@ -184,10 +184,23 @@ router.post("/transactions/bulk", async (req, res) => {
 
     const SOURCE_PRIORITY: Record<string, number> = { plaid: 3, manual: 2, email: 1 };
 
+    const isCrossSourceTitleMatch = (titleA?: string, titleB?: string): boolean => {
+      if (!titleA || !titleB) return true;
+      const a = titleA.toLowerCase().trim();
+      const b = titleB.toLowerCase().trim();
+      if (!a || !b) return true;
+      if (a.includes(b) || b.includes(a)) return true;
+      const wordA = a.split(/[^a-zA-Z0-9]/)[0] || "";
+      const wordB = b.split(/[^a-zA-Z0-9]/)[0] || "";
+      if (wordA.length >= 3 && wordB.length >= 3 && wordA === wordB) return true;
+      return false;
+    };
+
     const dedupKey = (t: any): string => {
+      const type = (t.type ?? "expense").toLowerCase();
       const accountId = t.accountId ?? "";
       const date = t.date ?? "";
-      return `${accountId.toLowerCase()}|${Math.round((t.amount ?? 0) * 100)}|${date.slice(0, 10)}`;
+      return `${type}|${accountId.toLowerCase()}|${Math.round((t.amount ?? 0) * 100)}|${date.slice(0, 10)}`;
     };
 
     // To avoid mutating inputs, clone both lists into a single merged array
@@ -206,24 +219,46 @@ router.post("/transactions/bulk", async (req, res) => {
     // Sort: higher priority transactions first
     allTxs.sort((a, b) => getPriorityScore(b) - getPriorityScore(a));
 
-    // Pass A: Strict exact ID and content deduplication based on priority score.
+    // Pass A: Strict exact ID, plaidTransactionId, and 1-to-1 cross-source deduplication based on priority score.
     const uniqueTxs: any[] = [];
     const byId = new Map<string, any>();
-    const byContent = new Map<string, any>();
+    const byPlaidTxId = new Map<string, any>();
+    const acceptedByContentKey = new Map<string, any[]>();
+    const matchedCrossSourceIds = new Set<string>();
 
     for (const t of allTxs) {
-      const key = dedupKey(t);
-      const existingById = t.id ? byId.get(t.id) : null;
-      const existingByContent = byContent.get(key);
+      if (t.id && byId.has(t.id)) {
+        continue; // exact ID duplicate
+      }
+      if (t.plaidTransactionId && byPlaidTxId.has(t.plaidTransactionId)) {
+        continue; // exact Plaid ID duplicate
+      }
 
-      if (existingById || existingByContent) {
-        // Skip exact duplicate
-        continue;
+      // Check for 1-to-1 cross-source collision (e.g. lower-priority email receipt matching higher-priority Plaid charge)
+      const key = dedupKey(t);
+      const candidates = acceptedByContentKey.get(key);
+      if (candidates && candidates.length > 0) {
+        const matchIndex = candidates.findIndex(
+          (c) =>
+            c.source !== t.source &&
+            !matchedCrossSourceIds.has(c.id) &&
+            (c.type || "expense") === (t.type || "expense") &&
+            isCrossSourceTitleMatch(c.merchant || c.title, t.merchant || t.title)
+        );
+
+        if (matchIndex !== -1) {
+          matchedCrossSourceIds.add(candidates[matchIndex].id);
+          continue;
+        }
       }
 
       uniqueTxs.push(t);
       if (t.id) byId.set(t.id, t);
-      byContent.set(key, t);
+      if (t.plaidTransactionId) byPlaidTxId.set(t.plaidTransactionId, t);
+      if (!acceptedByContentKey.has(key)) {
+        acceptedByContentKey.set(key, []);
+      }
+      acceptedByContentKey.get(key)!.push(t);
     }
 
     // Pass B: Fuzzy Pending-Posted Collapsing across the combined list.
@@ -241,9 +276,6 @@ router.post("/transactions/bulk", async (req, res) => {
     uniqueTxs.forEach((t) => {
       if (!t.pending && t.pendingTransactionId) {
         pendingTxIdsToEvict.add(t.pendingTransactionId);
-        // Do NOT copy the pending date — the posted transaction already has the correct
-        // authorized_date (purchase date as shown in the bank app) from mapPlaidTransaction.
-        // Overwriting it caused 1-3 day mismatches vs what the bank displays.
       }
     });
 
@@ -257,17 +289,18 @@ router.post("/transactions/bulk", async (req, res) => {
     }
 
     // 3. Smart fuzzy matching: a posted transaction replaces an older pending transaction
-    // within a +/- 3 days window, having exact same amount, account, and fuzzy title match.
+    // within a +/- 3 days window, having exact same amount, account, matching type, and fuzzy title match.
     const postedTxs = remainingTxs.filter((t) => !t.pending);
     const pendingTxsToEvictFuzzy = new Set<string>();
 
     postedTxs.forEach((postedTx) => {
-      remainingTxs.forEach((pendingTx) => {
-        if (!pendingTx.pending) return;
-        if (pendingTxsToEvictFuzzy.has(pendingTx.id)) return; // already marked for eviction
+      for (const pendingTx of remainingTxs) {
+        if (!pendingTx.pending) continue;
+        if (pendingTxsToEvictFuzzy.has(pendingTx.id)) continue; // already marked for eviction
 
         const isReplaced = (
           pendingTx.accountId === postedTx.accountId &&
+          (pendingTx.type || "expense") === (postedTx.type || "expense") &&
           Math.abs(pendingTx.amount - postedTx.amount) < 0.001 &&
           Math.abs(new Date(pendingTx.date).getTime() - new Date(postedTx.date).getTime()) / (1000 * 60 * 60 * 24) <= 3
         );
@@ -283,11 +316,11 @@ router.post("/transactions/bulk", async (req, res) => {
             (firstWord(oldTitle).length >= 4 && firstWord(oldTitle) === firstWord(newTitle));
 
           if (isTitleMatch) {
-            // Do NOT copy pending date — posted tx already has authorized_date (correct bank date).
             pendingTxsToEvictFuzzy.add(pendingTx.id); // evict old pending transaction
+            break; // This posted tx matched its pending counterpart; move to next posted tx
           }
         }
-      });
+      }
     });
 
     if (pendingTxsToEvictFuzzy.size > 0) {
@@ -295,7 +328,7 @@ router.post("/transactions/bulk", async (req, res) => {
     }
 
     // 4. Find which pending transactions exist in the database and need to be deleted
-    const idsToDelete = new Set([...pendingTxIdsToEvict, ...pendingTxsToEvictFuzzy]);
+    const idsToDelete = new Set([...Array.from(pendingTxIdsToEvict), ...Array.from(pendingTxsToEvictFuzzy)]);
     const existingIds = new Set(existing.map((e) => e.id));
     const dbPendingIdsToDelete = Array.from(idsToDelete).filter((id) => existingIds.has(id));
 

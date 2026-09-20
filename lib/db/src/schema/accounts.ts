@@ -1,4 +1,4 @@
-import { pgTable, text, real, timestamp } from "drizzle-orm/pg-core";
+import { pgTable, text, real, timestamp, boolean, jsonb } from "drizzle-orm/pg-core";
 import { z } from "zod";
 
 export const accountsTable = pgTable("accounts", {
@@ -14,6 +14,12 @@ export const accountsTable = pgTable("accounts", {
   plaidAccountId: text("plaid_account_id"),
   plaidItemId: text("plaid_item_id"),
   accountHolder: text("account_holder"),
+  isJoint: boolean("is_joint").default(false),
+  sharedPlaidAccounts: jsonb("shared_plaid_accounts").$type<Array<{
+    plaidItemId: string;
+    plaidAccountId: string;
+    isPrimary?: boolean;
+  }>>(),
   createdAt: timestamp("created_at").defaultNow().notNull(),
   updatedAt: timestamp("updated_at").defaultNow().notNull(),
 });
@@ -31,6 +37,17 @@ export const insertAccountSchema = z.object({
   plaidAccountId: z.string().nullable().optional(),
   plaidItemId: z.string().nullable().optional(),
   accountHolder: z.string().nullable().optional(),
+  isJoint: z.boolean().optional().default(false),
+  sharedPlaidAccounts: z
+    .array(
+      z.object({
+        plaidItemId: z.string(),
+        plaidAccountId: z.string(),
+        isPrimary: z.boolean().optional(),
+      })
+    )
+    .nullable()
+    .optional(),
 });
 
 export const updateAccountSchema = insertAccountSchema

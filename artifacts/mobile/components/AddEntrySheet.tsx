@@ -869,6 +869,7 @@ function ExpenseTab({ onSave, onRegisterSave }: { onSave: () => void; onRegister
       splitCategories.forEach((split) => {
         const splitAmount = parseFloat(split.amount);
         if (isNaN(splitAmount) || splitAmount <= 0) return;
+        const isExpRefund = tag.trim().toLowerCase() === "refund" || (split.category || "").trim().toLowerCase() === "refund";
         addTransaction({
           title: merchant || split.category || "Expense",
           merchant: merchant || undefined,
@@ -878,7 +879,7 @@ function ExpenseTab({ onSave, onRegisterSave }: { onSave: () => void; onRegister
           accountId,
           date: toLocalYMD(date),
           note: [notes, tag ? `Tag: ${tag}` : ""].filter(Boolean).join(" · ") || undefined,
-          isRefund: tag.trim().toLowerCase() === "refund" ? true : undefined,
+          isRefund: isExpRefund ? true : undefined,
           projectId: projectId || undefined,
           projectName: projectName || undefined,
           source: "manual",
@@ -887,6 +888,7 @@ function ExpenseTab({ onSave, onRegisterSave }: { onSave: () => void; onRegister
         });
       });
     } else {
+      const isExpRefund = tag.trim().toLowerCase() === "refund" || (category || "").trim().toLowerCase() === "refund";
       addTransaction({
         title: merchant || category || "Expense",
         merchant: merchant || undefined,
@@ -896,7 +898,7 @@ function ExpenseTab({ onSave, onRegisterSave }: { onSave: () => void; onRegister
         accountId,
         date: toLocalYMD(date),
         note: [notes, tag ? `Tag: ${tag}` : ""].filter(Boolean).join(" · ") || undefined,
-        isRefund: tag.trim().toLowerCase() === "refund" ? true : undefined,
+        isRefund: isExpRefund ? true : undefined,
         projectId: projectId || undefined,
         projectName: projectName || undefined,
         source: "manual",
@@ -1167,6 +1169,7 @@ function IncomeTab({ onSave, onRegisterSave }: { onSave: () => void; onRegisterS
   const [showMerchantPicker, setShowMerchantPicker] = useState(false);
   const [showCalculator, setShowCalculator] = useState(false);
   const [merchant, setMerchant] = useState("");
+  const [tag, setTag] = useState("");
   const [projectId, setProjectId] = useState<string | undefined>(undefined);
   const [projectName, setProjectName] = useState<string | undefined>(undefined);
   const [receipts, setReceipts] = useState<string[]>([]);
@@ -1193,10 +1196,9 @@ function IncomeTab({ onSave, onRegisterSave }: { onSave: () => void; onRegisterS
       category: category || "Other",
       accountId,
       date: toLocalYMD(date),
-      note: [notes, repeat !== "Never" ? `Repeats ${repeat}` : ""].filter(Boolean).join(" · ") || undefined,
+      note: [notes, repeat !== "Never" ? `Repeats ${repeat}` : "", tag.trim() ? `Tag: ${tag.trim()}` : ""].filter(Boolean).join(" · ") || undefined,
       projectId: projectId || undefined,
       projectName: projectName || undefined,
-      isRefund: category.trim().toLowerCase() === "refund" ? true : undefined,
       source: "manual",
       receipts: receipts.length > 0 ? receipts : undefined,
     });
@@ -1276,6 +1278,27 @@ function IncomeTab({ onSave, onRegisterSave }: { onSave: () => void; onRegisterS
           onClear={projectId ? () => { setProjectId(undefined); setProjectName(undefined); } : undefined}
           borderBottom={false}
         />
+      </View>
+
+      <View style={[styles.card, { backgroundColor: colors.card }]}>
+        <View style={[styles.row, { borderBottomWidth: 0 }]}>
+          <View style={[styles.rowIcon, { backgroundColor: colors.accent }]}>
+            <Feather name="tag" size={18} color={colors.income} />
+          </View>
+          <TextInput
+            style={[styles.notesInput, { color: colors.foreground, flex: 1 }]}
+            placeholder="Add tag (optional, e.g. refund)"
+            placeholderTextColor={colors.mutedForeground}
+            value={tag}
+            onChangeText={setTag}
+            returnKeyType="done"
+          />
+          {tag ? (
+            <TouchableOpacity onPress={() => setTag("")} hitSlop={10}>
+              <Feather name="x" size={18} color={colors.mutedForeground} />
+            </TouchableOpacity>
+          ) : null}
+        </View>
       </View>
 
       <ImageAttachmentsRow images={receipts} onChange={setReceipts} />

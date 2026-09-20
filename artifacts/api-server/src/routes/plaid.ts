@@ -58,10 +58,24 @@ router.get("/plaid/items", async (req, res) => {
 
   res.json(
     rows.map((r) => {
-      const itemAccounts = accts.filter((a) => a.plaidItemId === r.id);
+      const itemAccounts = accts.filter(
+        (a) =>
+          a.plaidItemId === r.id ||
+          (a.sharedPlaidAccounts &&
+            Array.isArray(a.sharedPlaidAccounts) &&
+            a.sharedPlaidAccounts.some((s) => s.plaidItemId === r.id))
+      );
       const plaidAccountMap: Record<string, string> = {};
       itemAccounts.forEach((a) => {
-        if (a.plaidAccountId) plaidAccountMap[a.plaidAccountId] = a.id;
+        if (a.plaidItemId === r.id && a.plaidAccountId) {
+          plaidAccountMap[a.plaidAccountId] = a.id;
+        }
+        if (a.sharedPlaidAccounts && Array.isArray(a.sharedPlaidAccounts)) {
+          const matching = a.sharedPlaidAccounts.find((s) => s.plaidItemId === r.id);
+          if (matching?.plaidAccountId) {
+            plaidAccountMap[matching.plaidAccountId] = a.id;
+          }
+        }
       });
       return {
         itemId: r.id,
@@ -407,18 +421,37 @@ router.post("/plaid/sync/:itemId", async (req, res) => {
     );
     transactions = transactions.filter((t) => !investmentAccountIds.has(t.account_id));
 
-    // Backfill plaid_item_id + plaid_account_id on DB accounts that are missing them.
-    // This self-heals accounts created before these columns existed.
+    // Fetch accounts in household to check for joint/secondary accounts
     const dbAccts = await db
       .select()
       .from(accountsTable)
       .where(eq(accountsTable.householdId, res.locals.householdId));
+
+    // Filter out transactions for shared/joint accounts where THIS item is NOT the primary syncer.
+    // The primary item syncs transactions; secondary items only update account balances.
+    const secondarySharedAccountIds = new Set<string>();
+    for (const acc of dbAccts) {
+      if (acc.sharedPlaidAccounts && Array.isArray(acc.sharedPlaidAccounts)) {
+        for (const spa of acc.sharedPlaidAccounts) {
+          if (spa.plaidItemId === itemId && spa.isPrimary === false) {
+            secondarySharedAccountIds.add(spa.plaidAccountId);
+          }
+        }
+      }
+    }
+    if (secondarySharedAccountIds.size > 0) {
+      transactions = transactions.filter((t) => !secondarySharedAccountIds.has(t.account_id));
+    }
+
+    // Backfill plaid_item_id + plaid_account_id on DB accounts that are missing them.
+    // This self-heals accounts created before these columns existed.
+    // Do NOT overwrite joint accounts that already belong to a primary item.
     for (const pa of plaidAccounts) {
       const match = dbAccts.find(
         (a) => a.plaidAccountId === pa.account_id ||
                (a.lastFour === (pa.mask ?? "") && !a.plaidItemId)
       );
-      if (match && (!match.plaidItemId || !match.plaidAccountId)) {
+      if (match && !match.isJoint && (!match.plaidItemId || !match.plaidAccountId)) {
         await db
           .update(accountsTable)
           .set({ plaidItemId: itemId, plaidAccountId: pa.account_id })
@@ -525,9 +558,10 @@ router.delete("/plaid/disconnect/:itemId", async (req, res) => {
     await client.itemRemove({ access_token: record.accessToken });
   } catch {}
 
-  // Cascade-delete all accounts (and their transactions) linked to this item
+  // Cascade-delete non-joint accounts (and their transactions) linked to this item.
+  // For joint accounts with multiple items attached, promote the surviving item instead of deleting.
   const linkedAccounts = await db
-    .select({ id: accountsTable.id })
+    .select()
     .from(accountsTable)
     .where(
       and(
@@ -536,18 +570,35 @@ router.delete("/plaid/disconnect/:itemId", async (req, res) => {
       )
     );
 
-  if (linkedAccounts.length > 0) {
-    for (const acct of linkedAccounts) {
-      await db.delete(transactionsTable).where(eq(transactionsTable.accountId, acct.id));
+  let removedCount = 0;
+  for (const acct of linkedAccounts) {
+    if (acct.isJoint && Array.isArray(acct.sharedPlaidAccounts)) {
+      const surviving = acct.sharedPlaidAccounts.filter((s) => s.plaidItemId !== itemId);
+      if (surviving.length > 0) {
+        // Promote the next surviving item to primary
+        surviving[0].isPrimary = true;
+        await db
+          .update(accountsTable)
+          .set({
+            plaidItemId: surviving[0].plaidItemId,
+            plaidAccountId: surviving[0].plaidAccountId,
+            sharedPlaidAccounts: surviving,
+            isJoint: surviving.length > 1,
+          })
+          .where(eq(accountsTable.id, acct.id));
+        continue;
+      }
     }
-    for (const acct of linkedAccounts) {
-      await db.delete(accountsTable).where(eq(accountsTable.id, acct.id));
-    }
+
+    // Delete non-joint or unshared account
+    await db.delete(transactionsTable).where(eq(transactionsTable.accountId, acct.id));
+    await db.delete(accountsTable).where(eq(accountsTable.id, acct.id));
+    removedCount++;
   }
 
   await db.delete(plaidItemsTable).where(eq(plaidItemsTable.id, itemId));
 
-  res.json({ success: true, removedAccounts: linkedAccounts.length });
+  res.json({ success: true, removedAccounts: removedCount });
 });
 
 // ── Helpers ───────────────────────────────────────────────────────────────

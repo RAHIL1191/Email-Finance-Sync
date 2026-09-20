@@ -13,7 +13,12 @@ import {
 import { SafeAreaView } from "react-native-safe-area-context";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 
-import { Transaction, useApp } from "@/context/AppContext";
+import {
+  Transaction,
+  isPendingRefund,
+  isRefundTransaction,
+  useApp,
+} from "@/context/AppContext";
 import { useColors } from "@/hooks/useColors";
 import { parseLocalDate } from "@/hooks/useLocalDate";
 
@@ -41,7 +46,7 @@ function detectMatches(
     const match = allTransactions.find(
       (t) =>
         t.type === "income" &&
-        !t.isRefund &&
+        !isRefundTransaction(t) &&
         Math.abs(t.amount - refund.amount) / refund.amount < 0.01 &&
         parseLocalDate(t.date).getTime() >= refundDateMs
     );
@@ -101,11 +106,7 @@ export default function RefundsScreen() {
   const refundTxs = useMemo(
     () =>
       transactions
-        .filter(
-          (t) =>
-            t.isRefund ||
-            t.category.trim().toLowerCase() === "refund"
-        )
+        .filter(isRefundTransaction)
         .sort((a, b) => b.date.localeCompare(a.date)),
     [transactions]
   );

@@ -14,7 +14,12 @@ import {
 import { KeyboardAwareScrollView } from "react-native-keyboard-controller";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 
-import { Transaction, useApp } from "@/context/AppContext";
+import {
+  Transaction,
+  isRefundTransaction,
+  parseNoteAndTag,
+  useApp,
+} from "@/context/AppContext";
 import { useColors } from "@/hooks/useColors";
 import { parseLocalDate, toLocalYMD } from "@/hooks/useLocalDate";
 import { CATEGORY_COLORS, CATEGORY_ICONS } from "./TransactionItem";
@@ -23,15 +28,6 @@ import CategoryPickerModal from "./CategoryPickerModal";
 import MerchantPickerModal from "./MerchantPickerModal";
 import { ProjectPickerModal } from "./AddEntrySheet";
 import SimilarTransactionsModal from "./SimilarTransactionsModal";
-
-function parseNoteAndTag(raw: string | undefined): { cleanNote: string; tag: string } {
-  if (!raw) return { cleanNote: "", tag: "" };
-  const sep = " · Tag: ";
-  const idx = raw.indexOf(sep);
-  if (idx !== -1) return { cleanNote: raw.slice(0, idx), tag: raw.slice(idx + sep.length) };
-  if (raw.startsWith("Tag: ")) return { cleanNote: "", tag: raw.slice(5) };
-  return { cleanNote: raw, tag: "" };
-}
 
 // ─── Calculator Modal ────────────────────────────────────────────────────────
 function CalculatorModal({
@@ -249,12 +245,16 @@ export default function TransactionDetailModal({ visible, onClose, transaction }
       splitCategories.forEach((split) => {
         const splitAmt = parseFloat(split.amount);
         if (isNaN(splitAmt) || splitAmt <= 0) return;
+        const splitCat = split.category || resolvedCategory;
+        const isRefundFlag =
+          fields.type === "expense" &&
+          (tag.trim().toLowerCase() === "refund" || splitCat.trim().toLowerCase() === "refund");
         addTransaction({
           title: merchant.trim() || title.trim(),
           merchant: merchant.trim() || undefined,
           amount: splitAmt,
           type: fields.type,
-          category: split.category || resolvedCategory,
+          category: splitCat,
           accountId,
           note: builtNote || undefined,
           date: dateStr,
@@ -262,12 +262,15 @@ export default function TransactionDetailModal({ visible, onClose, transaction }
           splitGroupId: groupId,
           projectId: projectId || undefined,
           projectName: projectName || undefined,
-          isRefund: tag.trim().toLowerCase() === "refund" ? true : undefined,
+          isRefund: isRefundFlag ? true : undefined,
         });
       });
       onClose();
     } else {
       const builtNote = [note.trim(), tag.trim() ? `Tag: ${tag.trim()}` : ""].filter(Boolean).join(" · ");
+      const isRefundFlag =
+        fields.type === "expense" &&
+        (tag.trim().toLowerCase() === "refund" || resolvedCategory.trim().toLowerCase() === "refund");
       const currentTxUpdates: Partial<Transaction> = {
         title: merchant.trim() || title.trim(),
         merchant: merchant.trim() || undefined,
@@ -279,7 +282,8 @@ export default function TransactionDetailModal({ visible, onClose, transaction }
         date: dateStr,
         projectId: projectId || undefined,
         projectName: projectName || undefined,
-        isRefund: tag.trim().toLowerCase() === "refund" ? true : undefined,
+        isRefund: isRefundFlag ? true : false,
+        ...(isRefundFlag ? {} : { isRefundComplete: false }),
       };
 
       // Check if category changed and if similar transactions exist
@@ -907,28 +911,35 @@ export default function TransactionDetailModal({ visible, onClose, transaction }
               })()}
 
               {/* Project & Tag chips (view mode) */}
-              {(transaction.projectName || transaction.isRefund || parseNoteAndTag(transaction.note).tag) ? (
-                <View style={{ flexDirection: "row", flexWrap: "wrap", gap: 8, paddingHorizontal: 4 }}>
-                  {transaction.projectName ? (
-                    <View style={[s.metaChip, { backgroundColor: "#f97316" + "18" }]}>
-                      <Feather name="folder" size={13} color="#f97316" />
-                      <Text style={[s.metaChipText, { color: "#f97316" }]}>{transaction.projectName}</Text>
-                    </View>
-                  ) : null}
-                  {parseNoteAndTag(transaction.note).tag ? (
-                    <View style={[s.metaChip, { backgroundColor: colors.primary + "18" }]}>
-                      <Feather name="tag" size={13} color={colors.primary} />
-                      <Text style={[s.metaChipText, { color: colors.primary }]}>{parseNoteAndTag(transaction.note).tag}</Text>
-                    </View>
-                  ) : null}
-                  {transaction.isRefund ? (
-                    <View style={[s.metaChip, { backgroundColor: "#10b981" + "18" }]}>
-                      <Feather name="rotate-ccw" size={13} color="#10b981" />
-                      <Text style={[s.metaChipText, { color: "#10b981" }]}>Refund</Text>
-                    </View>
-                  ) : null}
-                </View>
-              ) : null}
+              {(() => {
+                const isRef = isRefundTransaction(transaction);
+                const tagVal = parseNoteAndTag(transaction.note).tag;
+                if (!transaction.projectName && !isRef && !tagVal) return null;
+                return (
+                  <View style={{ flexDirection: "row", flexWrap: "wrap", gap: 8, paddingHorizontal: 4 }}>
+                    {transaction.projectName ? (
+                      <View style={[s.metaChip, { backgroundColor: "#f97316" + "18" }]}>
+                        <Feather name="folder" size={13} color="#f97316" />
+                        <Text style={[s.metaChipText, { color: "#f97316" }]}>{transaction.projectName}</Text>
+                      </View>
+                    ) : null}
+                    {tagVal && tagVal.toLowerCase() !== "refund" ? (
+                      <View style={[s.metaChip, { backgroundColor: colors.primary + "18" }]}>
+                        <Feather name="tag" size={13} color={colors.primary} />
+                        <Text style={[s.metaChipText, { color: colors.primary }]}>{tagVal}</Text>
+                      </View>
+                    ) : null}
+                    {isRef ? (
+                      <View style={[s.metaChip, { backgroundColor: "#10b981" + "18" }]}>
+                        <Feather name="rotate-ccw" size={13} color="#10b981" />
+                        <Text style={[s.metaChipText, { color: "#10b981" }]}>
+                          {transaction.isRefundComplete ? "Refund (Done)" : "Refund (Pending)"}
+                        </Text>
+                      </View>
+                    ) : null}
+                  </View>
+                );
+              })()}
 
               {/* Notes */}
               <View style={[s.notesCard, { backgroundColor: colors.card, borderColor: colors.border }]}>

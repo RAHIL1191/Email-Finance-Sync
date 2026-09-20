@@ -27,6 +27,7 @@ import { useTheme } from "@/context/ThemeContext";
 import { useColors } from "@/hooks/useColors";
 import { parseLocalDate } from "@/hooks/useLocalDate";
 import { CatHeaderIllustration, CatBannerIllustration } from "@/components/CatIllustration";
+import PendingRefundsWidget from "@/components/PendingRefundsWidget";
 // ─── Donut Chart Component ───────────────────────────────────────────────────
 function DonutChart({
   segments,
@@ -123,6 +124,7 @@ export default function HomeScreen() {
     approveBillReviewMatch,
     dismissBillReviewMatch,
     detectBillPayments,
+    refreshTransactionsFromServer,
   } = useApp();
 
   const [refreshing, setRefreshing] = useState(false);
@@ -154,6 +156,7 @@ export default function HomeScreen() {
 
   const handleRefresh = async () => {
     setRefreshing(true);
+    await refreshTransactionsFromServer?.();
     if (emailSync.isConnected && emailSync.syncTransactions) {
       await syncEmailTransactions();
     }
@@ -629,6 +632,9 @@ export default function HomeScreen() {
             </View>
           </View>
         )}
+
+        {/* ── Pending Refunds Widget (with AI Match alert) ── */}
+        <PendingRefundsWidget />
 
         {/* ── 4. Upcoming Bills Widget ── */}
         <View style={[styles.widgetCard, { backgroundColor: colors.card, borderColor: colors.border }]}>

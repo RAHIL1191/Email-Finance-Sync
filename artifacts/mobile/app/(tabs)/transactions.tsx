@@ -8,6 +8,7 @@ import {
   Modal,
   Platform,
   Pressable,
+  RefreshControl,
   ScrollView,
   StyleSheet,
   Switch,
@@ -1503,9 +1504,17 @@ const TX_FILTERS = ["All", "Expenses", "Income", "Transfer"] as const;
 type TxFilter = (typeof TX_FILTERS)[number];
 
 function TransactionsTab({ transactions, colors, showFilter, setShowFilter, filterSettings, setFilterSettings }: { transactions: Transaction[]; colors: any; showFilter: boolean; setShowFilter: (v: boolean) => void; filterSettings: TxFilterSettings; setFilterSettings: (s: TxFilterSettings) => void }) {
+  const { refreshTransactionsFromServer } = useApp();
   const [filter, setFilter] = useState<TxFilter>("All");
   const [showAdd, setShowAdd] = useState(false);
   const [selectedTx, setSelectedTx] = useState<Transaction | null>(null);
+  const [refreshing, setRefreshing] = useState(false);
+
+  const handleRefresh = async () => {
+    setRefreshing(true);
+    await refreshTransactionsFromServer?.();
+    setRefreshing(false);
+  };
 
   // transactions prop is already deduplicated + reviewed-only (from InsightsScreen visibleTxs)
   const filtered = useMemo(() => {
@@ -1617,6 +1626,7 @@ function TransactionsTab({ transactions, colors, showFilter, setShowFilter, filt
 
       <FlatList
         data={flatData}
+        refreshControl={<RefreshControl refreshing={refreshing} onRefresh={handleRefresh} tintColor={colors.primary} />}
         keyExtractor={(item, i) =>
           item.type === "header"
             ? `h-${item.dateLabel}-${i}`
@@ -2298,9 +2308,8 @@ const ptSt = StyleSheet.create({
   invTxAmt:      { fontSize: 14, fontFamily: "Inter_700Bold" },
 });
 
-// Dedup key identical to TransactionsTab so both views work on the same set
 function txDedupKey(t: Transaction): string {
-  return `${(t.source ?? "").toLowerCase()}|${(t.bank ?? "").toLowerCase()}|${(t.accountId ?? "").toLowerCase()}|${t.amount}|${(t.title ?? "").toLowerCase().trim()}|${(t.date ?? "").slice(0, 10)}`;
+  return `${(t.type ?? "expense").toLowerCase()}|${(t.source ?? "").toLowerCase()}|${(t.bank ?? "").toLowerCase()}|${(t.accountId ?? "").toLowerCase()}|${t.amount}|${(t.title ?? "").toLowerCase().trim()}|${(t.date ?? "").slice(0, 10)}`;
 }
 
 export default function InsightsScreen() {
@@ -2329,21 +2338,17 @@ export default function InsightsScreen() {
     }
   }, [visibleTabs, activeTab]);
 
-  // Reviewed + deduplicated transaction list — same logic as TransactionsTab so all
-  // insight views are consistent with what the user can actually see.
+  // Reviewed transaction list — filters unreviewed email transactions and deduplicates by exact ID,
+  // ensuring multiple distinct purchases of the same amount and fee waivers are never hidden.
   const visibleTxs = useMemo(() => {
     const reviewed = transactions.filter((t) => {
       const isUnreviewedEmail = (t.fromEmail || t.source === "email") && !reviewedTransactionIds.includes(t.id);
       return !isUnreviewedEmail;
     });
     const seenIds = new Set<string>();
-    const seenContent = new Set<string>();
     return reviewed.filter((t) => {
-      if (seenIds.has(t.id)) return false;
-      const key = txDedupKey(t);
-      if (seenContent.has(key)) return false;
+      if (!t.id || seenIds.has(t.id)) return false;
       seenIds.add(t.id);
-      seenContent.add(key);
       return true;
     });
   }, [transactions, reviewedTransactionIds]);
