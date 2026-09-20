@@ -109,6 +109,8 @@ export interface Account {
   color: string;
   lastFour?: string;
   currency?: string;
+  /** Optional credit limit for credit card accounts */
+  creditLimit?: number;
   /** When false, this account is excluded from net worth. Defaults to true. */
   includeInNetworth?: boolean;
   /** Whether this is a joint account shared with another person */
@@ -448,6 +450,8 @@ interface AppContextType {
   disconnectPlaid: (itemId: string) => void;
   isSyncing: boolean;
   totalBalance: number;
+  assetsTotal: number;
+  liabilitiesTotal: number;
   monthlyIncome: number;
   monthlyExpense: number;
   currentMonth: number;
@@ -4507,7 +4511,7 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
     .reduce((s, a) => s + computeBalance(a, transactions), 0);
   const liabilitiesTotal = accounts
     .filter((a) => isIncludedInNetworth(a) && isLiabilityAccount(a))
-    .reduce((s, a) => s + Math.abs(computeBalance(a, transactions)), 0);
+    .reduce((s, a) => s + computeBalance(a, transactions), 0);
   const totalBalance = assetsTotal - liabilitiesTotal;
 
   return (
@@ -4529,7 +4533,7 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
         connectEmail, updateEmailSyncSettings, disconnectEmail, resetEmailTransactions, syncEmailTransactions, wipeAllTransactions, wipePortfolio, wipeData,
         connectPlaid, syncPlaidTransactions, delinkPlaid, disconnectPlaid,
         // investmentTransactions + holdings already exposed above
-        isSyncing, totalBalance, monthlyIncome, monthlyExpense,
+        isSyncing, totalBalance, assetsTotal, liabilitiesTotal, monthlyIncome, monthlyExpense,
         currentMonth, setCurrentMonth,
         snoozeEntity, setSnoozeEntity,
         deviceId, householdId, changeHouseholdId,

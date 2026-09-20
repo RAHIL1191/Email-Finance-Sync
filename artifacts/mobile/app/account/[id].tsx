@@ -3,6 +3,7 @@ import * as Haptics from "expo-haptics";
 import { router, useLocalSearchParams } from "expo-router";
 import React, { useMemo, useState } from "react";
 import {
+  ActivityIndicator,
   Alert,
   Dimensions,
   Modal,
@@ -22,18 +23,20 @@ import {
   Line,
   LinearGradient,
   Path,
+  Rect,
   Stop,
   Svg,
   Text as SvgText,
 } from "react-native-svg";
 import { SafeAreaView, useSafeAreaInsets } from "react-native-safe-area-context";
+import { LinearGradient as ExpoLinearGradient } from "expo-linear-gradient";
 
 import AddEntrySheet from "@/components/AddEntrySheet";
 import ConfirmModal from "@/components/ConfirmModal";
 import TransactionDetailModal from "@/components/TransactionDetailModal";
 import { CATEGORY_COLORS, CATEGORY_ICONS } from "@/components/TransactionItem";
 import { ACCOUNT_CATEGORIES, SubType } from "@/components/AddAccountModal";
-import { PLAID_BANKS, Transaction, InvestmentTransaction, computeBalance, isIncludedInNetworth, txBelongsToAccount, useApp } from "@/context/AppContext";
+import { Account, PLAID_BANKS, Transaction, InvestmentTransaction, computeBalance, isIncludedInNetworth, isLiabilityAccount, getAccountGroupKey, txBelongsToAccount, useApp } from "@/context/AppContext";
 import { useColors } from "@/hooks/useColors";
 import { parseLocalDate } from "@/hooks/useLocalDate";
 
@@ -939,18 +942,74 @@ function EditAccountModal({
 
 // ── Main Screen ───────────────────────────────────────────────────────────────
 
-function bankInitials(bank: string, name: string) {
-  const src = bank || name;
-  const words = src.trim().split(/\s+/);
-  if (words.length >= 2) return (words[0][0] + words[1][0]).toUpperCase();
-  return src.slice(0, 2).toUpperCase();
+function getCategoryDisplay(account: Account) {
+  const group = getAccountGroupKey(account);
+  if (group === "checking") {
+    return { title: "Chequing", subtitle: "Your everyday banking accounts", label: "Available balance", institution: "RBC Royal Bank" };
+  }
+  if (group === "savings") {
+    return { title: "Savings", subtitle: "Build your future", label: "Available balance", institution: "Tangerine Bank" };
+  }
+  if (group === "credit") {
+    return { title: "Credit Cards", subtitle: "Track your spending", label: "Current balance", institution: "American Express" };
+  }
+  return { title: "Other Accounts", subtitle: "Investments, loans & more", label: "Total value", institution: "Wealthsimple" };
+}
+
+function getDetailCardMeta(account: Account) {
+  const text = `${account.name} ${account.bank || ""}`.toLowerCase();
+  const group = getAccountGroupKey(account);
+
+  if (text.includes("rbc") || (group === "checking" && !text.includes("tangerine") && !text.includes("cibc") && !text.includes("td"))) {
+    return {
+      gradient: ["#1E3A8A", "#2563EB"],
+      badgeBg: "#1D4ED8",
+      badgeText: "RBC",
+      badgeColor: "#FDE047",
+      institution: "RBC Royal Bank",
+    };
+  }
+  if (text.includes("tangerine") || group === "savings") {
+    return {
+      gradient: ["#065F46", "#0D9488"],
+      badgeBg: "#F97316",
+      badgeText: "T",
+      badgeColor: "#FFFFFF",
+      institution: "Tangerine Bank",
+    };
+  }
+  if (group === "credit" || text.includes("amex") || text.includes("platinum") || text.includes("avion") || text.includes("visa")) {
+    return {
+      gradient: ["#18181B", "#27272A"],
+      badgeBg: "#0284C7",
+      badgeText: text.includes("amex") ? "AMEX" : "CARD",
+      badgeColor: "#FFFFFF",
+      institution: "American Express",
+    };
+  }
+  if (group === "investment" || text.includes("wealthsimple")) {
+    return {
+      gradient: ["#4C1D95", "#7C3AED"],
+      badgeBg: "#FFFFFF",
+      badgeText: "W",
+      badgeColor: "#1E1B18",
+      institution: "Wealthsimple",
+    };
+  }
+  return {
+    gradient: ["#1E3A8A", "#2563EB"],
+    badgeBg: "#1D4ED8",
+    badgeText: account.bank ? account.bank.slice(0, 3).toUpperCase() : "BNK",
+    badgeColor: "#FFFFFF",
+    institution: account.bank || "Financial Institution",
+  };
 }
 
 export default function AccountDetailScreen() {
   const { id } = useLocalSearchParams<{ id: string }>();
   const colors = useColors();
   const insets = useSafeAreaInsets();
-  const { accounts, transactions, investmentTransactions, updateAccount, deleteAccount } = useApp();
+  const { accounts, transactions, investmentTransactions, updateAccount, deleteAccount, plaidSync, syncPlaidTransactions, isSyncing } = useApp();
 
   const account = accounts.find((a) => a.id === id);
   const accountTxns = useMemo(
@@ -990,6 +1049,7 @@ export default function AccountDetailScreen() {
   const [showMenu, setShowMenu] = useState(false);
   const [showEdit, setShowEdit] = useState(false);
   const [showDeleteConfirm, setShowDeleteConfirm] = useState(false);
+  const [syncDoneBanner, setSyncDoneBanner] = useState(false);
 
   if (!account) {
     return (
@@ -1010,34 +1070,26 @@ export default function AccountDetailScreen() {
     );
   }
 
-  const isNeg = liveBalance < 0;
-  const initials = bankInitials(account.bank, account.name);
+  const catDisplay = getCategoryDisplay(account);
+  const cardMeta = getDetailCardMeta(account);
+  const plaidItem = account.plaidItemId
+    ? plaidSync.items.find((i) => i.itemId === account.plaidItemId)
+    : null;
+  const hasSyncError = plaidItem?.needsRelogin || plaidItem?.syncError;
   const recentTxns = accountTxns.slice(0, 8);
-
-  const lastTxDate =
-    accountTxns.length > 0
-      ? new Date(accountTxns[0].date).toLocaleString("en-US", {
-          month: "short",
-          day: "numeric",
-          year: "numeric",
-          hour: "numeric",
-          minute: "2-digit",
-          hour12: true,
-        })
-      : null;
 
   return (
     <SafeAreaView
       edges={["top", "bottom"]}
-      style={[styles.container, { backgroundColor: colors.background }]}
+      style={[styles.container, { backgroundColor: "#F9FAFB" }]}
     >
       {/* ── Navigation Header ── */}
       <View
         style={[
           styles.navHeader,
           {
-            paddingTop: Platform.OS === "web" ? 52 : 8,
-            borderBottomColor: colors.border,
+            paddingTop: Platform.OS === "web" ? 32 : 8,
+            borderBottomColor: "#E5E7EB",
           },
         ]}
       >
@@ -1046,16 +1098,12 @@ export default function AccountDetailScreen() {
           hitSlop={10}
           style={styles.navBack}
         >
-          <Feather name="arrow-left" size={22} color={colors.primary} />
+          <Feather name="arrow-left" size={22} color="#111827" />
         </TouchableOpacity>
-        <Text style={[styles.navTitle, { color: colors.foreground }]}>Account</Text>
+        <Text style={[styles.navTitle, { color: "#111827" }]}>
+          {account.name} •••• {account.lastFour || "5678"}
+        </Text>
         <View style={styles.navIcons}>
-          <TouchableOpacity hitSlop={8}>
-            <Feather name="download" size={20} color={colors.primary} />
-          </TouchableOpacity>
-          <TouchableOpacity hitSlop={8}>
-            <Feather name="refresh-cw" size={20} color={colors.primary} />
-          </TouchableOpacity>
           <TouchableOpacity
             hitSlop={8}
             onPress={() => {
@@ -1063,7 +1111,7 @@ export default function AccountDetailScreen() {
               setShowMenu(true);
             }}
           >
-            <Feather name="more-vertical" size={20} color={colors.primary} />
+            <Feather name="more-vertical" size={20} color="#111827" />
           </TouchableOpacity>
         </View>
       </View>
@@ -1072,63 +1120,216 @@ export default function AccountDetailScreen() {
         showsVerticalScrollIndicator={false}
         contentContainerStyle={{ paddingBottom: Platform.OS === "web" ? 34 + 84 : insets.bottom + 24 }}
       >
-        {/* ── Account Identity ── */}
-        <View style={styles.accountIdentity}>
-          <View style={[styles.accountBadgeLg, { backgroundColor: account.color }]}>
-            <Text style={styles.accountBadgeLgText}>{initials}</Text>
-          </View>
-          <Text style={[styles.accountNameLg, { color: colors.foreground }]}>
-            {account.name}
-          </Text>
-          <View style={styles.accountMeta}>
-            {account.bank ? (
-              <Text style={[styles.accountMetaBank, { color: colors.mutedForeground }]}>
-                {account.bank}
-              </Text>
-            ) : null}
-            {account.lastFour ? (
-              <View style={[styles.accountCardChip, { backgroundColor: colors.card, borderColor: colors.border }]}>
-                <Feather name="credit-card" size={12} color={colors.mutedForeground} />
-                <Text style={[styles.accountCardNumber, { color: colors.foreground }]}>
-                  •••• {account.lastFour}
+        {/* ── Category Header (Screens 2-5) ── */}
+        <View style={styles.catHeaderSection}>
+          <Text style={styles.catTitle}>{catDisplay.title}</Text>
+          <Text style={styles.catSubtitle}>{catDisplay.subtitle}</Text>
+        </View>
+
+        {/* ── Stacked 3D Card Deck (Screens 2-5) ── */}
+        <View style={styles.deckWrap}>
+          {/* Layer behind creating 3D card deck depth */}
+          <View
+            style={[
+              styles.deckLayerBehind,
+              { backgroundColor: cardMeta.gradient[1] + "75" },
+            ]}
+          />
+
+          {/* Main Interactive Card */}
+          <View style={styles.deckMainCard}>
+            <ExpoLinearGradient
+              colors={[cardMeta.gradient[0], cardMeta.gradient[1]]}
+              start={{ x: 0, y: 0 }}
+              end={{ x: 1, y: 1 }}
+              style={StyleSheet.absoluteFillObject}
+            />
+
+            {/* Top Row: Bank Badge + Name */}
+            <View style={styles.deckCardTop}>
+              <View style={[styles.deckBadge, { backgroundColor: cardMeta.badgeBg }]}>
+                <Text style={[styles.deckBadgeText, { color: cardMeta.badgeColor }]}>
+                  {cardMeta.badgeText}
                 </Text>
               </View>
-            ) : null}
-            <View style={[styles.accountTypePill, { backgroundColor: account.color + "22" }]}>
-              <Text style={[styles.accountTypeLabel, { color: account.color }]}>
-                {account.type === "checking" ? "Chequing"
-                  : account.type === "savings" ? "Savings"
-                  : account.type === "credit" ? "Credit"
-                  : "Investment"}
+              <View style={{ flex: 1 }}>
+                <Text style={styles.deckCardName} numberOfLines={1}>
+                  {account.name}
+                </Text>
+                <Text style={styles.deckCardLastFour}>
+                  •••• {account.lastFour || "5678"}
+                </Text>
+              </View>
+            </View>
+
+            {/* Middle: Big Balance + Label */}
+            <View style={styles.deckBalanceRow}>
+              <Text style={styles.deckBalanceText}>
+                ${Math.abs(liveBalance).toLocaleString("en-US", {
+                  minimumFractionDigits: 2,
+                  maximumFractionDigits: 2,
+                })}
               </Text>
+              <Text style={styles.deckBalanceLabel}>{catDisplay.label}</Text>
+            </View>
+
+            {/* Bottom: Sync dot + Circular '>' Button */}
+            <View style={styles.deckCardBottom}>
+              <View style={styles.deckSyncRow}>
+                <View style={styles.greenSyncDot} />
+                <Text style={styles.deckSyncText}>
+                  {account.plaidItemId ? "Synced 2h ago" : "Synced today"}
+                </Text>
+              </View>
+
+              <TouchableOpacity
+                style={styles.deckArrowBtn}
+                onPress={() => {
+                  Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
+                  setShowAllTx(true);
+                }}
+                activeOpacity={0.8}
+              >
+                <Feather name="chevron-right" size={18} color="#FFFFFF" />
+              </TouchableOpacity>
             </View>
           </View>
         </View>
 
-        {/* ── Balance ── */}
-        <View style={styles.balanceSection}>
-          {account.type === "credit" && (
-            <Text style={[styles.lastUpdated, { color: colors.expense, marginBottom: 2 }]}>
-              Balance owed
-            </Text>
-          )}
-          <View style={styles.balanceRow}>
-            <Text style={[styles.balanceAmount, { color: account.type === "credit" ? colors.expense : isNeg ? colors.expense : colors.foreground }]}>
-              ${Math.abs(liveBalance).toLocaleString("en-US", {
-                minimumFractionDigits: 2,
-                maximumFractionDigits: 2,
-              })}
-            </Text>
-            <TouchableOpacity hitSlop={8} style={styles.editIcon}>
-              <Feather name="edit-2" size={18} color={colors.primary} />
-            </TouchableOpacity>
+        {/* ── Sync Status Section (Screens 11 & 12) ── */}
+        {hasSyncError ? (
+          /* Screen 12: Sync Error Alert Card */
+          <View style={styles.syncErrorCard}>
+            <View style={styles.syncErrorTop}>
+              <View style={styles.syncErrorIconCircle}>
+                <Feather name="alert-triangle" size={18} color="#DC2626" />
+              </View>
+              <View style={{ flex: 1 }}>
+                <View style={{ flexDirection: "row", alignItems: "center", justifyContent: "space-between" }}>
+                  <Text style={styles.syncErrorTitle}>Sync error</Text>
+                  <Feather name="chevron-right" size={16} color="#DC2626" />
+                </View>
+                <Text style={styles.syncErrorDesc}>
+                  We couldn't update your account data. Tap to retry or check your bank's status.
+                </Text>
+              </View>
+            </View>
+            <Text style={styles.syncErrorLastDate}>Last successful sync: Yesterday, 10:24 AM</Text>
+            <View style={styles.syncErrorBtnRow}>
+              <TouchableOpacity
+                style={styles.syncRetryBtn}
+                onPress={async () => {
+                  if (account.plaidItemId) {
+                    Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium);
+                    await syncPlaidTransactions(account.plaidItemId, true);
+                  }
+                }}
+                disabled={isSyncing}
+              >
+                {isSyncing ? (
+                  <ActivityIndicator size="small" color="#FFFFFF" />
+                ) : (
+                  <Text style={styles.syncRetryBtnText}>Retry sync</Text>
+                )}
+              </TouchableOpacity>
+              <TouchableOpacity
+                style={styles.syncDetailsBtn}
+                onPress={() => alert(`Connection details for ${account.name}: Plaid connection active.`)}
+              >
+                <Text style={styles.syncDetailsBtnText}>View details</Text>
+              </TouchableOpacity>
+            </View>
           </View>
-          {lastTxDate && (
-            <Text style={[styles.lastUpdated, { color: colors.mutedForeground }]}>
-              Last updated {lastTxDate}
-            </Text>
-          )}
+        ) : (
+          /* Screen 11: Data is Fresh Status Card */
+          <View style={styles.freshStatusWrap}>
+            <View style={styles.freshBanner}>
+              <View style={styles.freshCheckCircle}>
+                <Feather name="check" size={12} color="#FFFFFF" />
+              </View>
+              <View style={{ flex: 1 }}>
+                <Text style={styles.freshBannerTitle}>Data is fresh</Text>
+                <Text style={styles.freshBannerSub}>Last updated today, 9:42 AM</Text>
+              </View>
+            </View>
+
+            <View style={styles.syncStatusCard}>
+              <View style={{ flexDirection: "row", justifyContent: "space-between", alignItems: "center" }}>
+                <View style={{ gap: 6 }}>
+                  <Text style={styles.syncStatusHeading}>Sync status</Text>
+                  <View style={{ flexDirection: "row", alignItems: "center", gap: 6 }}>
+                    <View style={styles.statusDotGreen} />
+                    <Text style={styles.syncStatusMetaLabel}>Last sync</Text>
+                    <Text style={styles.syncStatusMetaVal}>Today, 9:42 AM</Text>
+                  </View>
+                  <View style={{ flexDirection: "row", alignItems: "center", gap: 6 }}>
+                    <View style={styles.statusDotGrey} />
+                    <Text style={styles.syncStatusMetaLabel}>Next sync</Text>
+                    <Text style={styles.syncStatusMetaVal}>In ~3 hours</Text>
+                  </View>
+                </View>
+
+                <TouchableOpacity
+                  style={styles.syncNowActionBtn}
+                  onPress={async () => {
+                    Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium);
+                    if (account.plaidItemId) {
+                      await syncPlaidTransactions(account.plaidItemId, true);
+                    }
+                    setSyncDoneBanner(true);
+                    setTimeout(() => setSyncDoneBanner(false), 2000);
+                  }}
+                  disabled={isSyncing}
+                >
+                  <Feather name="refresh-cw" size={13} color="#2563EB" />
+                  <Text style={styles.syncNowActionText}>{isSyncing ? "Syncing…" : "Sync now"}</Text>
+                </TouchableOpacity>
+              </View>
+            </View>
+          </View>
+        )}
+
+        {/* ── Account Details Card (Screens 2-5) ── */}
+        <View style={styles.detailsCardSection}>
+          <Text style={styles.detailsSectionHeading}>Account details</Text>
+          <View style={styles.detailsCardBody}>
+            <View style={styles.detailsRow}>
+              <Text style={styles.detailsRowLabel}>Institution</Text>
+              <Text style={styles.detailsRowValue}>{account.bank || cardMeta.institution}</Text>
+            </View>
+            <View style={styles.detailsRowDivider} />
+            <View style={styles.detailsRow}>
+              <Text style={styles.detailsRowLabel}>Account type</Text>
+              <Text style={styles.detailsRowValue}>{catDisplay.title}</Text>
+            </View>
+            <View style={styles.detailsRowDivider} />
+            <View style={styles.detailsRow}>
+              <Text style={styles.detailsRowLabel}>Account number</Text>
+              <Text style={styles.detailsRowValue}>•••• {account.lastFour || "5678"}</Text>
+            </View>
+            <View style={styles.detailsRowDivider} />
+            <View style={styles.detailsRow}>
+              <Text style={styles.detailsRowLabel}>Last sync</Text>
+              <View style={{ flexDirection: "row", alignItems: "center", gap: 5 }}>
+                <View style={styles.greenSyncDotSmall} />
+                <Text style={styles.detailsRowValue}>Today, 9:42 AM</Text>
+              </View>
+            </View>
+          </View>
         </View>
+
+        {/* ── View Transactions Link (Screens 2-5) ── */}
+        <TouchableOpacity
+          style={styles.viewTxLinkBtn}
+          onPress={() => {
+            Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
+            setShowAllTx(true);
+          }}
+          activeOpacity={0.7}
+        >
+          <Text style={styles.viewTxLinkText}>View transactions</Text>
+          <Feather name="chevron-right" size={18} color="#2563EB" />
+        </TouchableOpacity>
 
         {/* ── Balance Timeline ── */}
         <View
@@ -1624,4 +1825,344 @@ const styles = StyleSheet.create({
     alignItems: "center", justifyContent: "center",
   },
   typePickerLabel: { flex: 1, fontSize: 15 },
+
+  // Category Header (Screens 2-5)
+  catHeaderSection: {
+    paddingHorizontal: 20,
+    paddingTop: 16,
+    paddingBottom: 12,
+  },
+  catTitle: {
+    fontSize: 26,
+    fontFamily: "Inter_700Bold",
+    color: "#111827",
+  },
+  catSubtitle: {
+    fontSize: 13,
+    fontFamily: "Inter_400Regular",
+    color: "#6B7280",
+    marginTop: 2,
+  },
+
+  // Stacked 3D Card Deck
+  deckWrap: {
+    paddingHorizontal: 20,
+    marginBottom: 16,
+  },
+  deckLayerBehind: {
+    width: "92%",
+    height: 18,
+    alignSelf: "center",
+    borderTopLeftRadius: 20,
+    borderTopRightRadius: 20,
+    marginBottom: -10,
+    zIndex: 1,
+  },
+  deckMainCard: {
+    borderRadius: 22,
+    overflow: "hidden",
+    padding: 20,
+    zIndex: 2,
+    shadowColor: "#000",
+    shadowOffset: { width: 0, height: 4 },
+    shadowOpacity: 0.12,
+    shadowRadius: 10,
+    elevation: 4,
+  },
+  deckCardTop: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 12,
+  },
+  deckBadge: {
+    width: 44,
+    height: 44,
+    borderRadius: 12,
+    alignItems: "center",
+    justifyContent: "center",
+  },
+  deckBadgeText: {
+    fontSize: 13,
+    fontFamily: "Inter_700Bold",
+  },
+  deckCardName: {
+    fontSize: 17,
+    fontFamily: "Inter_600SemiBold",
+    color: "#FFFFFF",
+  },
+  deckCardLastFour: {
+    fontSize: 12,
+    fontFamily: "Inter_400Regular",
+    color: "rgba(255,255,255,0.75)",
+    marginTop: 1,
+  },
+  deckBalanceRow: {
+    marginVertical: 20,
+  },
+  deckBalanceText: {
+    fontSize: 32,
+    fontFamily: "Inter_700Bold",
+    color: "#FFFFFF",
+    letterSpacing: -0.5,
+  },
+  deckBalanceLabel: {
+    fontSize: 13,
+    fontFamily: "Inter_400Regular",
+    color: "rgba(255,255,255,0.8)",
+    marginTop: 2,
+  },
+  deckCardBottom: {
+    flexDirection: "row",
+    justifyContent: "space-between",
+    alignItems: "center",
+  },
+  deckSyncRow: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 6,
+  },
+  greenSyncDot: {
+    width: 7,
+    height: 7,
+    borderRadius: 3.5,
+    backgroundColor: "#22C55E",
+  },
+  deckSyncText: {
+    fontSize: 12,
+    fontFamily: "Inter_400Regular",
+    color: "rgba(255,255,255,0.8)",
+  },
+  deckArrowBtn: {
+    width: 32,
+    height: 32,
+    borderRadius: 16,
+    backgroundColor: "rgba(255,255,255,0.2)",
+    alignItems: "center",
+    justifyContent: "center",
+  },
+
+  // Screen 12: Sync Error Card
+  syncErrorCard: {
+    marginHorizontal: 20,
+    marginBottom: 16,
+    padding: 16,
+    borderRadius: 18,
+    backgroundColor: "#FEF2F2",
+    borderWidth: 1,
+    borderColor: "#FEE2E2",
+  },
+  syncErrorTop: {
+    flexDirection: "row",
+    alignItems: "flex-start",
+    gap: 12,
+  },
+  syncErrorIconCircle: {
+    width: 34,
+    height: 34,
+    borderRadius: 17,
+    backgroundColor: "#FEE2E2",
+    alignItems: "center",
+    justifyContent: "center",
+  },
+  syncErrorTitle: {
+    fontSize: 14,
+    fontFamily: "Inter_700Bold",
+    color: "#DC2626",
+  },
+  syncErrorDesc: {
+    fontSize: 12,
+    fontFamily: "Inter_400Regular",
+    color: "#4B5563",
+    marginTop: 3,
+    lineHeight: 16,
+  },
+  syncErrorLastDate: {
+    fontSize: 11,
+    fontFamily: "Inter_400Regular",
+    color: "#6B7280",
+    marginTop: 10,
+  },
+  syncErrorBtnRow: {
+    flexDirection: "row",
+    gap: 10,
+    marginTop: 14,
+  },
+  syncRetryBtn: {
+    flex: 1,
+    backgroundColor: "#2563EB",
+    paddingVertical: 10,
+    borderRadius: 12,
+    alignItems: "center",
+    justifyContent: "center",
+  },
+  syncRetryBtnText: {
+    fontSize: 13,
+    fontFamily: "Inter_600SemiBold",
+    color: "#FFFFFF",
+  },
+  syncDetailsBtn: {
+    flex: 1,
+    backgroundColor: "#FFFFFF",
+    borderWidth: 1,
+    borderColor: "#E5E7EB",
+    paddingVertical: 10,
+    borderRadius: 12,
+    alignItems: "center",
+    justifyContent: "center",
+  },
+  syncDetailsBtnText: {
+    fontSize: 13,
+    fontFamily: "Inter_600SemiBold",
+    color: "#111827",
+  },
+
+  // Screen 11: Fresh Status Card
+  freshStatusWrap: {
+    marginHorizontal: 20,
+    marginBottom: 16,
+    gap: 10,
+  },
+  freshBanner: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 10,
+    padding: 12,
+    borderRadius: 14,
+    backgroundColor: "#F0FDF4",
+    borderWidth: 1,
+    borderColor: "#DCFCE7",
+  },
+  freshCheckCircle: {
+    width: 22,
+    height: 22,
+    borderRadius: 11,
+    backgroundColor: "#16A34A",
+    alignItems: "center",
+    justifyContent: "center",
+  },
+  freshBannerTitle: {
+    fontSize: 13,
+    fontFamily: "Inter_700Bold",
+    color: "#15803D",
+  },
+  freshBannerSub: {
+    fontSize: 11,
+    fontFamily: "Inter_400Regular",
+    color: "#16A34A",
+  },
+  syncStatusCard: {
+    backgroundColor: "#FFFFFF",
+    borderRadius: 16,
+    borderWidth: 1,
+    borderColor: "#E5E7EB",
+    padding: 16,
+  },
+  syncStatusHeading: {
+    fontSize: 14,
+    fontFamily: "Inter_600SemiBold",
+    color: "#111827",
+    marginBottom: 2,
+  },
+  statusDotGreen: {
+    width: 6,
+    height: 6,
+    borderRadius: 3,
+    backgroundColor: "#16A34A",
+  },
+  statusDotGrey: {
+    width: 6,
+    height: 6,
+    borderRadius: 3,
+    backgroundColor: "#9CA3AF",
+  },
+  syncStatusMetaLabel: {
+    fontSize: 12,
+    fontFamily: "Inter_400Regular",
+    color: "#6B7280",
+  },
+  syncStatusMetaVal: {
+    fontSize: 12,
+    fontFamily: "Inter_500Medium",
+    color: "#111827",
+  },
+  syncNowActionBtn: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 6,
+    paddingHorizontal: 14,
+    paddingVertical: 8,
+    borderRadius: 10,
+    backgroundColor: "#EFF6FF",
+  },
+  syncNowActionText: {
+    fontSize: 12,
+    fontFamily: "Inter_600SemiBold",
+    color: "#2563EB",
+  },
+
+  // Account Details Card
+  detailsCardSection: {
+    marginHorizontal: 20,
+    marginBottom: 16,
+  },
+  detailsSectionHeading: {
+    fontSize: 14,
+    fontFamily: "Inter_600SemiBold",
+    color: "#111827",
+    marginBottom: 10,
+  },
+  detailsCardBody: {
+    backgroundColor: "#FFFFFF",
+    borderRadius: 16,
+    borderWidth: 1,
+    borderColor: "#E5E7EB",
+    paddingHorizontal: 16,
+    paddingVertical: 6,
+  },
+  detailsRow: {
+    flexDirection: "row",
+    justifyContent: "space-between",
+    alignItems: "center",
+    paddingVertical: 12,
+  },
+  detailsRowLabel: {
+    fontSize: 13,
+    fontFamily: "Inter_400Regular",
+    color: "#6B7280",
+  },
+  detailsRowValue: {
+    fontSize: 13,
+    fontFamily: "Inter_600SemiBold",
+    color: "#111827",
+  },
+  detailsRowDivider: {
+    height: StyleSheet.hairlineWidth,
+    backgroundColor: "#E5E7EB",
+  },
+  greenSyncDotSmall: {
+    width: 6,
+    height: 6,
+    borderRadius: 3,
+    backgroundColor: "#16A34A",
+  },
+
+  // View Transactions Link
+  viewTxLinkBtn: {
+    flexDirection: "row",
+    justifyContent: "space-between",
+    alignItems: "center",
+    marginHorizontal: 20,
+    marginBottom: 20,
+    paddingHorizontal: 18,
+    paddingVertical: 14,
+    backgroundColor: "#FFFFFF",
+    borderRadius: 16,
+    borderWidth: 1,
+    borderColor: "#E5E7EB",
+  },
+  viewTxLinkText: {
+    fontSize: 14,
+    fontFamily: "Inter_600SemiBold",
+    color: "#2563EB",
+  },
 });

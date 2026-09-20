@@ -380,7 +380,7 @@ export default function HomeScreen() {
               <Text style={styles.balanceMainText}>
                 {hideBalance
                   ? "$••••••••"
-                  : `$${totalBalance.toLocaleString("en-US", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`}
+                  : `${totalBalance < 0 ? "-" : ""}$${Math.round(Math.abs(totalBalance)).toLocaleString("en-US")}`}
               </Text>
             </View>
 
