@@ -1997,7 +1997,17 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
           fetch(`${getApiBase()}/api/plaid/items`, { headers: hdrs })
             .then(async (r) => { if (r.ok) { const items: PlaidItem[] = await r.json(); setPlaidSync({ items }); } }),
           fetch(`${getApiBase()}/api/bills`, { headers: hdrs })
-            .then(async (r) => { if (r.ok) mergeById(setBills, await r.json()); }),
+            .then(async (r) => {
+              if (r.ok) {
+                const remoteBills: Bill[] = await r.json();
+                mergeById(setBills, remoteBills);
+                const remoteIds = new Set((remoteBills || []).map((b) => b.id));
+                const missingOnServer = (billsRef.current || []).filter((b) => !remoteIds.has(b.id));
+                if (missingOnServer.length > 0) {
+                  apiCall("/api/bills/batch", "POST", hId, dId, { bills: missingOnServer });
+                }
+              }
+            }),
           fetch(`${getApiBase()}/api/budgets`, { headers: hdrs })
             .then(async (r) => { if (r.ok) mergeById(setBudgets, await r.json()); }),
           fetch(`${getApiBase()}/api/goals`, { headers: hdrs })
@@ -2563,7 +2573,11 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
     const newB: Bill = { ...b, id: genId(), createdAt: now, updatedAt: now };
     billsRef.current = [...billsRef.current, newB];
     setBills((prev) => [...prev, newB]);
-    apiCall("/api/bills", "POST", householdIdRef.current, deviceIdRef.current, newB);
+    apiCall("/api/bills", "POST", householdIdRef.current, deviceIdRef.current, {
+      ...newB,
+      householdId: householdIdRef.current,
+      deviceId: deviceIdRef.current,
+    });
     scheduleBillNotifications(newB);
     setTimeout(() => {
       detectBillPaymentsRef.current?.();
@@ -2573,7 +2587,11 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
   const updateBill = useCallback((id: string, updates: Partial<Bill>) => {
     billsRef.current = billsRef.current.map((b) => (b.id === id ? { ...b, ...updates, updatedAt: new Date().toISOString() } : b));
     setBills((prev) => prev.map((b) => (b.id === id ? { ...b, ...updates, updatedAt: new Date().toISOString() } : b)));
-    apiCall(`/api/bills/${id}`, "PUT", householdIdRef.current, deviceIdRef.current, updates);
+    apiCall(`/api/bills/${id}`, "PUT", householdIdRef.current, deviceIdRef.current, {
+      ...updates,
+      householdId: householdIdRef.current,
+      deviceId: deviceIdRef.current,
+    });
     const existing = billsRef.current.find((b) => b.id === id);
     if (existing) scheduleBillNotifications({ ...existing, ...updates });
     setTimeout(() => {
