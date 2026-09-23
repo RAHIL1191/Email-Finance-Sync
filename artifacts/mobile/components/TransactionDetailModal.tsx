@@ -18,6 +18,7 @@ import {
   Transaction,
   isRefundTransaction,
   parseNoteAndTag,
+  getShortBankName,
   useApp,
 } from "@/context/AppContext";
 import { useColors } from "@/hooks/useColors";
@@ -829,12 +830,14 @@ export default function TransactionDetailModal({ visible, onClose, transaction }
               {account && (
                 <View style={[s.accountCard, { backgroundColor: colors.card, borderColor: colors.border }]}>
                   <View style={[s.bankBadge, { backgroundColor: account.color }]}>
-                    <Text style={s.bankBadgeText}>{account.bank.slice(0, 2).toUpperCase()}</Text>
+                    <Text style={s.bankBadgeText}>
+                      {getShortBankName(account.bank, account.name).slice(0, 3).toUpperCase()}
+                    </Text>
                   </View>
                   <View style={s.accountInfo}>
                     <Text style={[s.accountName, { color: colors.foreground }]}>{account.name}</Text>
                     <Text style={[s.accountSub, { color: colors.mutedForeground }]}>
-                      {account.type.charAt(0).toUpperCase() + account.type.slice(1)} · {account.bank}
+                      {account.type.charAt(0).toUpperCase() + account.type.slice(1)} · {getShortBankName(account.bank, account.name)}
                     </Text>
                   </View>
                 </View>

@@ -1,10 +1,12 @@
 import { Feather } from "@expo/vector-icons";
+import AsyncStorage from "@react-native-async-storage/async-storage";
 import * as Haptics from "expo-haptics";
 import { router, useLocalSearchParams } from "expo-router";
-import React, { useMemo, useState } from "react";
+import React, { useEffect, useMemo, useState } from "react";
 import {
   ActivityIndicator,
   Alert,
+  BackHandler,
   Dimensions,
   Modal,
   Platform,
@@ -36,9 +38,11 @@ import ConfirmModal from "@/components/ConfirmModal";
 import TransactionDetailModal from "@/components/TransactionDetailModal";
 import { CATEGORY_COLORS, CATEGORY_ICONS } from "@/components/TransactionItem";
 import { ACCOUNT_CATEGORIES, SubType } from "@/components/AddAccountModal";
-import { Account, PLAID_BANKS, Transaction, InvestmentTransaction, computeBalance, isIncludedInNetworth, isLiabilityAccount, getAccountGroupKey, txBelongsToAccount, useApp } from "@/context/AppContext";
+import { Account, PLAID_BANKS, Transaction, InvestmentTransaction, computeBalance, isIncludedInNetworth, isLiabilityAccount, getAccountGroupKey, getShortBankName, cleanCardDisplayName, txBelongsToAccount, useApp } from "@/context/AppContext";
 import { useColors } from "@/hooks/useColors";
-import { parseLocalDate } from "@/hooks/useLocalDate";
+import { parseLocalDate, toLocalYMD } from "@/hooks/useLocalDate";
+import DateTimePicker from "@react-native-community/datetimepicker";
+import PlaidLinkModal from "@/components/PlaidLinkModal";
 
 const { width: SCREEN_W } = Dimensions.get("window");
 
@@ -84,6 +88,26 @@ function buildBalanceHistory(
     balance: balances[i],
     label: d.toLocaleDateString("en-US", { month: "short", day: "numeric" }),
   }));
+}
+
+// ── Realistic Gold EMV Card Chip ──────────────────────────────────────────────
+
+function EmvChip() {
+  return (
+    <View style={styles.chipContainer}>
+      <ExpoLinearGradient
+        colors={["#E6C87C", "#C59B3F", "#A07928"]}
+        start={{ x: 0, y: 0 }}
+        end={{ x: 1, y: 1 }}
+        style={StyleSheet.absoluteFillObject}
+      />
+      <View style={styles.chipInnerBorder}>
+        <View style={styles.chipLineHorizontal} />
+        <View style={styles.chipLineVertical} />
+        <View style={styles.chipCenterPad} />
+      </View>
+    </View>
+  );
 }
 
 // ── Balance Timeline Chart ────────────────────────────────────────────────────
@@ -219,108 +243,201 @@ function AllTransactionsModal({
   visible,
   onClose,
   transactions,
+  accountName,
   onSelectTransaction,
 }: {
   visible: boolean;
   onClose: () => void;
   transactions: Transaction[];
+  accountName?: string;
   onSelectTransaction: (t: Transaction) => void;
 }) {
-  const colors = useColors();
   const insets = useSafeAreaInsets();
   const [search, setSearch] = useState("");
   const [viewMode, setViewMode] = useState<"Month View" | "Activity">("Month View");
 
+  useEffect(() => {
+    if (!visible) return;
+    const sub = BackHandler.addEventListener("hardwareBackPress", () => {
+      onClose();
+      return true;
+    });
+    return () => sub.remove();
+  }, [visible, onClose]);
+
+  const safeTxns = useMemo(() => Array.isArray(transactions) ? transactions : [], [transactions]);
+
   const filtered = useMemo(() => {
-    const q = search.toLowerCase();
-    return q
-      ? transactions.filter(
-          (t) =>
-            t.title.toLowerCase().includes(q) ||
-            t.category.toLowerCase().includes(q)
-        )
-      : transactions;
-  }, [transactions, search]);
+    const q = (search || "").trim().toLowerCase();
+    if (!q) return safeTxns;
+    return safeTxns.filter((t) => {
+      const title = String(t.title || "").toLowerCase();
+      const cat = String(t.category || "").toLowerCase();
+      const note = String(t.note || "").toLowerCase();
+      return title.includes(q) || cat.includes(q) || note.includes(q);
+    });
+  }, [safeTxns, search]);
+
+  const sorted = useMemo(() => {
+    return [...filtered].sort((a, b) => {
+      try {
+        const timeA = parseLocalDate(a.date).getTime();
+        const timeB = parseLocalDate(b.date).getTime();
+        return (isNaN(timeB) ? 0 : timeB) - (isNaN(timeA) ? 0 : timeA);
+      } catch {
+        return 0;
+      }
+    });
+  }, [filtered]);
 
   // Group by month
   const grouped = useMemo(() => {
     const map = new Map<string, Transaction[]>();
-    const sorted = [...filtered].sort(
-      (a, b) => parseLocalDate(b.date).getTime() - parseLocalDate(a.date).getTime()
-    );
     for (const tx of sorted) {
-      const d = parseLocalDate(tx.date);
-      const key = d.toLocaleDateString("en-US", {
-        month: "long",
-        year: "numeric",
-      }).toUpperCase();
+      let key = "RECENT";
+      try {
+        const d = parseLocalDate(tx.date);
+        key = d.toLocaleDateString("en-US", {
+          month: "long",
+          year: "numeric",
+        }).toUpperCase();
+      } catch {}
       (map.get(key) ? map.get(key)! : map.set(key, []).get(key)!).push(tx);
     }
     return Array.from(map.entries());
-  }, [filtered]);
+  }, [sorted]);
+
+  const renderTxRow = (tx: Transaction) => {
+    const icon = (CATEGORY_ICONS[tx.category] || "circle") as any;
+    const catColor = CATEGORY_COLORS[tx.category] || "#2563EB";
+    let dateStr = "";
+    let timeStr = "";
+    try {
+      const d = parseLocalDate(tx.date);
+      dateStr = d.toLocaleDateString("en-US", {
+        month: "short",
+        day: "numeric",
+        year: "numeric",
+      });
+      timeStr = d.toLocaleTimeString("en-US", {
+        hour: "numeric",
+        minute: "2-digit",
+        hour12: true,
+      });
+    } catch {
+      dateStr = String(tx.date || "");
+    }
+    const numAmount = typeof tx.amount === "number" ? tx.amount : parseFloat(String(tx.amount || 0)) || 0;
+    const isIncome = tx.type === "income";
+
+    return (
+      <TouchableOpacity
+        key={tx.id}
+        style={styles.allTxCardRow}
+        onPress={() => {
+          Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
+          onSelectTransaction(tx);
+        }}
+        activeOpacity={0.7}
+      >
+        <View style={[styles.allTxIconWrap, { backgroundColor: catColor + "18" }]}>
+          <Feather name={icon} size={18} color={catColor} />
+        </View>
+        <View style={styles.allTxTextWrap}>
+          <Text style={styles.allTxRowTitle} numberOfLines={1}>
+            {tx.title || "Transaction"}
+          </Text>
+          <Text style={styles.allTxRowMeta} numberOfLines={1}>
+            {dateStr}{timeStr ? ` · ${timeStr}` : ""}{tx.category ? ` · ${tx.category}` : ""}
+          </Text>
+        </View>
+        <Text style={[styles.allTxRowAmount, { color: isIncome ? "#16A34A" : "#111827" }]}>
+          {isIncome ? "+" : "-"}${Math.abs(numAmount).toFixed(2)}
+        </Text>
+      </TouchableOpacity>
+    );
+  };
 
   return (
     <Modal
       visible={visible}
       animationType="slide"
-      presentationStyle="pageSheet"
+      presentationStyle="fullScreen"
       onRequestClose={onClose}
     >
-      <View style={{ flex: 1, backgroundColor: colors.background }}>
+      <View style={{ flex: 1, backgroundColor: "#F4EFE6" }}>
         {/* Header */}
         <View
           style={[
             styles.allTxHeader,
             {
-              paddingTop: (Platform.OS === "web" ? 20 : insets.top) + 12,
-              borderBottomColor: colors.border,
+              paddingTop: Platform.OS === "web" ? 16 : insets.top + 8,
             },
           ]}
         >
-          <View style={{ flex: 1 }} />
-          <TouchableOpacity onPress={onClose} style={styles.allTxClose}>
-            <Feather name="x" size={20} color={colors.foreground} />
+          <TouchableOpacity
+            onPress={() => {
+              Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
+              onClose();
+            }}
+            style={styles.allTxBackBtn}
+            hitSlop={10}
+            activeOpacity={0.7}
+          >
+            <Feather name="arrow-left" size={20} color="#111827" />
           </TouchableOpacity>
+
+          <View style={{ flex: 1, alignItems: "center", marginHorizontal: 8 }}>
+            <Text style={styles.allTxHeaderTitle}>Transactions</Text>
+            {!!accountName && (
+              <Text style={styles.allTxHeaderSubtitle} numberOfLines={1}>
+                {accountName}
+              </Text>
+            )}
+          </View>
+
+          <View style={styles.allTxCountBadge}>
+            <Text style={styles.allTxCountText}>{filtered.length}</Text>
+          </View>
         </View>
 
         {/* Search */}
-        <View
-          style={[
-            styles.searchBar,
-            { backgroundColor: colors.muted, marginHorizontal: 16, marginTop: 12 },
-          ]}
-        >
-          <Feather name="search" size={16} color={colors.mutedForeground} />
+        <View style={styles.allTxSearchBox}>
+          <Feather name="search" size={16} color="#9CA3AF" style={{ marginRight: 8 }} />
           <TextInput
-            style={[styles.searchInput, { color: colors.foreground }]}
-            placeholder="Search transactions ..."
-            placeholderTextColor={colors.mutedForeground}
+            style={styles.allTxSearchInput}
+            placeholder="Search transactions..."
+            placeholderTextColor="#9CA3AF"
             value={search}
             onChangeText={setSearch}
             autoCorrect={false}
           />
           {search.length > 0 && (
-            <TouchableOpacity onPress={() => setSearch("")}>
-              <Feather name="x" size={14} color={colors.mutedForeground} />
+            <TouchableOpacity onPress={() => setSearch("")} hitSlop={8}>
+              <Feather name="x-circle" size={16} color="#9CA3AF" />
             </TouchableOpacity>
           )}
         </View>
 
-        {/* Toggle */}
-        <View style={[styles.viewToggleWrap, { backgroundColor: colors.muted, marginHorizontal: 16, marginTop: 12 }]}>
+        {/* View mode toggle */}
+        <View style={styles.allTxToggleWrap}>
           {(["Month View", "Activity"] as const).map((v) => (
             <TouchableOpacity
               key={v}
               style={[
-                styles.viewTogglePill,
-                viewMode === v && { backgroundColor: colors.background },
+                styles.allTxTogglePill,
+                viewMode === v && styles.allTxTogglePillActive,
               ]}
-              onPress={() => setViewMode(v)}
+              onPress={() => {
+                Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
+                setViewMode(v);
+              }}
+              activeOpacity={0.8}
             >
               <Text
                 style={[
-                  styles.viewToggleText,
-                  { color: viewMode === v ? colors.primary : colors.mutedForeground },
+                  styles.allTxToggleText,
+                  viewMode === v && styles.allTxToggleTextActive,
                 ]}
               >
                 {v}
@@ -331,74 +448,28 @@ function AllTransactionsModal({
 
         <ScrollView
           showsVerticalScrollIndicator={false}
-          contentContainerStyle={{ paddingBottom: insets.bottom + 32, paddingTop: 8 }}
+          contentContainerStyle={{
+            paddingBottom: Platform.OS === "web" ? 34 + 84 : insets.bottom + 32,
+            paddingTop: 4,
+          }}
         >
-          {grouped.length === 0 ? (
-            <View style={styles.allTxEmpty}>
-              <Feather name="inbox" size={36} color={colors.mutedForeground} />
-              <Text style={[styles.allTxEmptyText, { color: colors.mutedForeground }]}>
-                No transactions
+          {filtered.length === 0 ? (
+            <View style={styles.allTxEmptyBox}>
+              <View style={styles.allTxEmptyIconCircle}>
+                <Feather name="inbox" size={28} color="#9CA3AF" />
+              </View>
+              <Text style={styles.allTxEmptyTitle}>No transactions</Text>
+              <Text style={styles.allTxEmptySub}>
+                {search ? "Try searching for something else" : "No transactions found for this account"}
               </Text>
             </View>
+          ) : viewMode === "Activity" ? (
+            sorted.map((tx) => renderTxRow(tx))
           ) : (
             grouped.map(([month, txns]) => (
               <View key={month}>
-                <Text
-                  style={[styles.monthLabel, { color: colors.foreground, backgroundColor: colors.background }]}
-                >
-                  {month}
-                </Text>
-                {txns.map((tx) => {
-                  const icon = (CATEGORY_ICONS[tx.category] || "circle") as any;
-                  const catColor = CATEGORY_COLORS[tx.category] || colors.primary;
-                  const d = parseLocalDate(tx.date);
-                  const dateStr = d.toLocaleDateString("en-US", {
-                    month: "short",
-                    day: "numeric",
-                    year: "numeric",
-                  });
-                  const timeStr = d.toLocaleTimeString("en-US", {
-                    hour: "numeric",
-                    minute: "2-digit",
-                    hour12: true,
-                  });
-                  return (
-                    <TouchableOpacity
-                      key={tx.id}
-                      style={[
-                        styles.allTxRow,
-                        { backgroundColor: colors.card, borderColor: colors.border },
-                      ]}
-                      onPress={() => {
-                        Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
-                        onSelectTransaction(tx);
-                      }}
-                      activeOpacity={0.7}
-                    >
-                      <View style={[styles.allTxIcon, { backgroundColor: catColor + "22" }]}>
-                        <Feather name={icon} size={20} color={catColor} />
-                      </View>
-                      <View style={styles.allTxInfo}>
-                        <Text style={[styles.allTxTitle, { color: colors.foreground }]} numberOfLines={1}>
-                          {tx.title}
-                        </Text>
-                        <Text style={[styles.allTxMeta, { color: colors.mutedForeground }]} numberOfLines={1}>
-                          {dateStr}, {timeStr}
-                          {tx.category ? ` › ${tx.category}` : ""}
-                          {tx.note ? ` · ${tx.note}` : ""}
-                        </Text>
-                      </View>
-                      <Text
-                        style={[
-                          styles.allTxAmount,
-                          { color: tx.type === "income" ? "#10b981" : colors.foreground },
-                        ]}
-                      >
-                        ${tx.amount.toFixed(2)}
-                      </Text>
-                    </TouchableOpacity>
-                  );
-                })}
+                <Text style={styles.allTxMonthHeader}>{month}</Text>
+                {txns.map((tx) => renderTxRow(tx))}
               </View>
             ))
           )}
@@ -415,11 +486,13 @@ function AccountMenuSheet({
   onClose,
   onEdit,
   onDelete,
+  onSyncNow,
 }: {
   visible: boolean;
   onClose: () => void;
   onEdit: () => void;
   onDelete: () => void;
+  onSyncNow?: () => void;
 }) {
   const colors = useColors();
   const insets = useSafeAreaInsets();
@@ -444,6 +517,31 @@ function AccountMenuSheet({
         >
           {/* Handle bar */}
           <View style={[styles.menuHandle, { backgroundColor: colors.border }]} />
+
+          {/* Sync Now */}
+          {onSyncNow && (
+            <>
+              <TouchableOpacity
+                style={styles.menuRow}
+                activeOpacity={0.7}
+                onPress={() => {
+                  Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
+                  onClose();
+                  setTimeout(onSyncNow, 250);
+                }}
+              >
+                <View style={[styles.menuRowIcon, { backgroundColor: "#2563eb22" }]}>
+                  <Feather name="refresh-cw" size={20} color="#2563eb" />
+                </View>
+                <Text style={[styles.menuRowLabel, { color: colors.foreground }]}>
+                  Sync Now
+                </Text>
+                <Feather name="chevron-right" size={18} color={colors.mutedForeground} />
+              </TouchableOpacity>
+
+              <View style={[styles.menuDivider, { backgroundColor: colors.border }]} />
+            </>
+          )}
 
           {/* Edit */}
           <TouchableOpacity
@@ -511,6 +609,11 @@ function EditAccountModal({
   const [balance, setBalance] = useState(
     account ? String(Math.abs(account.balance)) : ""
   );
+  const [creditLimit, setCreditLimit] = useState(
+    account?.creditLimit ? String(account.creditLimit) : ""
+  );
+  const [dueDate, setDueDate] = useState(account?.dueDate ?? "");
+  const [showDatePicker, setShowDatePicker] = useState(false);
   const [lastFour, setLastFour] = useState(account?.lastFour ?? "");
   const [includeInNetworth, setIncludeInNetworth] = useState(
     account?.includeInNetworth !== false
@@ -530,6 +633,8 @@ function EditAccountModal({
       setName(account.name);
       setBank(account.bank ?? "");
       setBalance(String(Math.abs(account.balance)));
+      setCreditLimit(account.creditLimit ? String(account.creditLimit) : "");
+      setDueDate(account.dueDate ?? "");
       setLastFour(account.lastFour ?? "");
       setIncludeInNetworth(account.includeInNetworth !== false);
       setIsJoint(account.isJoint ?? false);
@@ -545,12 +650,15 @@ function EditAccountModal({
   const handleSave = () => {
     if (!name.trim() || !account) return;
     const raw = parseFloat(balance || "0");
+    const rawLimit = parseFloat(creditLimit || "0");
     const newBalance = account.type === "credit" ? -Math.abs(raw) : raw;
     updateAccount(account.id, {
       name: name.trim(),
       bank: bank.trim(),
       balance: newBalance,
       lastFour: lastFour.trim() || undefined,
+      creditLimit: rawLimit > 0 ? rawLimit : undefined,
+      dueDate: dueDate.trim() || undefined,
       includeInNetworth,
       isJoint,
       accountHolder: accountHolder.trim() || undefined,
@@ -679,6 +787,101 @@ function EditAccountModal({
               />
               <Text style={[styles.editCurrency, { color: colors.mutedForeground }]}>CAD</Text>
             </View>
+
+            {accountType === "credit" && (
+              <>
+                <View style={[styles.editDivider, { backgroundColor: colors.border }]} />
+                <View style={styles.editRow}>
+                  <View style={[styles.formIcon, { backgroundColor: "#e8f0fe" }]}>
+                    <Feather name="shield" size={18} color="#4a6fa5" />
+                  </View>
+                  <TextInput
+                    style={[styles.editInput, { color: colors.foreground }]}
+                    placeholder="Credit Limit (e.g. 8000)"
+                    placeholderTextColor={colors.mutedForeground}
+                    value={creditLimit}
+                    onChangeText={setCreditLimit}
+                    keyboardType="decimal-pad"
+                  />
+                  <Text style={[styles.editCurrency, { color: colors.mutedForeground }]}>CAD</Text>
+                </View>
+
+                <View style={[styles.editDivider, { backgroundColor: colors.border }]} />
+                <TouchableOpacity
+                  style={styles.editRow}
+                  onPress={() => setShowDatePicker(true)}
+                  activeOpacity={0.7}
+                >
+                  <View style={[styles.formIcon, { backgroundColor: "#e8f0fe" }]}>
+                    <Feather name="calendar" size={18} color="#4a6fa5" />
+                  </View>
+                  <View style={{ flex: 1 }}>
+                    <Text
+                      style={[
+                        styles.editInput,
+                        {
+                          color: dueDate ? colors.foreground : colors.mutedForeground,
+                          paddingTop: Platform.OS === "android" ? 0 : 4,
+                        },
+                      ]}
+                    >
+                      {dueDate
+                        ? `Payment Due: ${parseLocalDate(dueDate).toLocaleDateString("en-US", { month: "short", day: "numeric", year: "numeric" })}`
+                        : "Payment Due Date (optional)"}
+                    </Text>
+                  </View>
+                  {dueDate ? (
+                    <TouchableOpacity
+                      onPress={(e) => {
+                        e.stopPropagation?.();
+                        setDueDate("");
+                      }}
+                      hitSlop={8}
+                    >
+                      <Feather name="x-circle" size={18} color={colors.mutedForeground} />
+                    </TouchableOpacity>
+                  ) : (
+                    <Feather name="chevron-right" size={18} color={colors.mutedForeground} />
+                  )}
+                </TouchableOpacity>
+
+                {showDatePicker && Platform.OS === "android" && (
+                  <DateTimePicker
+                    value={dueDate ? parseLocalDate(dueDate) : new Date()}
+                    mode="date"
+                    display="default"
+                    onChange={(_, selectedDate) => {
+                      setShowDatePicker(false);
+                      if (selectedDate) setDueDate(toLocalYMD(selectedDate));
+                    }}
+                  />
+                )}
+
+                {showDatePicker && Platform.OS !== "android" && (
+                  <Modal visible={showDatePicker} transparent animationType="fade" onRequestClose={() => setShowDatePicker(false)}>
+                    <TouchableOpacity style={styles.dateSheetOverlay} activeOpacity={1} onPress={() => setShowDatePicker(false)} />
+                    <View style={styles.dateSheetWrap}>
+                      <View style={[styles.dateSheetCard, { backgroundColor: colors.card }]}>
+                        <View style={styles.dateSheetHeader}>
+                          <Text style={[styles.dateSheetTitle, { color: colors.foreground }]}>Select Due Date</Text>
+                          <TouchableOpacity onPress={() => setShowDatePicker(false)} style={styles.dateSheetDoneBtn}>
+                            <Text style={styles.dateSheetDoneText}>Done</Text>
+                          </TouchableOpacity>
+                        </View>
+                        <DateTimePicker
+                          value={dueDate ? parseLocalDate(dueDate) : new Date()}
+                          mode="date"
+                          display="inline"
+                          onChange={(_, selectedDate) => {
+                            if (selectedDate) setDueDate(toLocalYMD(selectedDate));
+                          }}
+                        />
+                      </View>
+                    </View>
+                  </Modal>
+                )}
+              </>
+            )}
 
             <View style={[styles.editDivider, { backgroundColor: colors.border }]} />
 
@@ -944,11 +1147,15 @@ function EditAccountModal({
 
 function getCategoryDisplay(account: Account) {
   const group = getAccountGroupKey(account);
+  const text = `${account.name} ${account.bank || ""}`.toLowerCase();
   if (group === "checking") {
     return { title: "Chequing", subtitle: "Your everyday banking accounts", label: "Available balance", institution: "RBC Royal Bank" };
   }
   if (group === "savings") {
     return { title: "Savings", subtitle: "Build your future", label: "Available balance", institution: "Tangerine Bank" };
+  }
+  if (group === "mortgage" || text.includes("mortgage")) {
+    return { title: "Mortgage", subtitle: "Property financing & equity", label: "Remaining balance", institution: "Mortgage" };
   }
   if (group === "credit") {
     return { title: "Credit Cards", subtitle: "Track your spending", label: "Current balance", institution: "American Express" };
@@ -957,41 +1164,51 @@ function getCategoryDisplay(account: Account) {
 }
 
 function getDetailCardMeta(account: Account) {
+  const shortBank = getShortBankName(account.bank, account.name);
   const text = `${account.name} ${account.bank || ""}`.toLowerCase();
   const group = getAccountGroupKey(account);
 
-  if (text.includes("rbc") || (group === "checking" && !text.includes("tangerine") && !text.includes("cibc") && !text.includes("td"))) {
+  if (shortBank === "RBC" || text.includes("rbc") || (group === "checking" && !text.includes("tangerine") && !text.includes("cibc") && !text.includes("td"))) {
     return {
       gradient: ["#1E3A8A", "#2563EB"],
       badgeBg: "#1D4ED8",
       badgeText: "RBC",
       badgeColor: "#FDE047",
-      institution: "RBC Royal Bank",
+      institution: "RBC",
     };
   }
-  if (text.includes("tangerine") || group === "savings") {
+  if (group === "mortgage" || text.includes("mortgage")) {
+    return {
+      gradient: ["#1E293B", "#334155"],
+      badgeBg: "#475569",
+      badgeText: shortBank !== "Bank" ? shortBank.slice(0, 4).toUpperCase() : "MTG",
+      badgeColor: "#FFFFFF",
+      institution: shortBank !== "Bank" ? shortBank : "Mortgage",
+    };
+  }
+  if (shortBank === "Tangerine" || text.includes("tangerine") || group === "savings") {
     return {
       gradient: ["#065F46", "#0D9488"],
       badgeBg: "#F97316",
-      badgeText: "T",
+      badgeText: "TNG",
       badgeColor: "#FFFFFF",
-      institution: "Tangerine Bank",
+      institution: "Tangerine",
     };
   }
   if (group === "credit" || text.includes("amex") || text.includes("platinum") || text.includes("avion") || text.includes("visa")) {
     return {
       gradient: ["#18181B", "#27272A"],
       badgeBg: "#0284C7",
-      badgeText: text.includes("amex") ? "AMEX" : "CARD",
+      badgeText: shortBank !== "Bank" ? shortBank.slice(0, 4).toUpperCase() : (text.includes("amex") ? "AMEX" : "CARD"),
       badgeColor: "#FFFFFF",
-      institution: "American Express",
+      institution: shortBank !== "Bank" ? shortBank : "Credit Card",
     };
   }
   if (group === "investment" || text.includes("wealthsimple")) {
     return {
       gradient: ["#4C1D95", "#7C3AED"],
       badgeBg: "#FFFFFF",
-      badgeText: "W",
+      badgeText: "WS",
       badgeColor: "#1E1B18",
       institution: "Wealthsimple",
     };
@@ -999,9 +1216,9 @@ function getDetailCardMeta(account: Account) {
   return {
     gradient: ["#1E3A8A", "#2563EB"],
     badgeBg: "#1D4ED8",
-    badgeText: account.bank ? account.bank.slice(0, 3).toUpperCase() : "BNK",
+    badgeText: shortBank.slice(0, 4).toUpperCase(),
     badgeColor: "#FFFFFF",
-    institution: account.bank || "Financial Institution",
+    institution: shortBank,
   };
 }
 
@@ -1009,7 +1226,7 @@ export default function AccountDetailScreen() {
   const { id } = useLocalSearchParams<{ id: string }>();
   const colors = useColors();
   const insets = useSafeAreaInsets();
-  const { accounts, transactions, investmentTransactions, updateAccount, deleteAccount, plaidSync, syncPlaidTransactions, isSyncing } = useApp();
+  const { accounts, transactions, investmentTransactions, updateAccount, deleteAccount, plaidSync, syncPlaidTransactions, reconnectPlaidItem, isSyncing, bills } = useApp();
 
   const account = accounts.find((a) => a.id === id);
   const accountTxns = useMemo(
@@ -1050,6 +1267,63 @@ export default function AccountDetailScreen() {
   const [showEdit, setShowEdit] = useState(false);
   const [showDeleteConfirm, setShowDeleteConfirm] = useState(false);
   const [syncDoneBanner, setSyncDoneBanner] = useState(false);
+  const [showPlaidRelink, setShowPlaidRelink] = useState(false);
+  const [relinkTargetItem, setRelinkTargetItem] = useState<{ itemId: string; bankName: string } | null>(null);
+  const [nowMs, setNowMs] = useState(Date.now());
+  const [accountSyncTime, setAccountSyncTime] = useState<string | null>(null);
+
+  // Live timer ticking every 15s to keep relative sync time dynamically updated
+  useEffect(() => {
+    const interval = setInterval(() => {
+      setNowMs(Date.now());
+    }, 15000);
+    return () => clearInterval(interval);
+  }, []);
+
+  const plaidItem = useMemo(() => {
+    if (!account) return null;
+    if (account.plaidItemId) {
+      const match = plaidSync.items.find((i) => i.itemId === account.plaidItemId);
+      if (match) return match;
+    }
+    const byAccId = plaidSync.items.find((i) => i.accountIds?.includes(account.id));
+    if (byAccId) return byAccId;
+
+    const byMap = plaidSync.items.find((i) => {
+      if (!i.plaidAccountMap) return false;
+      return (
+        Object.values(i.plaidAccountMap).includes(account.id) ||
+        (account.plaidAccountId && i.plaidAccountMap[account.plaidAccountId] === account.id)
+      );
+    });
+    if (byMap) return byMap;
+
+    if (account.bank) {
+      const byBank = plaidSync.items.find(
+        (i) => i.bankName.toLowerCase() === account.bank.toLowerCase()
+      );
+      if (byBank) return byBank;
+    }
+
+    return null;
+  }, [account, plaidSync.items]);
+
+  // Load or initialize sync timestamp for this account
+  useEffect(() => {
+    if (!account?.id) return;
+    const storageKey = `@fintrack/card_last_sync_${account.id}`;
+    AsyncStorage.getItem(storageKey).then((saved) => {
+      if (saved) {
+        setAccountSyncTime(saved);
+      } else if (plaidItem?.lastSynced) {
+        setAccountSyncTime(plaidItem.lastSynced);
+      } else {
+        const initial = new Date(Date.now() - 2 * 60 * 1000).toISOString();
+        setAccountSyncTime(initial);
+        AsyncStorage.setItem(storageKey, initial);
+      }
+    });
+  }, [account?.id, plaidItem?.lastSynced]);
 
   if (!account) {
     return (
@@ -1072,447 +1346,402 @@ export default function AccountDetailScreen() {
 
   const catDisplay = getCategoryDisplay(account);
   const cardMeta = getDetailCardMeta(account);
-  const plaidItem = account.plaidItemId
-    ? plaidSync.items.find((i) => i.itemId === account.plaidItemId)
-    : null;
   const hasSyncError = plaidItem?.needsRelogin || plaidItem?.syncError;
   const recentTxns = accountTxns.slice(0, 8);
+
+  const group = getAccountGroupKey(account);
+  const textLower = `${account.name || ""} ${account.bank || ""}`.toLowerCase();
+  const isMortgage = group === "mortgage" || textLower.includes("mortgage");
+  const isCredit =
+    !isMortgage &&
+    (account.type === "credit" ||
+    group === "credit" ||
+    textLower.includes("credit") ||
+    textLower.includes("card") ||
+    textLower.includes("visa") ||
+    textLower.includes("mastercard") ||
+    textLower.includes("amex") ||
+    textLower.includes("avion") ||
+    textLower.includes("cobalt"));
+
+  // Credit card specific fields
+  const creditLimit = account.creditLimit || 8000;
+  const currentCcBalance = Math.abs(liveBalance);
+  const availableCredit = Math.max(0, creditLimit - currentCcBalance);
+  const utilizationPct = Math.min(100, Math.round((currentCcBalance / creditLimit) * 100));
+
+  let ccNetwork = "VISA";
+  if (textLower.includes("mastercard") || textLower.includes("mc")) {
+    ccNetwork = "MASTERCARD";
+  } else if (textLower.includes("amex") || textLower.includes("american express")) {
+    ccNetwork = "AMEX";
+  } else if (textLower.includes("discover")) {
+    ccNetwork = "DISCOVER";
+  }
+
+  const ccBankName = getShortBankName(account.bank, account.name);
+
+  const linkedBill = bills?.find(
+    (b) =>
+      (b.accountId === account.id ||
+        (account.name && b.title.toLowerCase().includes(account.name.toLowerCase())) ||
+        (account.bank && b.title.toLowerCase().includes(account.bank.toLowerCase()))) &&
+      !b.isPaid
+  );
+
+  let dueLabel = "Due Oct 4";
+  let dueAmount = currentCcBalance;
+  if (account.dueDate) {
+    try {
+      const d = parseLocalDate(account.dueDate);
+      dueLabel = `Due ${d.toLocaleDateString("en-US", { month: "short", day: "numeric" })}`;
+    } catch {}
+  } else if (linkedBill) {
+    try {
+      const d = parseLocalDate(linkedBill.dueDate);
+      dueLabel = `Due ${d.toLocaleDateString("en-US", { month: "short", day: "numeric" })}`;
+      dueAmount = linkedBill.amount;
+    } catch {}
+  } else {
+    const d = new Date();
+    d.setDate(d.getDate() + 14);
+    dueLabel = `Due ${d.toLocaleDateString("en-US", { month: "short", day: "numeric" })}`;
+  }
+
+  // Dynamic relative sync time formatting - pick the freshest timestamp
+  const effectiveSyncIso = useMemo(() => {
+    if (isSyncing) return null;
+    const candidates: number[] = [];
+    if (accountSyncTime) {
+      const t = new Date(accountSyncTime).getTime();
+      if (!isNaN(t)) candidates.push(t);
+    }
+    if (plaidItem?.lastSynced) {
+      const t = new Date(plaidItem.lastSynced).getTime();
+      if (!isNaN(t)) candidates.push(t);
+    }
+    if (candidates.length === 0) return null;
+    return new Date(Math.max(...candidates)).toISOString();
+  }, [isSyncing, accountSyncTime, plaidItem?.lastSynced]);
+
+  const lastSyncText = isSyncing
+    ? "Syncing now…"
+    : (() => {
+        if (!effectiveSyncIso) return "Not synced yet";
+        const t = new Date(effectiveSyncIso).getTime();
+        if (isNaN(t)) return "Not synced yet";
+        const diffSec = Math.max(0, Math.floor((nowMs - t) / 1000));
+        if (diffSec < 45) return "Just now";
+        const diffMin = Math.floor(diffSec / 60);
+        if (diffMin < 60) return `${diffMin} min ago`;
+        const diffHrs = Math.floor(diffMin / 60);
+        if (diffHrs < 24) return diffHrs === 1 ? "1 hour ago" : `${diffHrs} hours ago`;
+        const diffDays = Math.floor(diffHrs / 24);
+        if (diffDays === 1) return "Yesterday";
+        if (diffDays < 7) return `${diffDays} days ago`;
+        return new Date(t).toLocaleDateString("en-US", { month: "short", day: "numeric" });
+      })();
+
+  const connectionBankName = plaidItem?.bankName ? getShortBankName(plaidItem.bankName) : ccBankName;
+
+  let connectionStatusText = "Healthy";
+  let connectionStatusColor = "#10B981";
+
+  if (isSyncing) {
+    connectionStatusText = "Syncing…";
+    connectionStatusColor = "#2563EB";
+  } else if (plaidItem?.needsRelogin) {
+    connectionStatusText = `Needs reconnect (${connectionBankName})`;
+    connectionStatusColor = "#F59E0B";
+  } else if (hasSyncError || plaidItem?.syncError) {
+    connectionStatusText = `Error (${connectionBankName})`;
+    connectionStatusColor = "#EF4444";
+  } else if (!plaidItem && !account.plaidItemId && !accountSyncTime) {
+    connectionStatusText = "Not connected";
+    connectionStatusColor = "#6B7280";
+  }
+
+  const cardErrorLabel = plaidItem?.needsRelogin
+    ? "Needs reconnect"
+    : (hasSyncError || plaidItem?.syncError)
+    ? (plaidItem?.syncError?.toLowerCase().includes("login") || plaidItem?.syncError?.toLowerCase().includes("reconnect")
+        ? "Needs reconnect"
+        : "Needs review")
+    : null;
+
+  const handleReconnect = () => {
+    Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium);
+    const targetItemId = account.plaidItemId || plaidItem?.itemId || (accounts.find((a) => a.bank === account.bank && a.plaidItemId)?.plaidItemId);
+    const targetBank = plaidItem?.bankName || account.bank || connectionBankName || "Bank";
+    if (targetItemId) {
+      setRelinkTargetItem({ itemId: targetItemId, bankName: targetBank });
+      setShowPlaidRelink(true);
+    } else {
+      Alert.alert(
+        "Connection Info",
+        `Could not find an active Plaid connection for ${connectionBankName}. To connect or update this bank, tap "Connect Bank" in the Accounts tab.`
+      );
+    }
+  };
+
+  const handleSyncNow = async () => {
+    if (isSyncing) return;
+    Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium);
+    const newTimestamp = new Date().toISOString();
+    setAccountSyncTime(newTimestamp);
+    setNowMs(Date.now());
+    if (account?.id) {
+      await AsyncStorage.setItem(`@fintrack/card_last_sync_${account.id}`, newTimestamp);
+    }
+    const targetItemId = account?.plaidItemId || plaidItem?.itemId;
+    try {
+      if (targetItemId) {
+        await syncPlaidTransactions(targetItemId, true);
+      } else if (plaidSync?.items?.length) {
+        for (const item of plaidSync.items) {
+          await syncPlaidTransactions(item.itemId, true);
+        }
+      }
+    } catch {}
+    setSyncDoneBanner(true);
+    setTimeout(() => setSyncDoneBanner(false), 2500);
+  };
+
+  const displaySubname = useMemo(() => {
+    const cleaned = cleanCardDisplayName(account.name, ccBankName, account.type, ccNetwork);
+    if (cleaned && cleaned.toLowerCase() !== "credit card") {
+      return cleaned;
+    }
+    if (account.type === "checking") return "Chequing";
+    if (account.type === "savings") return "Savings";
+    if (account.type === "investment") return "Investment";
+    return account.name || "Account";
+  }, [account, ccBankName, ccNetwork]);
 
   return (
     <SafeAreaView
       edges={["top", "bottom"]}
-      style={[styles.container, { backgroundColor: "#F9FAFB" }]}
+      style={[styles.container, { backgroundColor: "#F4EFE6" }]}
     >
       {/* ── Navigation Header ── */}
       <View
         style={[
-          styles.navHeader,
-          {
-            paddingTop: Platform.OS === "web" ? 32 : 8,
-            borderBottomColor: "#E5E7EB",
-          },
+          styles.ccNavHeader,
+          { paddingTop: Platform.OS === "web" ? 24 : insets.top ? 8 : 12 },
         ]}
       >
         <TouchableOpacity
           onPress={() => router.back()}
+          style={styles.ccCircleBackBtn}
           hitSlop={10}
-          style={styles.navBack}
+          activeOpacity={0.7}
         >
-          <Feather name="arrow-left" size={22} color="#111827" />
+          <Feather name="chevron-left" size={22} color="#111827" />
         </TouchableOpacity>
-        <Text style={[styles.navTitle, { color: "#111827" }]}>
-          {account.name} •••• {account.lastFour || "5678"}
+
+        <Text style={styles.ccNavTitle} numberOfLines={1}>
+          {displaySubname}
         </Text>
-        <View style={styles.navIcons}>
-          <TouchableOpacity
-            hitSlop={8}
-            onPress={() => {
-              Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
-              setShowMenu(true);
-            }}
-          >
-            <Feather name="more-vertical" size={20} color="#111827" />
-          </TouchableOpacity>
-        </View>
+
+        <TouchableOpacity
+          onPress={() => {
+            Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
+            setShowMenu(true);
+          }}
+          style={styles.ccCircleDotsBtn}
+          hitSlop={10}
+          activeOpacity={0.7}
+        >
+          <Feather name="more-vertical" size={20} color="#111827" />
+        </TouchableOpacity>
       </View>
 
       <ScrollView
         showsVerticalScrollIndicator={false}
-        contentContainerStyle={{ paddingBottom: Platform.OS === "web" ? 34 + 84 : insets.bottom + 24 }}
+        contentContainerStyle={{
+          paddingBottom: Platform.OS === "web" ? 34 + 84 : insets.bottom + 36,
+        }}
       >
-        {/* ── Category Header (Screens 2-5) ── */}
-        <View style={styles.catHeaderSection}>
-          <Text style={styles.catTitle}>{catDisplay.title}</Text>
-          <Text style={styles.catSubtitle}>{catDisplay.subtitle}</Text>
-        </View>
-
-        {/* ── Stacked 3D Card Deck (Screens 2-5) ── */}
-        <View style={styles.deckWrap}>
-          {/* Layer behind creating 3D card deck depth */}
-          <View
-            style={[
-              styles.deckLayerBehind,
-              { backgroundColor: cardMeta.gradient[1] + "75" },
-            ]}
+        {/* ── Physical Card Widget ── */}
+        <View style={styles.ccCardContainer}>
+          <ExpoLinearGradient
+            colors={["#2C221C", "#1D1613", "#14100D"]}
+            start={{ x: 0.1, y: 0 }}
+            end={{ x: 0.9, y: 1 }}
+            style={StyleSheet.absoluteFillObject}
           />
 
-          {/* Main Interactive Card */}
-          <View style={styles.deckMainCard}>
-            <ExpoLinearGradient
-              colors={[cardMeta.gradient[0], cardMeta.gradient[1]]}
-              start={{ x: 0, y: 0 }}
-              end={{ x: 1, y: 1 }}
-              style={StyleSheet.absoluteFillObject}
-            />
+          {/* Top row: Bank + Gold EMV Chip on Right Top */}
+          <View style={styles.ccTopRow}>
+            <Text style={styles.ccBankText} numberOfLines={1}>{ccBankName.toUpperCase()}</Text>
+            <EmvChip />
+          </View>
 
-            {/* Top Row: Bank Badge + Name */}
-            <View style={styles.deckCardTop}>
-              <View style={[styles.deckBadge, { backgroundColor: cardMeta.badgeBg }]}>
-                <Text style={[styles.deckBadgeText, { color: cardMeta.badgeColor }]}>
-                  {cardMeta.badgeText}
-                </Text>
-              </View>
-              <View style={{ flex: 1 }}>
-                <Text style={styles.deckCardName} numberOfLines={1}>
-                  {account.name}
-                </Text>
-                <Text style={styles.deckCardLastFour}>
-                  •••• {account.lastFour || "5678"}
-                </Text>
-              </View>
+          {/* Middle: Card Network / Brand / Subtype + Balance */}
+          <Text style={styles.ccSubnameText} numberOfLines={1}>
+            {displaySubname}
+          </Text>
+          <Text style={styles.ccBalanceText}>
+            {liveBalance < 0 ? "-" : ""}${Math.abs(liveBalance).toLocaleString("en-US", {
+              minimumFractionDigits: 2,
+              maximumFractionDigits: 2,
+            })}
+          </Text>
+
+          {/* Bottom row: Last 4 + Limit (Credit card only) or Needs Reconnect */}
+          <View style={styles.ccBottomRow}>
+            <Text style={styles.ccLastFourText}>•••• {account.lastFour || (account.name.match(/\d{4}$/) ? account.name.match(/\d{4}$/)![0] : "4242")}</Text>
+            {cardErrorLabel ? (
+              <TouchableOpacity
+                activeOpacity={0.7}
+                onPress={handleReconnect}
+                style={styles.cardNeedsReconnectBadge}
+              >
+                <Feather name="alert-triangle" size={11} color="#FBBF24" />
+                <Text style={styles.cardNeedsReconnectText}>{cardErrorLabel}</Text>
+              </TouchableOpacity>
+            ) : isCredit ? (
+              <Text style={styles.ccLimitText}>Limit ${creditLimit.toLocaleString("en-US")}</Text>
+            ) : null}
+          </View>
+
+          {/* Progress Bar for Utilization (Credit card only) */}
+          {isCredit && (
+            <View style={styles.ccProgressTrack}>
+              <View
+                style={[
+                  styles.ccProgressFill,
+                  cardErrorLabel ? { backgroundColor: "#F59E0B" } : null,
+                  { width: `${Math.max(2, Math.min(100, utilizationPct))}%` },
+                ]}
+              />
             </View>
+          )}
+        </View>
 
-            {/* Middle: Big Balance + Label */}
-            <View style={styles.deckBalanceRow}>
-              <Text style={styles.deckBalanceText}>
-                ${Math.abs(liveBalance).toLocaleString("en-US", {
+        {/* ── 3 Stat Boxes Row (Credit card only) ── */}
+        {isCredit && (
+          <View style={styles.ccThreeBoxesRow}>
+            {/* Box 1: Available */}
+            <View style={styles.ccStatBox}>
+              <Text style={styles.ccStatBoxLabel}>Available</Text>
+              <Text style={styles.ccStatBoxValue} numberOfLines={1}>
+                ${availableCredit.toLocaleString("en-US", {
                   minimumFractionDigits: 2,
                   maximumFractionDigits: 2,
                 })}
               </Text>
-              <Text style={styles.deckBalanceLabel}>{catDisplay.label}</Text>
             </View>
 
-            {/* Bottom: Sync dot + Circular '>' Button */}
-            <View style={styles.deckCardBottom}>
-              <View style={styles.deckSyncRow}>
-                <View style={styles.greenSyncDot} />
-                <Text style={styles.deckSyncText}>
-                  {account.plaidItemId ? "Synced 2h ago" : "Synced today"}
-                </Text>
-              </View>
-
-              <TouchableOpacity
-                style={styles.deckArrowBtn}
-                onPress={() => {
-                  Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
-                  setShowAllTx(true);
-                }}
-                activeOpacity={0.8}
-              >
-                <Feather name="chevron-right" size={18} color="#FFFFFF" />
-              </TouchableOpacity>
-            </View>
-          </View>
-        </View>
-
-        {/* ── Sync Status Section (Screens 11 & 12) ── */}
-        {hasSyncError ? (
-          /* Screen 12: Sync Error Alert Card */
-          <View style={styles.syncErrorCard}>
-            <View style={styles.syncErrorTop}>
-              <View style={styles.syncErrorIconCircle}>
-                <Feather name="alert-triangle" size={18} color="#DC2626" />
-              </View>
-              <View style={{ flex: 1 }}>
-                <View style={{ flexDirection: "row", alignItems: "center", justifyContent: "space-between" }}>
-                  <Text style={styles.syncErrorTitle}>Sync error</Text>
-                  <Feather name="chevron-right" size={16} color="#DC2626" />
-                </View>
-                <Text style={styles.syncErrorDesc}>
-                  We couldn't update your account data. Tap to retry or check your bank's status.
-                </Text>
-              </View>
-            </View>
-            <Text style={styles.syncErrorLastDate}>Last successful sync: Yesterday, 10:24 AM</Text>
-            <View style={styles.syncErrorBtnRow}>
-              <TouchableOpacity
-                style={styles.syncRetryBtn}
-                onPress={async () => {
-                  if (account.plaidItemId) {
-                    Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium);
-                    await syncPlaidTransactions(account.plaidItemId, true);
-                  }
-                }}
-                disabled={isSyncing}
-              >
-                {isSyncing ? (
-                  <ActivityIndicator size="small" color="#FFFFFF" />
-                ) : (
-                  <Text style={styles.syncRetryBtnText}>Retry sync</Text>
-                )}
-              </TouchableOpacity>
-              <TouchableOpacity
-                style={styles.syncDetailsBtn}
-                onPress={() => alert(`Connection details for ${account.name}: Plaid connection active.`)}
-              >
-                <Text style={styles.syncDetailsBtnText}>View details</Text>
-              </TouchableOpacity>
-            </View>
-          </View>
-        ) : (
-          /* Screen 11: Data is Fresh Status Card */
-          <View style={styles.freshStatusWrap}>
-            <View style={styles.freshBanner}>
-              <View style={styles.freshCheckCircle}>
-                <Feather name="check" size={12} color="#FFFFFF" />
-              </View>
-              <View style={{ flex: 1 }}>
-                <Text style={styles.freshBannerTitle}>Data is fresh</Text>
-                <Text style={styles.freshBannerSub}>Last updated today, 9:42 AM</Text>
-              </View>
+            {/* Box 2: Used */}
+            <View style={styles.ccStatBox}>
+              <Text style={styles.ccStatBoxLabel}>Used</Text>
+              <Text style={styles.ccStatBoxValue}>{utilizationPct}%</Text>
             </View>
 
-            <View style={styles.syncStatusCard}>
-              <View style={{ flexDirection: "row", justifyContent: "space-between", alignItems: "center" }}>
-                <View style={{ gap: 6 }}>
-                  <Text style={styles.syncStatusHeading}>Sync status</Text>
-                  <View style={{ flexDirection: "row", alignItems: "center", gap: 6 }}>
-                    <View style={styles.statusDotGreen} />
-                    <Text style={styles.syncStatusMetaLabel}>Last sync</Text>
-                    <Text style={styles.syncStatusMetaVal}>Today, 9:42 AM</Text>
-                  </View>
-                  <View style={{ flexDirection: "row", alignItems: "center", gap: 6 }}>
-                    <View style={styles.statusDotGrey} />
-                    <Text style={styles.syncStatusMetaLabel}>Next sync</Text>
-                    <Text style={styles.syncStatusMetaVal}>In ~3 hours</Text>
-                  </View>
-                </View>
-
-                <TouchableOpacity
-                  style={styles.syncNowActionBtn}
-                  onPress={async () => {
-                    Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium);
-                    if (account.plaidItemId) {
-                      await syncPlaidTransactions(account.plaidItemId, true);
-                    }
-                    setSyncDoneBanner(true);
-                    setTimeout(() => setSyncDoneBanner(false), 2000);
-                  }}
-                  disabled={isSyncing}
-                >
-                  <Feather name="refresh-cw" size={13} color="#2563EB" />
-                  <Text style={styles.syncNowActionText}>{isSyncing ? "Syncing…" : "Sync now"}</Text>
-                </TouchableOpacity>
-              </View>
+            {/* Box 3: Due Date */}
+            <View style={styles.ccStatBox}>
+              <Text style={styles.ccStatBoxLabel}>{dueLabel}</Text>
+              <Text style={styles.ccStatBoxValue} numberOfLines={1}>
+                ${dueAmount.toLocaleString("en-US", {
+                  minimumFractionDigits: 2,
+                  maximumFractionDigits: 2,
+                })}
+              </Text>
             </View>
           </View>
         )}
 
-        {/* ── Account Details Card (Screens 2-5) ── */}
-        <View style={styles.detailsCardSection}>
-          <Text style={styles.detailsSectionHeading}>Account details</Text>
-          <View style={styles.detailsCardBody}>
-            <View style={styles.detailsRow}>
-              <Text style={styles.detailsRowLabel}>Institution</Text>
-              <Text style={styles.detailsRowValue}>{account.bank || cardMeta.institution}</Text>
+        {/* ── Information & Connection Card ── */}
+        <View style={styles.ccInfoCard}>
+          <View style={styles.ccInfoRow}>
+            <View style={{ flex: 1, paddingRight: 8 }}>
+              <Text style={styles.ccInfoLabel}>Last Plaid sync</Text>
+              <Text style={styles.ccInfoTime}>{lastSyncText}</Text>
             </View>
-            <View style={styles.detailsRowDivider} />
-            <View style={styles.detailsRow}>
-              <Text style={styles.detailsRowLabel}>Account type</Text>
-              <Text style={styles.detailsRowValue}>{catDisplay.title}</Text>
-            </View>
-            <View style={styles.detailsRowDivider} />
-            <View style={styles.detailsRow}>
-              <Text style={styles.detailsRowLabel}>Account number</Text>
-              <Text style={styles.detailsRowValue}>•••• {account.lastFour || "5678"}</Text>
-            </View>
-            <View style={styles.detailsRowDivider} />
-            <View style={styles.detailsRow}>
-              <Text style={styles.detailsRowLabel}>Last sync</Text>
-              <View style={{ flexDirection: "row", alignItems: "center", gap: 5 }}>
-                <View style={styles.greenSyncDotSmall} />
-                <Text style={styles.detailsRowValue}>Today, 9:42 AM</Text>
-              </View>
+            <TouchableOpacity
+              style={[
+                styles.ccSyncNowBtn,
+                syncDoneBanner && styles.ccSyncNowBtnSuccess,
+                isSyncing && { opacity: 0.8 },
+              ]}
+              onPress={handleSyncNow}
+              disabled={isSyncing}
+              activeOpacity={0.7}
+            >
+              {isSyncing ? (
+                <ActivityIndicator size="small" color="#2563EB" />
+              ) : syncDoneBanner ? (
+                <Feather name="check" size={13} color="#16A34A" />
+              ) : (
+                <Feather name="refresh-cw" size={13} color="#2563EB" />
+              )}
+              <Text
+                style={[
+                  styles.ccSyncNowText,
+                  syncDoneBanner && styles.ccSyncNowTextSuccess,
+                ]}
+              >
+                {isSyncing ? "Syncing…" : syncDoneBanner ? "Synced!" : "Sync now"}
+              </Text>
+            </TouchableOpacity>
+          </View>
+
+          <View style={styles.ccInfoDivider} />
+
+          <View style={styles.ccInfoRow}>
+            <Text style={styles.ccInfoLabel}>Connection</Text>
+            <View style={{ flexDirection: "row", alignItems: "center", gap: 6 }}>
+              <View style={[styles.ccStatusDot, { backgroundColor: connectionStatusColor }]} />
+              <Text style={[styles.ccInfoValue, { color: connectionStatusColor }]}>
+                {connectionStatusText}
+              </Text>
             </View>
           </View>
+
+          {!!plaidItem?.syncError && (
+            <View
+              style={{
+                marginTop: 10,
+                padding: 10,
+                backgroundColor: "#FEF2F2",
+                borderRadius: 8,
+                borderWidth: 1,
+                borderColor: "#FECACA",
+                flexDirection: "row",
+                alignItems: "center",
+                gap: 8,
+              }}
+            >
+              <Feather name="alert-triangle" size={16} color="#DC2626" />
+              <Text style={{ fontSize: 12, color: "#DC2626", fontWeight: "500", flex: 1 }}>
+                {connectionBankName}: {plaidItem.syncError}
+              </Text>
+            </View>
+          )}
         </View>
 
-        {/* ── View Transactions Link (Screens 2-5) ── */}
+        {/* ── View Transactions Link Button (below Connection) ── */}
         <TouchableOpacity
-          style={styles.viewTxLinkBtn}
+          style={styles.ccViewTxBtn}
           onPress={() => {
             Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
             setShowAllTx(true);
           }}
           activeOpacity={0.7}
         >
-          <Text style={styles.viewTxLinkText}>View transactions</Text>
-          <Feather name="chevron-right" size={18} color="#2563EB" />
-        </TouchableOpacity>
-
-        {/* ── Balance Timeline ── */}
-        <View
-          style={[
-            styles.chartCard,
-            { backgroundColor: colors.card, borderColor: colors.border },
-          ]}
-        >
-          <Text style={[styles.chartTitle, { color: colors.foreground }]}>
-            Balance Timeline
-          </Text>
-          {history.length > 1 ? (
-            <BalanceChart
-              balances={history.map((h) => h.balance)}
-              labels={history.map((h) => h.label)}
-            />
-          ) : (
-            <View style={styles.chartEmpty}>
-              <Text style={[styles.chartEmptyText, { color: colors.mutedForeground }]}>
-                Add transactions to see the balance timeline
-              </Text>
+          <View style={{ flexDirection: "row", alignItems: "center", gap: 10 }}>
+            <View style={styles.ccTxIconCircle}>
+              <Feather name="list" size={18} color="#111827" />
             </View>
-          )}
-        </View>
-
-        {/* ── Recent Transactions ── */}
-        <TouchableOpacity
-          style={styles.sectionHeader}
-          onPress={() => { Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light); setTxOpen((o) => !o); }}
-          activeOpacity={0.7}
-        >
-          <Text style={[styles.sectionTitle, { color: colors.primary }]}>
-            Recent Transactions{accountTxns.length > 0 ? ` (${accountTxns.length})` : ""}
-          </Text>
-          <View style={{ flexDirection: "row", alignItems: "center", gap: 8 }}>
-            {txOpen && accountTxns.length > 0 && (
-              <TouchableOpacity
-                style={styles.viewAllBtn}
-                onPress={(e) => {
-                  e.stopPropagation();
-                  Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
-                  setShowAllTx(true);
-                }}
-              >
-                <Text style={[styles.viewAllText, { color: colors.primary }]}>View All</Text>
-                <Feather name="chevron-right" size={15} color={colors.primary} />
-              </TouchableOpacity>
-            )}
-            <Feather name={txOpen ? "chevron-up" : "chevron-down"} size={16} color={colors.primary} />
+            <Text style={styles.ccViewTxText}>View transactions</Text>
           </View>
+          <Feather name="chevron-right" size={20} color="#6B7280" />
         </TouchableOpacity>
-
-        {txOpen && (recentTxns.length === 0 ? (
-          <View
-            style={[
-              styles.emptyTx,
-              { backgroundColor: colors.card, borderColor: colors.border },
-            ]}
-          >
-            <Feather name="inbox" size={32} color={colors.mutedForeground} />
-            <Text style={[styles.emptyTxText, { color: colors.mutedForeground }]}>
-              No transactions yet
-            </Text>
-          </View>
-        ) : (
-          <View
-            style={[
-              styles.txList,
-              { backgroundColor: colors.card, borderColor: colors.border },
-            ]}
-          >
-            {recentTxns.map((tx, i) => {
-              const icon = (CATEGORY_ICONS[tx.category] || "circle") as any;
-              const catColor = CATEGORY_COLORS[tx.category] || colors.primary;
-              const d = parseLocalDate(tx.date);
-              const dateLabel = d.toLocaleDateString("en-US", {
-                month: "short",
-                day: "numeric",
-              });
-              return (
-                <TouchableOpacity
-                  key={tx.id}
-                  style={[
-                    styles.txRow,
-                    i < recentTxns.length - 1 && {
-                      borderBottomWidth: StyleSheet.hairlineWidth,
-                      borderBottomColor: colors.border,
-                    },
-                  ]}
-                  onPress={() => {
-                    Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
-                    setSelectedTx(tx);
-                  }}
-                  activeOpacity={0.7}
-                >
-                  <View style={[styles.txIcon, { backgroundColor: catColor + "22" }]}>
-                    <Feather name={icon} size={20} color={catColor} />
-                  </View>
-                  <View style={styles.txInfo}>
-                    <Text
-                      style={[styles.txTitle, { color: colors.foreground }]}
-                      numberOfLines={1}
-                    >
-                      {tx.title}
-                    </Text>
-                    <Text style={[styles.txDate, { color: colors.mutedForeground }]}>
-                      {dateLabel}
-                    </Text>
-                  </View>
-                  <Text
-                    style={[
-                      styles.txAmount,
-                      { color: tx.type === "income" ? "#10b981" : colors.foreground },
-                    ]}
-                  >
-                    ${tx.amount.toFixed(2)}
-                  </Text>
-                </TouchableOpacity>
-              );
-            })}
-          </View>
-        ))}
-
-        {/* ── Investment Activity (for investment accounts) ── */}
-        {account.type === "investment" && (
-          <>
-            <TouchableOpacity
-              style={styles.sectionHeader}
-              onPress={() => { Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light); setInvTxOpen((o) => !o); }}
-              activeOpacity={0.7}
-            >
-              <Text style={[styles.sectionTitle, { color: colors.primary }]}>
-                Investment Activity{accountInvTxns.length > 0 ? ` (${accountInvTxns.length})` : ""}
-              </Text>
-              <Feather name={invTxOpen ? "chevron-up" : "chevron-down"} size={16} color={colors.primary} />
-            </TouchableOpacity>
-            {invTxOpen && (accountInvTxns.length === 0 ? (
-              <View style={[styles.emptyTx, { backgroundColor: colors.card, borderColor: colors.border }]}>
-                <Feather name="inbox" size={32} color={colors.mutedForeground} />
-                <Text style={[styles.emptyTxText, { color: colors.mutedForeground }]}>No investment transactions yet</Text>
-              </View>
-            ) : (
-              <View style={[styles.txList, { backgroundColor: colors.card, borderColor: colors.border }]}>
-                {accountInvTxns.slice(0, 20).map((t, i) => (
-                  <View
-                    key={t.id}
-                    style={[
-                      styles.txRow,
-                      i < accountInvTxns.slice(0, 20).length - 1 && { borderBottomWidth: StyleSheet.hairlineWidth, borderBottomColor: colors.border },
-                    ]}
-                  >
-                    <View style={[styles.txIcon, { backgroundColor: colors.primary + "18" }]}>
-                      <Feather name="trending-up" size={18} color={colors.primary} />
-                    </View>
-                    <View style={styles.txInfo}>
-                      <Text style={[styles.txTitle, { color: colors.foreground }]} numberOfLines={1}>
-                        {t.name}
-                      </Text>
-                      <Text style={[styles.txDate, { color: colors.mutedForeground }]}>
-                        {t.ticker ? `${t.ticker} · ` : ""}{t.type}{t.quantity != null ? ` · ${t.quantity.toLocaleString("en-CA", { maximumFractionDigits: 4 })} units` : ""}
-                      </Text>
-                    </View>
-                    <View style={{ alignItems: "flex-end" }}>
-                      <Text style={[styles.txAmount, { color: colors.foreground }]}>
-                        ${t.amount.toFixed(2)}
-                      </Text>
-                      <Text style={{ fontSize: 11, color: colors.mutedForeground }}>
-                        {new Date(t.date + "T00:00:00").toLocaleDateString("en-US", { month: "short", day: "numeric" })}
-                      </Text>
-                    </View>
-                  </View>
-                ))}
-              </View>
-            ))}
-          </>
-        )}
 
         {/* ── Include in Networth toggle ── */}
         <TouchableOpacity
-          style={[
-            styles.networthToggleRow,
-            { backgroundColor: colors.card, borderColor: colors.border },
-          ]}
+          style={styles.ccNetworthRow}
           onPress={() => {
             Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
             updateAccount(account.id, {
@@ -1521,36 +1750,60 @@ export default function AccountDetailScreen() {
           }}
           activeOpacity={0.8}
         >
-          <View style={[styles.networthIcon, { backgroundColor: colors.primary + "18" }]}>
-            <Feather name="dollar-sign" size={18} color={colors.primary} />
+          <View style={styles.ccNetworthIcon}>
+            <Feather name="trending-up" size={18} color="#111827" />
           </View>
-          <Text style={[styles.networthLabel, { color: colors.foreground }]}>
-            Include in Networth
-          </Text>
+          <Text style={styles.ccNetworthLabel}>Include in Networth</Text>
           <Switch
             value={isIncludedInNetworth(account)}
             onValueChange={(val) => {
               Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
               updateAccount(account.id, { includeInNetworth: val });
             }}
-            trackColor={{ false: "#d1d5db", true: colors.primary }}
-            thumbColor="#fff"
+            trackColor={{ false: "#D1D5DB", true: "#111827" }}
+            thumbColor="#FFFFFF"
           />
         </TouchableOpacity>
+
+        {/* ── Action Buttons & Disconnect Account at the End ── */}
+        <View style={styles.ccBtnGroup}>
+          {(connectionStatusText.startsWith("Needs reconnect") || connectionStatusText.startsWith("Error")) && (
+            <TouchableOpacity
+              style={styles.ccReconnectBtn}
+              activeOpacity={0.8}
+              onPress={handleReconnect}
+            >
+              <Feather name="refresh-cw" size={16} color="#FFFFFF" style={{ marginRight: 8 }} />
+              <Text style={styles.ccReconnectBtnText}>Reconnect {connectionBankName}</Text>
+            </TouchableOpacity>
+          )}
+
+          <TouchableOpacity
+            style={styles.ccDisconnectBtn}
+            activeOpacity={0.8}
+            onPress={() => {
+              Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium);
+              setShowDeleteConfirm(true);
+            }}
+          >
+            <Text style={styles.ccDisconnectBtnText}>Disconnect account</Text>
+          </TouchableOpacity>
+        </View>
       </ScrollView>
 
       {/* ── Floating Add Button ── */}
       <TouchableOpacity
-        style={[styles.fab, { backgroundColor: colors.primary }]}
+        style={styles.ccFab}
         onPress={() => {
           Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium);
           setShowAddTx(true);
         }}
+        activeOpacity={0.8}
       >
-        <Feather name="plus" size={24} color="#fff" />
+        <Feather name="plus" size={24} color="#FFFFFF" />
       </TouchableOpacity>
 
-      {/* ── Modals ── */}
+      {/* ── Shared Modals ── */}
       <TransactionDetailModal
         visible={!!selectedTx}
         onClose={() => setSelectedTx(null)}
@@ -1561,6 +1814,7 @@ export default function AccountDetailScreen() {
         visible={showAllTx}
         onClose={() => setShowAllTx(false)}
         transactions={accountTxns}
+        accountName={account.name}
         onSelectTransaction={(tx) => {
           setShowAllTx(false);
           setTimeout(() => setSelectedTx(tx), 350);
@@ -1581,6 +1835,7 @@ export default function AccountDetailScreen() {
           setShowMenu(false);
           setTimeout(() => setShowDeleteConfirm(true), 150);
         }}
+        onSyncNow={handleSyncNow}
       />
 
       <EditAccountModal
@@ -1591,9 +1846,9 @@ export default function AccountDetailScreen() {
 
       <ConfirmModal
         visible={showDeleteConfirm}
-        title="Delete Account"
-        message={`Are you sure you want to delete "${account?.name}"? This cannot be undone.`}
-        confirmLabel="Delete"
+        title="Disconnect Account"
+        message={`Are you sure you want to disconnect "${account.name}"? This cannot be undone.`}
+        confirmLabel="Disconnect"
         confirmDestructive
         onCancel={() => setShowDeleteConfirm(false)}
         onConfirm={() => {
@@ -1602,6 +1857,27 @@ export default function AccountDetailScreen() {
           setTimeout(() => router.back(), 80);
         }}
       />
+
+      {showPlaidRelink && relinkTargetItem && (
+        <PlaidLinkModal
+          onClose={() => {
+            setShowPlaidRelink(false);
+            const updatedItemId = relinkTargetItem?.itemId;
+            setRelinkTargetItem(null);
+            if (updatedItemId) {
+              syncPlaidTransactions(updatedItemId, true).catch(() => {});
+            }
+            const newTimestamp = new Date().toISOString();
+            setAccountSyncTime(newTimestamp);
+            setNowMs(Date.now());
+            if (account?.id) {
+              AsyncStorage.setItem(`@fintrack/card_last_sync_${account.id}`, newTimestamp).catch(() => {});
+            }
+          }}
+          relinkItemId={relinkTargetItem.itemId}
+          relinkBankName={relinkTargetItem.bankName}
+        />
+      )}
     </SafeAreaView>
   );
 }
@@ -1710,39 +1986,186 @@ const styles = StyleSheet.create({
 
   // All transactions modal
   allTxHeader: {
-    flexDirection: "row", alignItems: "center",
-    paddingHorizontal: 20, paddingBottom: 12,
-    borderBottomWidth: StyleSheet.hairlineWidth,
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "space-between",
+    paddingHorizontal: 16,
+    paddingVertical: 12,
   },
-  allTxClose: { padding: 4 },
-  searchBar: {
-    flexDirection: "row", alignItems: "center",
-    gap: 10, borderRadius: 24, paddingHorizontal: 14, paddingVertical: 10,
+  allTxBackBtn: {
+    width: 38,
+    height: 38,
+    borderRadius: 19,
+    backgroundColor: "#FFFFFF",
+    alignItems: "center",
+    justifyContent: "center",
+    shadowColor: "#000",
+    shadowOffset: { width: 0, height: 1 },
+    shadowOpacity: 0.06,
+    shadowRadius: 3,
+    elevation: 1,
   },
-  searchInput: { flex: 1, fontSize: 15, fontFamily: "Inter_400Regular" },
-  viewToggleWrap: {
-    flexDirection: "row", borderRadius: 50, padding: 3,
+  allTxHeaderTitle: {
+    fontSize: 17,
+    fontFamily: "Inter_700Bold",
+    color: "#111827",
   },
-  viewTogglePill: { flex: 1, alignItems: "center", paddingVertical: 7, borderRadius: 50 },
-  viewToggleText: { fontSize: 13, fontFamily: "Inter_600SemiBold" },
-  monthLabel: {
-    fontSize: 12, fontFamily: "Inter_700Bold",
-    letterSpacing: 0.6, paddingHorizontal: 16,
-    paddingTop: 18, paddingBottom: 6,
+  allTxHeaderSubtitle: {
+    fontSize: 12,
+    fontFamily: "Inter_500Medium",
+    color: "#6B7280",
+    marginTop: 1,
   },
-  allTxRow: {
-    flexDirection: "row", alignItems: "center",
-    marginHorizontal: 16, marginVertical: 4,
-    borderRadius: 14, borderWidth: 1,
-    paddingVertical: 12, paddingHorizontal: 14, gap: 12,
+  allTxCountBadge: {
+    paddingHorizontal: 10,
+    paddingVertical: 4,
+    borderRadius: 12,
+    backgroundColor: "#E5E7EB",
   },
-  allTxIcon: { width: 44, height: 44, borderRadius: 12, alignItems: "center", justifyContent: "center" },
-  allTxInfo: { flex: 1, gap: 2 },
-  allTxTitle: { fontSize: 15, fontFamily: "Inter_500Medium" },
-  allTxMeta: { fontSize: 12, fontFamily: "Inter_400Regular" },
-  allTxAmount: { fontSize: 15, fontFamily: "Inter_600SemiBold" },
-  allTxEmpty: { paddingVertical: 60, alignItems: "center", gap: 12 },
-  allTxEmptyText: { fontSize: 15, fontFamily: "Inter_400Regular" },
+  allTxCountText: {
+    fontSize: 12,
+    fontFamily: "Inter_600SemiBold",
+    color: "#374151",
+  },
+  allTxSearchBox: {
+    flexDirection: "row",
+    alignItems: "center",
+    backgroundColor: "#FFFFFF",
+    marginHorizontal: 16,
+    marginTop: 6,
+    marginBottom: 10,
+    borderRadius: 14,
+    paddingHorizontal: 14,
+    paddingVertical: 10,
+    shadowColor: "#000",
+    shadowOffset: { width: 0, height: 1 },
+    shadowOpacity: 0.04,
+    shadowRadius: 3,
+    elevation: 1,
+  },
+  allTxSearchInput: {
+    flex: 1,
+    fontSize: 14,
+    fontFamily: "Inter_400Regular",
+    color: "#111827",
+    padding: 0,
+  },
+  allTxToggleWrap: {
+    flexDirection: "row",
+    backgroundColor: "#E7E2D9",
+    borderRadius: 20,
+    marginHorizontal: 16,
+    marginBottom: 12,
+    padding: 3,
+  },
+  allTxTogglePill: {
+    flex: 1,
+    paddingVertical: 7,
+    borderRadius: 18,
+    alignItems: "center",
+  },
+  allTxTogglePillActive: {
+    backgroundColor: "#FFFFFF",
+    shadowColor: "#000",
+    shadowOffset: { width: 0, height: 1 },
+    shadowOpacity: 0.08,
+    shadowRadius: 2,
+    elevation: 1,
+  },
+  allTxToggleText: {
+    fontSize: 13,
+    fontFamily: "Inter_600SemiBold",
+    color: "#6B7280",
+  },
+  allTxToggleTextActive: {
+    color: "#111827",
+  },
+  allTxMonthHeader: {
+    fontSize: 12,
+    fontFamily: "Inter_700Bold",
+    color: "#6B7280",
+    letterSpacing: 0.8,
+    marginHorizontal: 20,
+    marginTop: 14,
+    marginBottom: 6,
+  },
+  allTxCardRow: {
+    flexDirection: "row",
+    alignItems: "center",
+    backgroundColor: "#FFFFFF",
+    marginHorizontal: 16,
+    marginBottom: 8,
+    paddingHorizontal: 14,
+    paddingVertical: 13,
+    borderRadius: 16,
+    shadowColor: "#000",
+    shadowOffset: { width: 0, height: 1 },
+    shadowOpacity: 0.04,
+    shadowRadius: 3,
+    elevation: 1,
+  },
+  allTxIconWrap: {
+    width: 38,
+    height: 38,
+    borderRadius: 19,
+    alignItems: "center",
+    justifyContent: "center",
+    marginRight: 12,
+  },
+  allTxTextWrap: {
+    flex: 1,
+    gap: 2,
+    marginRight: 8,
+  },
+  allTxRowTitle: {
+    fontSize: 14,
+    fontFamily: "Inter_600SemiBold",
+    color: "#111827",
+  },
+  allTxRowMeta: {
+    fontSize: 12,
+    fontFamily: "Inter_400Regular",
+    color: "#6B7280",
+  },
+  allTxRowAmount: {
+    fontSize: 14,
+    fontFamily: "Inter_700Bold",
+  },
+  allTxEmptyBox: {
+    backgroundColor: "#FFFFFF",
+    marginHorizontal: 16,
+    marginTop: 20,
+    borderRadius: 18,
+    paddingVertical: 40,
+    paddingHorizontal: 20,
+    alignItems: "center",
+    shadowColor: "#000",
+    shadowOffset: { width: 0, height: 1 },
+    shadowOpacity: 0.04,
+    shadowRadius: 3,
+    elevation: 1,
+  },
+  allTxEmptyIconCircle: {
+    width: 52,
+    height: 52,
+    borderRadius: 26,
+    backgroundColor: "#F3F4F6",
+    alignItems: "center",
+    justifyContent: "center",
+    marginBottom: 12,
+  },
+  allTxEmptyTitle: {
+    fontSize: 16,
+    fontFamily: "Inter_700Bold",
+    color: "#111827",
+    marginBottom: 4,
+  },
+  allTxEmptySub: {
+    fontSize: 13,
+    fontFamily: "Inter_400Regular",
+    color: "#6B7280",
+    textAlign: "center",
+  },
 
   // Not found
   notFound: { flex: 1, alignItems: "center", justifyContent: "center", gap: 14 },
@@ -2164,5 +2587,497 @@ const styles = StyleSheet.create({
     fontSize: 14,
     fontFamily: "Inter_600SemiBold",
     color: "#2563EB",
+  },
+
+  // ── Credit Card Screen Styles ──
+  ccNavHeader: {
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "space-between",
+    paddingHorizontal: 20,
+    paddingBottom: 14,
+  },
+  ccCircleBackBtn: {
+    width: 42,
+    height: 42,
+    borderRadius: 21,
+    backgroundColor: "#FFFFFF",
+    alignItems: "center",
+    justifyContent: "center",
+    shadowColor: "#000",
+    shadowOffset: { width: 0, height: 1 },
+    shadowOpacity: 0.08,
+    shadowRadius: 4,
+    elevation: 2,
+  },
+  ccNavTitle: {
+    fontSize: 19,
+    fontFamily: "Inter_700Bold",
+    color: "#111827",
+    textAlign: "center",
+    flex: 1,
+    marginHorizontal: 12,
+  },
+  ccCircleDotsBtn: {
+    width: 42,
+    height: 42,
+    borderRadius: 21,
+    alignItems: "center",
+    justifyContent: "center",
+  },
+  ccCardContainer: {
+    marginHorizontal: 16,
+    marginTop: 10,
+    borderRadius: 22,
+    padding: 24,
+    overflow: "hidden",
+    shadowColor: "#000",
+    shadowOffset: { width: 0, height: 6 },
+    shadowOpacity: 0.2,
+    shadowRadius: 10,
+    elevation: 5,
+  },
+  ccTopRow: {
+    flexDirection: "row",
+    justifyContent: "space-between",
+    alignItems: "center",
+    gap: 12,
+  },
+  ccBankText: {
+    fontSize: 14,
+    fontFamily: "Inter_700Bold",
+    color: "#D1D5DB",
+    letterSpacing: 1.5,
+    flexShrink: 1,
+  },
+  dateSheetOverlay: {
+    flex: 1,
+    backgroundColor: "rgba(0,0,0,0.5)",
+  },
+  dateSheetWrap: {
+    position: "absolute",
+    bottom: 0,
+    left: 0,
+    right: 0,
+    justifyContent: "flex-end",
+  },
+  dateSheetCard: {
+    borderTopLeftRadius: 20,
+    borderTopRightRadius: 20,
+    padding: 16,
+    paddingBottom: 32,
+    shadowColor: "#000",
+    shadowOffset: { width: 0, height: -2 },
+    shadowOpacity: 0.1,
+    shadowRadius: 8,
+    elevation: 5,
+  },
+  dateSheetHeader: {
+    flexDirection: "row",
+    justifyContent: "space-between",
+    alignItems: "center",
+    marginBottom: 12,
+  },
+  dateSheetTitle: {
+    fontSize: 16,
+    fontFamily: "Inter_600SemiBold",
+  },
+  dateSheetDoneBtn: {
+    backgroundColor: "#18181B",
+    borderRadius: 14,
+    paddingHorizontal: 14,
+    paddingVertical: 6,
+  },
+  dateSheetDoneText: {
+    color: "#FFFFFF",
+    fontSize: 14,
+    fontFamily: "Inter_600SemiBold",
+  },
+  chipContainer: {
+    width: 38,
+    height: 26,
+    borderRadius: 6,
+    overflow: "hidden",
+    justifyContent: "center",
+    alignItems: "center",
+    borderWidth: 0.5,
+    borderColor: "rgba(255, 230, 150, 0.35)",
+  },
+  chipInnerBorder: {
+    width: 30,
+    height: 19,
+    borderWidth: 0.6,
+    borderColor: "rgba(100, 75, 20, 0.22)",
+    borderRadius: 4,
+    position: "relative",
+    justifyContent: "center",
+    alignItems: "center",
+  },
+  chipLineHorizontal: {
+    position: "absolute",
+    width: "100%",
+    height: 0.6,
+    backgroundColor: "rgba(100, 75, 20, 0.18)",
+  },
+  chipLineVertical: {
+    position: "absolute",
+    height: "100%",
+    width: 0.6,
+    backgroundColor: "rgba(100, 75, 20, 0.18)",
+  },
+  chipCenterPad: {
+    width: 12,
+    height: 8,
+    borderRadius: 2,
+    borderWidth: 0.6,
+    borderColor: "rgba(100, 75, 20, 0.22)",
+    backgroundColor: "rgba(255, 235, 170, 0.12)",
+  },
+  ccSubnameText: {
+    fontSize: 16,
+    fontFamily: "Inter_600SemiBold",
+    color: "#FFFFFF",
+    marginTop: 22,
+  },
+  ccBalanceText: {
+    fontSize: 34,
+    fontFamily: "Inter_700Bold",
+    color: "#FFFFFF",
+    marginTop: 4,
+    letterSpacing: -0.5,
+  },
+  ccBottomRow: {
+    flexDirection: "row",
+    justifyContent: "space-between",
+    alignItems: "center",
+    marginTop: 22,
+  },
+  ccLastFourText: {
+    fontSize: 14,
+    fontFamily: "Inter_600SemiBold",
+    color: "#FFFFFF",
+    letterSpacing: 1,
+  },
+  ccLimitText: {
+    fontSize: 13,
+    fontFamily: "Inter_500Medium",
+    color: "#D1D5DB",
+  },
+  cardNeedsReconnectBadge: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 4,
+    backgroundColor: "rgba(245, 158, 11, 0.2)",
+    borderWidth: 1,
+    borderColor: "rgba(245, 158, 11, 0.45)",
+    paddingVertical: 3,
+    paddingHorizontal: 8,
+    borderRadius: 12,
+  },
+  cardNeedsReconnectText: {
+    fontSize: 11,
+    fontFamily: "Inter_600SemiBold",
+    color: "#FBBF24",
+    letterSpacing: 0.2,
+  },
+  ccProgressTrack: {
+    height: 4,
+    borderRadius: 2,
+    backgroundColor: "rgba(255,255,255,0.22)",
+    overflow: "hidden",
+    marginTop: 10,
+  },
+  ccProgressFill: {
+    height: "100%",
+    backgroundColor: "#FFFFFF",
+    borderRadius: 2,
+  },
+  ccThreeBoxesRow: {
+    flexDirection: "row",
+    gap: 10,
+    marginHorizontal: 16,
+    marginTop: 14,
+  },
+  ccStatBox: {
+    flex: 1,
+    backgroundColor: "#FFFFFF",
+    borderRadius: 16,
+    paddingVertical: 14,
+    paddingHorizontal: 12,
+    shadowColor: "#000",
+    shadowOffset: { width: 0, height: 1 },
+    shadowOpacity: 0.04,
+    shadowRadius: 4,
+    elevation: 1,
+  },
+  ccStatBoxLabel: {
+    fontSize: 12,
+    fontFamily: "Inter_500Medium",
+    color: "#6B7280",
+    marginBottom: 6,
+  },
+  ccStatBoxValue: {
+    fontSize: 16,
+    fontFamily: "Inter_700Bold",
+    color: "#111827",
+  },
+  ccInfoCard: {
+    marginHorizontal: 16,
+    marginTop: 14,
+    backgroundColor: "#FFFFFF",
+    borderRadius: 18,
+    paddingHorizontal: 16,
+    paddingVertical: 4,
+    shadowColor: "#000",
+    shadowOffset: { width: 0, height: 1 },
+    shadowOpacity: 0.04,
+    shadowRadius: 4,
+    elevation: 1,
+  },
+  ccInfoRow: {
+    flexDirection: "row",
+    justifyContent: "space-between",
+    alignItems: "center",
+    paddingVertical: 15,
+  },
+  ccInfoLabel: {
+    fontSize: 14,
+    fontFamily: "Inter_500Medium",
+    color: "#374151",
+  },
+  ccInfoTime: {
+    fontSize: 13,
+    fontFamily: "Inter_600SemiBold",
+    color: "#111827",
+    marginTop: 2,
+  },
+  ccInfoValue: {
+    fontSize: 14,
+    fontFamily: "Inter_700Bold",
+    color: "#111827",
+  },
+  ccSyncNowBtn: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 6,
+    paddingHorizontal: 13,
+    paddingVertical: 7,
+    borderRadius: 20,
+    backgroundColor: "#EFF6FF",
+    borderWidth: 1,
+    borderColor: "#DBEAFE",
+  },
+  ccSyncNowBtnSuccess: {
+    backgroundColor: "#F0FDF4",
+    borderColor: "#BBF7D0",
+  },
+  ccSyncNowText: {
+    fontSize: 12,
+    fontFamily: "Inter_600SemiBold",
+    color: "#2563EB",
+  },
+  ccSyncNowTextSuccess: {
+    color: "#16A34A",
+  },
+  ccInfoDivider: {
+    height: StyleSheet.hairlineWidth,
+    backgroundColor: "#F3F4F6",
+  },
+  ccStatusDot: {
+    width: 8,
+    height: 8,
+    borderRadius: 4,
+  },
+  ccBtnGroup: {
+    marginHorizontal: 16,
+    marginTop: 16,
+    gap: 10,
+  },
+  ccSimulateBtn: {
+    backgroundColor: "#EAE6DF",
+    borderRadius: 14,
+    paddingVertical: 16,
+    alignItems: "center",
+    justifyContent: "center",
+  },
+  ccSimulateBtnText: {
+    fontSize: 15,
+    fontFamily: "Inter_600SemiBold",
+    color: "#1F2937",
+  },
+  ccReconnectBtn: {
+    backgroundColor: "#2563EB",
+    borderRadius: 14,
+    paddingVertical: 16,
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "center",
+  },
+  ccReconnectBtnText: {
+    fontSize: 15,
+    fontFamily: "Inter_600SemiBold",
+    color: "#FFFFFF",
+  },
+  ccDisconnectBtn: {
+    backgroundColor: "#C84638",
+    borderRadius: 14,
+    paddingVertical: 16,
+    alignItems: "center",
+    justifyContent: "center",
+  },
+  ccDisconnectBtnText: {
+    fontSize: 15,
+    fontFamily: "Inter_600SemiBold",
+    color: "#FFFFFF",
+  },
+  ccViewTxBtn: {
+    marginHorizontal: 16,
+    marginTop: 14,
+    backgroundColor: "#FFFFFF",
+    borderRadius: 16,
+    paddingHorizontal: 16,
+    paddingVertical: 15,
+    flexDirection: "row",
+    justifyContent: "space-between",
+    alignItems: "center",
+    shadowColor: "#000",
+    shadowOffset: { width: 0, height: 1 },
+    shadowOpacity: 0.04,
+    shadowRadius: 4,
+    elevation: 1,
+  },
+  ccTxIconCircle: {
+    width: 32,
+    height: 32,
+    borderRadius: 16,
+    backgroundColor: "#F3F4F6",
+    alignItems: "center",
+    justifyContent: "center",
+  },
+  ccViewTxText: {
+    fontSize: 15,
+    fontFamily: "Inter_600SemiBold",
+    color: "#111827",
+  },
+  ccRecentSection: {
+    marginTop: 20,
+    marginHorizontal: 16,
+  },
+  ccRecentHeaderRow: {
+    flexDirection: "row",
+    justifyContent: "space-between",
+    alignItems: "center",
+    marginBottom: 10,
+    paddingHorizontal: 4,
+  },
+  ccRecentTitle: {
+    fontSize: 15,
+    fontFamily: "Inter_700Bold",
+    color: "#111827",
+  },
+  ccSeeAllText: {
+    fontSize: 13,
+    fontFamily: "Inter_600SemiBold",
+    color: "#2563EB",
+  },
+  ccEmptyTxBox: {
+    backgroundColor: "#FFFFFF",
+    borderRadius: 16,
+    paddingVertical: 28,
+    alignItems: "center",
+    gap: 8,
+  },
+  ccEmptyTxText: {
+    fontSize: 14,
+    fontFamily: "Inter_400Regular",
+    color: "#9CA3AF",
+  },
+  ccTxListBox: {
+    backgroundColor: "#FFFFFF",
+    borderRadius: 16,
+    paddingHorizontal: 16,
+    shadowColor: "#000",
+    shadowOffset: { width: 0, height: 1 },
+    shadowOpacity: 0.04,
+    shadowRadius: 4,
+    elevation: 1,
+  },
+  ccTxRow: {
+    flexDirection: "row",
+    alignItems: "center",
+    paddingVertical: 13,
+    gap: 12,
+  },
+  ccTxIconBox: {
+    width: 38,
+    height: 38,
+    borderRadius: 19,
+    alignItems: "center",
+    justifyContent: "center",
+  },
+  ccTxTitle: {
+    fontSize: 14,
+    fontFamily: "Inter_600SemiBold",
+    color: "#111827",
+  },
+  ccTxDate: {
+    fontSize: 12,
+    fontFamily: "Inter_400Regular",
+    color: "#6B7280",
+    marginTop: 2,
+  },
+  ccTxAmount: {
+    fontSize: 14,
+    fontFamily: "Inter_700Bold",
+  },
+  ccTxDivider: {
+    height: StyleSheet.hairlineWidth,
+    backgroundColor: "#F3F4F6",
+  },
+  ccNetworthRow: {
+    flexDirection: "row",
+    alignItems: "center",
+    marginHorizontal: 16,
+    marginTop: 14,
+    backgroundColor: "#FFFFFF",
+    borderRadius: 16,
+    paddingHorizontal: 16,
+    paddingVertical: 14,
+    gap: 12,
+    shadowColor: "#000",
+    shadowOffset: { width: 0, height: 1 },
+    shadowOpacity: 0.04,
+    shadowRadius: 4,
+    elevation: 1,
+  },
+  ccNetworthIcon: {
+    width: 36,
+    height: 36,
+    borderRadius: 18,
+    backgroundColor: "#F3F4F6",
+    alignItems: "center",
+    justifyContent: "center",
+  },
+  ccNetworthLabel: {
+    flex: 1,
+    fontSize: 14,
+    fontFamily: "Inter_600SemiBold",
+    color: "#111827",
+  },
+  ccFab: {
+    position: "absolute",
+    right: 20,
+    bottom: 24,
+    width: 54,
+    height: 54,
+    borderRadius: 27,
+    backgroundColor: "#111827",
+    alignItems: "center",
+    justifyContent: "center",
+    shadowColor: "#000",
+    shadowOffset: { width: 0, height: 4 },
+    shadowOpacity: 0.25,
+    shadowRadius: 8,
+    elevation: 6,
   },
 });

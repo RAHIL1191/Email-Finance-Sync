@@ -111,6 +111,8 @@ export interface Account {
   currency?: string;
   /** Optional credit limit for credit card accounts */
   creditLimit?: number;
+  /** Optional payment due date for credit cards (e.g. "2026-10-04") */
+  dueDate?: string;
   /** When false, this account is excluded from net worth. Defaults to true. */
   includeInNetworth?: boolean;
   /** Whether this is a joint account shared with another person */
@@ -446,6 +448,7 @@ interface AppContextType {
   ) => Promise<void>;
   connectPlaid: (item: PlaidItem, newAccounts: Omit<Account, "id">[], initialTransactions: Omit<Transaction, "id">[], rawHoldingsData?: any[], rawInvTxsData?: any[]) => Promise<{ imported: number }>;
   syncPlaidTransactions: (itemId: string, forceFullSync?: boolean) => Promise<{ imported: number; error?: string }>;
+  reconnectPlaidItem: (itemId: string) => Promise<{ imported: number; error?: string }>;
   delinkPlaid: (itemId: string) => void;
   disconnectPlaid: (itemId: string) => void;
   isSyncing: boolean;
@@ -1417,6 +1420,122 @@ export function getAccountGroupKey(account: Account): string {
 export function isLiabilityAccount(account: Account): boolean {
   const key = getAccountGroupKey(account);
   return key === "credit" || key === "mortgage" || key === "loan";
+}
+
+/**
+ * Returns a standardized short bank name (e.g., "BMO", "RBC", "TD", "CIBC", "Scotiabank", "Amex")
+ * instead of long formal names like "BMO Bank of Montreal" or "Royal Bank of Canada".
+ */
+export function getShortBankName(rawBank?: string | null, fallbackName?: string | null): string {
+  const bankStr = (rawBank || "").trim();
+  const nameStr = (fallbackName || "").trim();
+  const combined = `${bankStr} ${nameStr}`.toLowerCase();
+  if (!combined.trim()) return "Bank";
+
+  // Match Canadian and major US institutions
+  if (combined.includes("bmo") || combined.includes("bank of montreal") || combined.includes("montreal")) return "BMO";
+  if (combined.includes("rbc") || combined.includes("royal bank") || combined.includes("avion")) return "RBC";
+  if (combined.includes("td") || combined.includes("toronto dominion") || combined.includes("toronto-dominion") || combined.includes("canada trust")) return "TD";
+  if (combined.includes("cibc") || combined.includes("imperial bank") || combined.includes("canadian imperial")) return "CIBC";
+  if (combined.includes("scotia") || combined.includes("nova scotia")) return "Scotiabank";
+  if (combined.includes("amex") || combined.includes("american express") || combined.includes("cobalt")) return "Amex";
+  if (combined.includes("tangerine") || combined.includes("ing direct")) return "Tangerine";
+  if (combined.includes("wealthsimple")) return "Wealthsimple";
+  if (combined.includes("national bank") || combined.includes("banque nationale") || combined.includes("nbc")) return "National Bank";
+  if (combined.includes("desjardins")) return "Desjardins";
+  if (combined.includes("simplii")) return "Simplii";
+  if (combined.includes("eq bank") || combined.includes("equitable bank")) return "EQ Bank";
+  if (combined.includes("hsbc")) return "HSBC";
+  if (combined.includes("atb")) return "ATB";
+  if (combined.includes("laurentian") || combined.includes("laurentienne")) return "Laurentian";
+  if (combined.includes("manulife")) return "Manulife";
+  if (combined.includes("capital one")) return "Capital One";
+  if (combined.includes("chase") || combined.includes("jpmorgan")) return "Chase";
+  if (combined.includes("citi") || combined.includes("citibank")) return "Citi";
+  if (combined.includes("bank of america") || combined.includes("bofa")) return "BofA";
+  if (combined.includes("wells fargo")) return "Wells Fargo";
+  if (combined.includes("discover")) return "Discover";
+  if (combined.includes("barclays")) return "Barclays";
+  if (combined.includes("koho")) return "KOHO";
+  if (combined.includes("neo financial") || combined.includes("neo money")) return "Neo";
+
+  // Fallback: If rawBank has a value, clean out legal suffixes like "Bank of ...", "Financial", "Inc", etc.
+  if (bankStr && bankStr !== "Other" && bankStr !== "Custom") {
+    let cleaned = bankStr.replace(/^the\s+/i, "");
+    cleaned = cleaned.replace(/\s+(Bank of [A-Za-z]+|Bank|Trust|Financial|Canada|Inc\.?|Corp\.?|Group)$/gi, "");
+    cleaned = cleaned.trim();
+    return cleaned || bankStr;
+  }
+
+  return "Bank";
+}
+
+/**
+ * Detects whether a string is a masked or raw card/account number
+ * (e.g. "5360 xxxx xxxx 8839", "**** **** **** 1234", "•••• 4242").
+ */
+export function isCardNumberString(str?: string | null): boolean {
+  if (!str) return false;
+  const s = str.trim();
+  if (/[\*xX•]{3,}/.test(s)) return true;
+  const stripped = s.replace(/[\s\-\*\.xX•]/g, "");
+  if (/^\d+$/.test(stripped) && stripped.length >= 8) return true;
+  if (/^[\d\s\-\*xX•]+$/.test(s) && s.length >= 10) return true;
+  return false;
+}
+
+/**
+ * Cleans an account/card display name so that raw or masked full card numbers
+ * are not displayed on the card, since the last 4 digits are already shown in the footer.
+ * If the card is named generic "Credit Card" or has a card number, returns the payment network
+ * (e.g. "Visa", "Mastercard", "Amex") instead.
+ */
+export function cleanCardDisplayName(
+  name?: string | null,
+  bankName?: string | null,
+  accountType?: string | null,
+  network?: string | null
+): string {
+  const defaultCardLabel = network
+    ? (network.toUpperCase() === "MASTERCARD"
+        ? "Mastercard"
+        : network.toUpperCase() === "VISA"
+        ? "Visa"
+        : network.toUpperCase() === "AMEX"
+        ? "Amex"
+        : network.charAt(0).toUpperCase() + network.slice(1).toLowerCase())
+    : "Credit Card";
+
+  if (!name || isCardNumberString(name) || name.trim().toLowerCase() === "credit card") {
+    if (accountType === "savings") return "Savings";
+    if (accountType === "checking") return "Chequing";
+    return defaultCardLabel;
+  }
+
+  let cleaned = name.trim();
+
+  // Strip any full or masked card numbers embedded inside the name
+  cleaned = cleaned.replace(/(\d{4}[\s\-\*xX•]+)+\d{2,4}/g, "").trim();
+  cleaned = cleaned.replace(/[\*xX•]{3,}[\s\-\*xX•]*\d*/g, "").trim();
+  cleaned = cleaned.replace(/••••\s*\d{4}/g, "").trim();
+
+  // Strip leading bank name if repeated
+  if (bankName) {
+    const bankLower = bankName.toLowerCase();
+    if (cleaned.toLowerCase().startsWith(bankLower)) {
+      cleaned = cleaned.slice(bankName.length).trim();
+    }
+  }
+
+  cleaned = cleaned.replace(/^[\s\-_–—:]+|[\s\-_–—:]+$/g, "").trim();
+
+  if (!cleaned || isCardNumberString(cleaned) || cleaned.toLowerCase() === "credit card") {
+    if (accountType === "savings") return "Savings";
+    if (accountType === "checking") return "Chequing";
+    return defaultCardLabel;
+  }
+
+  return cleaned;
 }
 
 const BILL_DETECT_KEY = "@fintrack/bill_detect_notified";
@@ -4440,6 +4559,17 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
     );
   }, []);
 
+  const reconnectPlaidItem = useCallback(
+    async (itemId: string): Promise<{ imported: number; error?: string }> => {
+      try {
+        return await syncPlaidTransactions(itemId, true);
+      } catch (e: any) {
+        return { imported: 0, error: e?.message };
+      }
+    },
+    [syncPlaidTransactions]
+  );
+
   const disconnectPlaid = useCallback((itemId: string) => {
     const item = plaidSync.items.find((i) => i.itemId === itemId);
     // Remove accounts by BOTH accountIds list AND plaidItemId, but preserve joint accounts if another item remains attached
@@ -4531,7 +4661,7 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
         addCategory, updateCategory, deleteCategory, seedCategories,
         learnCategoryRule, autoCategorize, addCategoryMappingRule, deleteCategoryRule,
         connectEmail, updateEmailSyncSettings, disconnectEmail, resetEmailTransactions, syncEmailTransactions, wipeAllTransactions, wipePortfolio, wipeData,
-        connectPlaid, syncPlaidTransactions, delinkPlaid, disconnectPlaid,
+        connectPlaid, syncPlaidTransactions, reconnectPlaidItem, delinkPlaid, disconnectPlaid,
         // investmentTransactions + holdings already exposed above
         isSyncing, totalBalance, assetsTotal, liabilitiesTotal, monthlyIncome, monthlyExpense,
         currentMonth, setCurrentMonth,

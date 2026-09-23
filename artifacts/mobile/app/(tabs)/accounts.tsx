@@ -32,6 +32,8 @@ import {
   isIncludedInNetworth,
   isLiabilityAccount,
   getAccountGroupKey,
+  getShortBankName,
+  cleanCardDisplayName,
   useApp,
 } from "@/context/AppContext";
 import { useColors } from "@/hooks/useColors";
@@ -51,8 +53,10 @@ export interface CardStyleMeta {
 export function getAccountCardMeta(account: Account): CardStyleMeta {
   const text = `${account.name || ""} ${account.bank || ""}`.toLowerCase();
   const group = getAccountGroupKey(account);
+  const isMortgage = group === "mortgage" || text.includes("mortgage");
   const isCredit =
-    group === "credit" ||
+    !isMortgage &&
+    (group === "credit" ||
     account.type === "credit" ||
     text.includes("credit") ||
     text.includes("card") ||
@@ -60,32 +64,34 @@ export function getAccountCardMeta(account: Account): CardStyleMeta {
     text.includes("visa") ||
     text.includes("mastercard") ||
     text.includes("avion") ||
-    text.includes("cobalt");
+    text.includes("cobalt"));
 
-  // Determine Bank / Issuer Name
-  let bankName = (account.bank || "").trim();
-  if (!bankName || bankName === "Other" || bankName === "Custom") {
-    if (text.includes("rbc") || text.includes("royal bank")) bankName = "RBC";
-    else if (text.includes("amex") || text.includes("american express") || text.includes("cobalt")) bankName = "Amex";
-    else if (text.includes("tangerine")) bankName = "Tangerine";
-    else if (text.includes("td") || text.includes("toronto dominion")) bankName = "TD";
-    else if (text.includes("cibc")) bankName = "CIBC";
-    else if (text.includes("bmo")) bankName = "BMO";
-    else if (text.includes("scotia")) bankName = "Scotiabank";
-    else if (text.includes("wealthsimple") || text.includes("tfsa") || text.includes("rrsp") || group === "investment") bankName = "Wealthsimple";
+  // Determine Bank / Issuer Name (strictly short names for all cards and accounts)
+  let bankName = getShortBankName(account.bank, account.name);
+  if (bankName === "Bank") {
+    if (isMortgage) bankName = "Mortgage";
     else if (isCredit) bankName = "Credit Card";
     else bankName = account.type ? (account.type.charAt(0).toUpperCase() + account.type.slice(1)) : "Bank";
   }
 
-  // Determine Card Display Name (avoid repeating bank name, match luxury naming)
-  let cardName = account.name.trim();
+  let network: string | undefined = undefined;
+  if (isCredit) {
+    if (text.includes("mastercard") || text.includes("mc")) network = "Mastercard";
+    else if (text.includes("amex") || text.includes("american express")) network = "Amex";
+    else if (text.includes("discover")) network = "Discover";
+    else network = "Visa";
+  }
+
+  // Determine Card Display Name (avoid repeating bank name, remove raw/masked card numbers, show Visa/Mastercard instead of generic Credit Card)
+  let cardName = cleanCardDisplayName(account.name, bankName, account.type, network);
   const lowerCard = cardName.toLowerCase();
   const lowerBank = bankName.toLowerCase();
 
   if (lowerCard === `rahil ${lowerBank}` || lowerCard === lowerBank) {
-    if (account.type === "savings") cardName = "High Interest Savings";
+    if (isMortgage) cardName = "Mortgage Loan";
+    else if (account.type === "savings") cardName = "High Interest Savings";
     else if (account.type === "checking") cardName = "Chequing";
-    else if (isCredit) cardName = "Credit Card";
+    else if (isCredit) cardName = network || "Visa";
     else cardName = account.type ? (account.type.charAt(0).toUpperCase() + account.type.slice(1)) : "Main Account";
   } else if (lowerCard.startsWith(lowerBank) && cardName.length > bankName.length + 2) {
     cardName = cardName.slice(bankName.length).trim();
@@ -93,13 +99,16 @@ export function getAccountCardMeta(account: Account): CardStyleMeta {
 
   // Determine Category Label
   let categoryLabel = "Chequing";
-  if (isCredit) categoryLabel = "Credit Card";
+  if (isMortgage) categoryLabel = "Mortgage";
+  else if (isCredit) categoryLabel = "Credit Card";
   else if (group === "savings" || account.type === "savings") categoryLabel = "Savings";
   else if (group === "investment" || account.type === "investment") categoryLabel = "Investment";
 
   // Gradients matching reference image physical card design
   let gradient: [string, string];
-  if (text.includes("rbc") || text.includes("avion")) {
+  if (isMortgage) {
+    gradient = ["#1E293B", "#334155"];
+  } else if (text.includes("rbc") || text.includes("avion")) {
     // RBC Avion Infinite warm bronze/gold metallic gradient (Card 1 in image)
     gradient = ["#28201A", "#4E3A25"];
   } else if (text.includes("amex") || text.includes("cobalt")) {
@@ -156,12 +165,45 @@ function EmvChip() {
 
 // ── Screen 1: Luxury Bank Card ────────────────────────────────────────────────
 
-function VibrantAccountCard({ account }: { account: Account }) {
+function VibrantAccountCard({ account, onRelink }: { account: Account; onRelink?: (item: PlaidItem) => void }) {
   const [showDeleteConfirm, setShowDeleteConfirm] = useState(false);
-  const { deleteAccount, transactions } = useApp();
+  const { deleteAccount, transactions, plaidSync } = useApp();
   const liveBalance = computeBalance(account, transactions);
   const meta = getAccountCardMeta(account);
   const isCredit = meta.isCredit;
+
+  const plaidItem = useMemo(() => {
+    if (account.plaidItemId) {
+      const match = plaidSync.items.find((i) => i.itemId === account.plaidItemId);
+      if (match) return match;
+    }
+    const byAccId = plaidSync.items.find((i) => i.accountIds?.includes(account.id));
+    if (byAccId) return byAccId;
+    const byMap = plaidSync.items.find((i) => {
+      if (!i.plaidAccountMap) return false;
+      return (
+        Object.values(i.plaidAccountMap).includes(account.id) ||
+        (account.plaidAccountId && i.plaidAccountMap[account.plaidAccountId] === account.id)
+      );
+    });
+    if (byMap) return byMap;
+    if (account.bank) {
+      return (
+        plaidSync.items.find(
+          (i) => i.bankName.toLowerCase() === account.bank.toLowerCase()
+        ) || null
+      );
+    }
+    return null;
+  }, [account, plaidSync.items]);
+
+  const cardErrorLabel = plaidItem?.needsRelogin
+    ? "Needs reconnect"
+    : plaidItem?.syncError
+    ? (plaidItem.syncError.toLowerCase().includes("login") || plaidItem.syncError.toLowerCase().includes("reconnect")
+        ? "Needs reconnect"
+        : "Needs review")
+    : null;
 
   // Credit limit calculation
   const limit = account.creditLimit || (isCredit ? 8000 : 0);
@@ -216,7 +258,24 @@ function VibrantAccountCard({ account }: { account: Account }) {
             <Text style={styles.cardMaskedNumber}>
               •••• {account.lastFour || "4242"}
             </Text>
-            {isCredit && limit > 0 ? (
+            {cardErrorLabel ? (
+              <TouchableOpacity
+                style={styles.cardNeedsReconnectBadge}
+                activeOpacity={0.7}
+                onPress={(e) => {
+                  e.stopPropagation?.();
+                  Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium);
+                  if (plaidItem && onRelink) {
+                    onRelink(plaidItem);
+                  } else {
+                    router.push({ pathname: "/account/[id]", params: { id: account.id } });
+                  }
+                }}
+              >
+                <Feather name="alert-triangle" size={11} color="#FBBF24" />
+                <Text style={styles.cardNeedsReconnectText}>{cardErrorLabel}</Text>
+              </TouchableOpacity>
+            ) : isCredit && limit > 0 ? (
               <Text style={styles.cardLimitText}>
                 Limit ${limit.toLocaleString("en-US")}
               </Text>
@@ -229,6 +288,7 @@ function VibrantAccountCard({ account }: { account: Account }) {
               <View
                 style={[
                   styles.cardProgressBarFill,
+                  cardErrorLabel ? { backgroundColor: "#F59E0B" } : null,
                   { width: `${Math.min(100, Math.max(6, utilizationRatio * 100))}%` },
                 ]}
               />
@@ -545,19 +605,53 @@ export default function AccountsScreen() {
   const filteredAccounts = useMemo(() => {
     if (activeFilter === "All") return accounts;
     if (activeFilter === "Cards") {
-      return accounts.filter((a) => a.type === "credit" || isLiabilityAccount(a));
+      return accounts.filter((a) => {
+        const group = getAccountGroupKey(a);
+        const text = `${a.name || ""} ${a.bank || ""}`.toLowerCase();
+        const isMortgage = group === "mortgage" || text.includes("mortgage");
+        if (isMortgage) return false;
+        return a.type === "credit" || group === "credit";
+      });
     }
     if (activeFilter === "Savings") {
-      return accounts.filter((a) => a.type === "savings");
+      return accounts.filter((a) => {
+        const group = getAccountGroupKey(a);
+        const text = `${a.name || ""} ${a.bank || ""}`.toLowerCase();
+        return a.type === "savings" && group !== "mortgage" && !text.includes("mortgage");
+      });
     }
     if (activeFilter === "Chequing") {
-      return accounts.filter((a) => a.type === "checking");
+      return accounts.filter((a) => {
+        const group = getAccountGroupKey(a);
+        const text = `${a.name || ""} ${a.bank || ""}`.toLowerCase();
+        return a.type === "checking" && group !== "mortgage" && !text.includes("mortgage");
+      });
     }
-    // "Other"
-    return accounts.filter(
-      (a) => a.type !== "credit" && a.type !== "savings" && a.type !== "checking" && !isLiabilityAccount(a)
-    );
+    // "Other" -> includes Mortgages, Loans, Investments, and custom accounts
+    return accounts.filter((a) => {
+      const group = getAccountGroupKey(a);
+      const text = `${a.name || ""} ${a.bank || ""}`.toLowerCase();
+      const isMortgage = group === "mortgage" || text.includes("mortgage");
+      if (isMortgage) return true;
+      const isCard = a.type === "credit" || group === "credit";
+      const isSav = a.type === "savings";
+      const isChk = a.type === "checking";
+      return !isCard && !isSav && !isChk;
+    });
   }, [accounts, activeFilter]);
+
+  // Sum of balances for currently visible (filtered) accounts.
+  // For "Other" (mortgages + investments), liabilities are subtracted so the
+  // result mirrors the net-worth formula: assets - liabilities.
+  const filteredTotal = useMemo(() => {
+    return filteredAccounts.reduce((s, a) => {
+      const bal = computeBalance(a, transactions);
+      if (activeFilter === "Other" && isLiabilityAccount(a)) {
+        return s - bal; // mortgage/loan: subtract
+      }
+      return s + bal;
+    }, 0);
+  }, [filteredAccounts, transactions, activeFilter]);
 
   return (
     <SafeAreaView edges={["top"]} style={styles.container}>
@@ -593,22 +687,55 @@ export default function AccountsScreen() {
           </View>
         </View>
 
-        {/* ── Summary Cards: Assets & Liabilities ── */}
-        <View style={styles.summaryRow}>
-          <View style={styles.summaryCard}>
-            <Text style={styles.summaryLabel}>Assets</Text>
-            <Text style={styles.summaryAmount} numberOfLines={1} adjustsFontSizeToFit>
-              ${Math.round(assetsTotal).toLocaleString("en-US")}
-            </Text>
-          </View>
+        {/* ── Summary Cards: Assets & Liabilities — or Selected Filter Total ── */}
+        {activeFilter === "All" ? (
+          <View style={styles.summaryRow}>
+            <View style={styles.summaryCard}>
+              <Text style={styles.summaryLabel}>Assets</Text>
+              <Text style={styles.summaryAmount} numberOfLines={1} adjustsFontSizeToFit>
+                ${Math.round(assetsTotal).toLocaleString("en-US")}
+              </Text>
+            </View>
 
-          <View style={styles.summaryCard}>
-            <Text style={styles.summaryLabel}>Liabilities</Text>
-            <Text style={styles.summaryAmount} numberOfLines={1} adjustsFontSizeToFit>
-              ${Math.round(Math.max(0, liabilitiesTotal)).toLocaleString("en-US")}
-            </Text>
+            <View style={styles.summaryCard}>
+              <Text style={styles.summaryLabel}>Liabilities</Text>
+              <Text style={styles.summaryAmount} numberOfLines={1} adjustsFontSizeToFit>
+                ${Math.round(Math.max(0, liabilitiesTotal)).toLocaleString("en-US")}
+              </Text>
+            </View>
           </View>
-        </View>
+        ) : (
+          <View style={styles.summaryRow}>
+            <View style={styles.selectedTotalCard}>
+              <View style={styles.selectedTotalLeft}>
+                <Text style={styles.summaryLabel}>
+                  {activeFilter === "Cards"
+                    ? "Credit Cards"
+                    : activeFilter === "Other"
+                    ? "Other net"
+                    : activeFilter}{" total"}
+                </Text>
+                <Text
+                  style={[
+                    styles.selectedTotalAmount,
+                    (activeFilter === "Cards" && filteredTotal !== 0) && { color: "#DC2626" },
+                    (activeFilter === "Other" && filteredTotal < 0) && { color: "#DC2626" },
+                  ]}
+                  numberOfLines={1}
+                  adjustsFontSizeToFit
+                >
+                  {(activeFilter === "Cards" && filteredTotal < 0) || (activeFilter === "Other" && filteredTotal < 0) ? "-" : ""}
+                  ${Math.round(Math.abs(filteredTotal)).toLocaleString("en-US")}
+                </Text>
+              </View>
+              <View style={styles.selectedTotalBadge}>
+                <Text style={styles.selectedTotalBadgeText}>
+                  {filteredAccounts.length} account{filteredAccounts.length !== 1 ? "s" : ""}
+                </Text>
+              </View>
+            </View>
+          </View>
+        )}
 
         {/* ── Filter Chips Bar ── */}
         <ScrollView
@@ -639,7 +766,7 @@ export default function AccountsScreen() {
         {/* ── Account Cards List (Screen 1 Design) ── */}
         <View style={styles.cardsList}>
           {filteredAccounts.map((account) => (
-            <VibrantAccountCard key={account.id} account={account} />
+            <VibrantAccountCard key={account.id} account={account} onRelink={setRelinkItem} />
           ))}
 
           {/* Empty State */}
@@ -881,6 +1008,45 @@ const styles = StyleSheet.create({
     letterSpacing: -0.5,
   },
 
+  // Selected Filter Total Card (full-width when a filter is active)
+  selectedTotalCard: {
+    flex: 1,
+    backgroundColor: "#FFFFFF",
+    borderRadius: 22,
+    paddingVertical: 18,
+    paddingHorizontal: 18,
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "space-between",
+    shadowColor: "#000",
+    shadowOffset: { width: 0, height: 2 },
+    shadowOpacity: 0.04,
+    shadowRadius: 8,
+    elevation: 1,
+  },
+  selectedTotalLeft: {
+    flex: 1,
+    gap: 4,
+  },
+  selectedTotalAmount: {
+    fontSize: 26,
+    fontFamily: "Inter_700Bold",
+    color: "#111827",
+    letterSpacing: -0.6,
+  },
+  selectedTotalBadge: {
+    backgroundColor: "#F3F4F6",
+    borderRadius: 12,
+    paddingHorizontal: 10,
+    paddingVertical: 5,
+    marginLeft: 12,
+  },
+  selectedTotalBadgeText: {
+    fontSize: 12,
+    fontFamily: "Inter_500Medium",
+    color: "#6B7280",
+  },
+
   // Filter Bar
   filterBar: {
     paddingHorizontal: 20,
@@ -1016,6 +1182,23 @@ const styles = StyleSheet.create({
     fontSize: 12,
     fontFamily: "Inter_400Regular",
     color: "rgba(255, 255, 255, 0.75)",
+  },
+  cardNeedsReconnectBadge: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 4,
+    backgroundColor: "rgba(245, 158, 11, 0.2)",
+    borderWidth: 1,
+    borderColor: "rgba(245, 158, 11, 0.45)",
+    paddingVertical: 2,
+    paddingHorizontal: 7,
+    borderRadius: 10,
+  },
+  cardNeedsReconnectText: {
+    fontSize: 11,
+    fontFamily: "Inter_600SemiBold",
+    color: "#FBBF24",
+    letterSpacing: 0.2,
   },
   cardProgressBarTrack: {
     width: "100%",

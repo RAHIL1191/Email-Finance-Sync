@@ -2,7 +2,7 @@ import { Feather } from "@expo/vector-icons";
 import * as Haptics from "expo-haptics";
 import React, { useMemo, useState } from "react";
 import { router } from "expo-router";
-import * as FileSystem from "expo-file-system/src/legacy/FileSystem";
+import * as FileSystem from "expo-file-system/legacy";
 import * as Sharing from "expo-sharing";
 import * as Print from "expo-print";
 import DateTimePicker from "@react-native-community/datetimepicker";

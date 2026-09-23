@@ -3,7 +3,7 @@ import * as Haptics from "expo-haptics";
 import React from "react";
 import { StyleSheet, Text, TouchableOpacity, View } from "react-native";
 
-import { Account } from "@/context/AppContext";
+import { Account, getShortBankName } from "@/context/AppContext";
 import { useColors } from "@/hooks/useColors";
 
 const TYPE_ICONS: Record<string, string> = {
@@ -34,7 +34,7 @@ export default function AccountCard({ account, onPress }: Props) {
     >
       <View style={styles.header}>
         <View>
-          <Text style={styles.bankName}>{account.bank}</Text>
+          <Text style={styles.bankName}>{getShortBankName(account.bank, account.name)}</Text>
           <Text style={styles.accountName}>{account.name}</Text>
         </View>
         <View style={[styles.iconBg]}>

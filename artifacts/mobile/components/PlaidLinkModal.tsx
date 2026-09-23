@@ -276,8 +276,20 @@ export default function PlaidLinkModal({
   // Handle relink
   useEffect(() => {
     if (!relinkItemId || !relinkBankName) return;
+    const cleanName = relinkBankName.toLowerCase().trim();
     const match =
-      POPULAR_BANKS.find((b) => b.name.toLowerCase() === relinkBankName.toLowerCase()) ||
+      POPULAR_BANKS.find(
+        (b) =>
+          b.name.toLowerCase() === cleanName ||
+          cleanName.includes(b.name.toLowerCase()) ||
+          b.fullName.toLowerCase().includes(cleanName) ||
+          cleanName.includes(b.fullName.toLowerCase())
+      ) ||
+      OTHER_BANKS.find(
+        (b) =>
+          b.name.toLowerCase() === cleanName ||
+          cleanName.includes(b.name.toLowerCase())
+      ) ||
       POPULAR_BANKS[0];
     handleBankSelect(match, relinkItemId);
   }, [relinkItemId, relinkBankName]);
@@ -299,6 +311,7 @@ export default function PlaidLinkModal({
         },
         body: JSON.stringify({
           institution_id: bank.id,
+          item_id: itemId,
           access_token_item_id: itemId,
         }),
       });

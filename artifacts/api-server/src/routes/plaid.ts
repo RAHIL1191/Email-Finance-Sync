@@ -93,7 +93,8 @@ router.get("/plaid/items", async (req, res) => {
 // ── POST /api/plaid/create-link-token ─────────────────────────────────────
 
 router.post("/plaid/create-link-token", async (req, res) => {
-  const { item_id } = req.body as { item_id?: string };
+  const { item_id: rawItemId, access_token_item_id } = req.body as { item_id?: string; access_token_item_id?: string };
+  const item_id = rawItemId || access_token_item_id;
   let client: PlaidApi;
   try {
     client = getPlaidClient();

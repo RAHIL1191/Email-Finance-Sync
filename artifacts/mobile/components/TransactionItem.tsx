@@ -3,7 +3,7 @@ import * as Haptics from "expo-haptics";
 import React from "react";
 import { StyleSheet, Text, TouchableOpacity, View } from "react-native";
 
-import { Transaction, useApp } from "@/context/AppContext";
+import { Transaction, getShortBankName, useApp } from "@/context/AppContext";
 import { useColors } from "@/hooks/useColors";
 import { useTheme } from "@/context/ThemeContext";
 
@@ -113,7 +113,7 @@ export default function TransactionItem({ transaction, onPress }: Props) {
                 <>
                   <Text style={[styles.bullet, { color: colors.mutedForeground }]}>·</Text>
                   <Text style={[styles.bankName, { color: colors.mutedForeground }]} numberOfLines={1}>
-                    {account.bank}
+                    {getShortBankName(account.bank, account.name)}
                   </Text>
                 </>
               ) : null}
