@@ -233,13 +233,12 @@ router.post("/transactions/bulk", async (req, res) => {
         continue; // exact Plaid ID duplicate
       }
 
-      // Check for 1-to-1 cross-source collision (e.g. lower-priority email receipt matching higher-priority Plaid charge)
+      // Check for content collision (same account, date, amount, matching title)
       const key = dedupKey(t);
       const candidates = acceptedByContentKey.get(key);
       if (candidates && candidates.length > 0) {
         const matchIndex = candidates.findIndex(
           (c) =>
-            c.source !== t.source &&
             !matchedCrossSourceIds.has(c.id) &&
             (c.type || "expense") === (t.type || "expense") &&
             isCrossSourceTitleMatch(c.merchant || c.title, t.merchant || t.title)
@@ -260,7 +259,7 @@ router.post("/transactions/bulk", async (req, res) => {
       acceptedByContentKey.get(key)!.push(t);
     }
 
-    // Pass B: Fuzzy Pending-Posted Collapsing across the combined list.
+    // Pass B: Fuzzy Pending-Posted & Settlement Collapsing across the combined list.
     // 1. Gather all pending transaction dates by ID so we can preserve them.
     const pendingDatesMap = new Map<string, string>();
     uniqueTxs.forEach((t) => {
@@ -287,47 +286,63 @@ router.post("/transactions/bulk", async (req, res) => {
       });
     }
 
-    // 3. Smart fuzzy matching: a posted transaction replaces an older pending transaction
-    // within a +/- 3 days window, having exact same amount, account, matching type, and fuzzy title match.
-    const postedTxs = remainingTxs.filter((t) => !t.pending);
-    const pendingTxsToEvictFuzzy = new Set<string>();
+    // 3. Smart fuzzy settlement matching: a posted or newer transaction replaces an older pending or duplicate settlement transaction
+    // within a +/- 3 days window, having exact same amount, account, matching type, and merchant/title match.
+    const duplicatesToEvictFuzzy = new Set<string>();
+    const candidatesForFuzzy = [...remainingTxs];
 
-    postedTxs.forEach((postedTx) => {
-      for (const pendingTx of remainingTxs) {
-        if (!pendingTx.pending) continue;
-        if (pendingTxsToEvictFuzzy.has(pendingTx.id)) continue; // already marked for eviction
+    for (let i = 0; i < candidatesForFuzzy.length; i++) {
+      const primaryTx = candidatesForFuzzy[i];
+      if (duplicatesToEvictFuzzy.has(primaryTx.id)) continue;
 
-        const isReplaced = (
-          pendingTx.accountId === postedTx.accountId &&
-          (pendingTx.type || "expense") === (postedTx.type || "expense") &&
-          Math.abs(pendingTx.amount - postedTx.amount) < 0.001 &&
-          Math.abs(new Date(pendingTx.date).getTime() - new Date(postedTx.date).getTime()) / (1000 * 60 * 60 * 24) <= 3
+      for (let j = i + 1; j < candidatesForFuzzy.length; j++) {
+        const otherTx = candidatesForFuzzy[j];
+        if (duplicatesToEvictFuzzy.has(otherTx.id)) continue;
+
+        const isMatch = (
+          primaryTx.accountId === otherTx.accountId &&
+          (primaryTx.type || "expense") === (otherTx.type || "expense") &&
+          Math.abs(primaryTx.amount - otherTx.amount) < 0.001 &&
+          Math.abs(new Date(primaryTx.date).getTime() - new Date(otherTx.date).getTime()) / (1000 * 60 * 60 * 24) <= 3
         );
 
-        if (isReplaced) {
-          const oldTitle = (pendingTx.merchant || pendingTx.title || "").toLowerCase().trim();
-          const newTitle = (postedTx.merchant || postedTx.title || "").toLowerCase().trim();
-          const firstWord = (str: string) => str.split(/[^a-zA-Z0-9]/)[0] || "";
+        if (isMatch) {
+          const s1 = (primaryTx.merchant || primaryTx.title || "").toLowerCase().replace(/[^a-z0-9]/g, " ").trim();
+          const s2 = (otherTx.merchant || otherTx.title || "").toLowerCase().replace(/[^a-z0-9]/g, " ").trim();
 
-          const isTitleMatch =
-            oldTitle.includes(newTitle) ||
-            newTitle.includes(oldTitle) ||
-            (firstWord(oldTitle).length >= 4 && firstWord(oldTitle) === firstWord(newTitle));
+          const isETransfer1 = s1.includes("e transfer") || s1.includes("etransfer");
+          const isETransfer2 = s2.includes("e transfer") || s2.includes("etransfer");
+          if (isETransfer1 && isETransfer2) {
+            const name1 = s1.replace(/.*e\s*transfer\s*\d*\s*/, "").trim();
+            const name2 = s2.replace(/.*e\s*transfer\s*\d*\s*/, "").trim();
+            if (name1 && name2 && name1 !== name2 && !name1.includes(name2) && !name2.includes(name1)) {
+              continue;
+            }
+          }
+
+          const w1 = s1.split(/\s+/).filter(w => w.length >= 3 && !["the","inc","ltd","llc","corp","preauthorized","debit","retail","purchase"].includes(w));
+          const w2 = s2.split(/\s+/).filter(w => w.length >= 3 && !["the","inc","ltd","llc","corp","preauthorized","debit","retail","purchase"].includes(w));
+          const commonWords = w1.filter(w => w2.includes(w));
+          const isTitleMatch = s1 === s2 || (commonWords.length >= 1 && (s1.includes(s2) || s2.includes(s1) || commonWords[0].length >= 4));
 
           if (isTitleMatch) {
-            pendingTxsToEvictFuzzy.add(pendingTx.id); // evict old pending transaction
-            break; // This posted tx matched its pending counterpart; move to next posted tx
+            let toEvict = otherTx.id;
+            if (primaryTx.pending && !otherTx.pending) {
+              toEvict = primaryTx.id;
+            }
+            duplicatesToEvictFuzzy.add(toEvict);
+            if (toEvict === primaryTx.id) break;
           }
         }
       }
-    });
-
-    if (pendingTxsToEvictFuzzy.size > 0) {
-      remainingTxs = remainingTxs.filter((t) => !pendingTxsToEvictFuzzy.has(t.id));
     }
 
-    // 4. Find which pending transactions exist in the database and need to be deleted
-    const idsToDelete = new Set([...Array.from(pendingTxIdsToEvict), ...Array.from(pendingTxsToEvictFuzzy)]);
+    if (duplicatesToEvictFuzzy.size > 0) {
+      remainingTxs = remainingTxs.filter((t) => !duplicatesToEvictFuzzy.has(t.id));
+    }
+
+    // 4. Find which duplicate transactions exist in the database and need to be deleted
+    const idsToDelete = new Set([...Array.from(pendingTxIdsToEvict), ...Array.from(duplicatesToEvictFuzzy)]);
     const existingIds = new Set(existing.map((e) => e.id));
     const dbPendingIdsToDelete = Array.from(idsToDelete).filter((id) => existingIds.has(id));
 
