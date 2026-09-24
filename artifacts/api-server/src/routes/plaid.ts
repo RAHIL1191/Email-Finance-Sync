@@ -111,6 +111,9 @@ router.post("/plaid/create-link-token", async (req, res) => {
       client_name: "Finance Tracker",
       country_codes: [CountryCode.Ca, CountryCode.Us],
       language: "en",
+      transactions: {
+        days_requested: 730,
+      },
     };
 
     if (item_id) {
