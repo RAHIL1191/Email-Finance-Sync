@@ -57,14 +57,14 @@ export function getAccountCardMeta(account: Account): CardStyleMeta {
   const isCredit =
     !isMortgage &&
     (group === "credit" ||
-    account.type === "credit" ||
-    text.includes("credit") ||
-    text.includes("card") ||
-    text.includes("amex") ||
-    text.includes("visa") ||
-    text.includes("mastercard") ||
-    text.includes("avion") ||
-    text.includes("cobalt"));
+      account.type === "credit" ||
+      text.includes("credit") ||
+      text.includes("card") ||
+      text.includes("amex") ||
+      text.includes("visa") ||
+      text.includes("mastercard") ||
+      text.includes("avion") ||
+      text.includes("cobalt"));
 
   // Determine Bank / Issuer Name (strictly short names for all cards and accounts)
   let bankName = getShortBankName(account.bank, account.name);
@@ -200,10 +200,10 @@ function VibrantAccountCard({ account, onRelink }: { account: Account; onRelink?
   const cardErrorLabel = plaidItem?.needsRelogin
     ? "Needs reconnect"
     : plaidItem?.syncError
-    ? (plaidItem.syncError.toLowerCase().includes("login") || plaidItem.syncError.toLowerCase().includes("reconnect")
+      ? (plaidItem.syncError.toLowerCase().includes("login") || plaidItem.syncError.toLowerCase().includes("reconnect")
         ? "Needs reconnect"
         : "Needs review")
-    : null;
+      : null;
 
   // Credit limit calculation
   const limit = account.creditLimit || (isCredit ? 8000 : 0);
@@ -594,14 +594,7 @@ export default function AccountsScreen() {
   }, [transactions]);
 
   // ── Filtered Accounts ───────────────────────────────────────────────────────
-  console.log("=== ACCOUNTS BREAKDOWN ===", JSON.stringify(accounts.map(a => ({
-    name: a.name,
-    type: a.type,
-    group: getAccountGroupKey(a),
-    balance: computeBalance(a, transactions),
-    includeInNetworth: isIncludedInNetworth(a),
-    isLiability: isLiabilityAccount(a),
-  }))));
+
   const filteredAccounts = useMemo(() => {
     if (activeFilter === "All") return accounts;
     if (activeFilter === "Cards") {
@@ -712,8 +705,8 @@ export default function AccountsScreen() {
                   {activeFilter === "Cards"
                     ? "Credit Cards"
                     : activeFilter === "Other"
-                    ? "Other net"
-                    : activeFilter}{" total"}
+                      ? "Other net"
+                      : activeFilter}{" total"}
                 </Text>
                 <Text
                   style={[

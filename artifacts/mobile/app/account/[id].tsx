@@ -34,17 +34,93 @@ import { SafeAreaView, useSafeAreaInsets } from "react-native-safe-area-context"
 import { LinearGradient as ExpoLinearGradient } from "expo-linear-gradient";
 
 import AddEntrySheet from "@/components/AddEntrySheet";
+import BillDetailSheet from "@/components/BillDetailSheet";
+import EditBillSheet from "@/components/EditBillSheet";
 import ConfirmModal from "@/components/ConfirmModal";
 import TransactionDetailModal from "@/components/TransactionDetailModal";
 import { CATEGORY_COLORS, CATEGORY_ICONS } from "@/components/TransactionItem";
 import { ACCOUNT_CATEGORIES, SubType } from "@/components/AddAccountModal";
-import { Account, PLAID_BANKS, Transaction, InvestmentTransaction, computeBalance, isIncludedInNetworth, isLiabilityAccount, getAccountGroupKey, getShortBankName, cleanCardDisplayName, txBelongsToAccount, useApp } from "@/context/AppContext";
+import { Account, Bill, PLAID_BANKS, Transaction, InvestmentTransaction, computeBalance, isIncludedInNetworth, isLiabilityAccount, getAccountGroupKey, getShortBankName, cleanCardDisplayName, txBelongsToAccount, useApp } from "@/context/AppContext";
 import { useColors } from "@/hooks/useColors";
 import { parseLocalDate, toLocalYMD } from "@/hooks/useLocalDate";
 import DateTimePicker from "@react-native-community/datetimepicker";
 import PlaidLinkModal from "@/components/PlaidLinkModal";
 
 const { width: SCREEN_W } = Dimensions.get("window");
+
+// ── Bill Helpers for Linked Bills ────────────────────────────────────────────
+
+const BILL_CAT_META: Record<string, { icon: string; color: string }> = {
+  housing: { icon: "home", color: "#6366F1" },
+  rent: { icon: "home", color: "#6366F1" },
+  mortgage: { icon: "home", color: "#6366F1" },
+  utility: { icon: "zap", color: "#F59E0B" },
+  utilities: { icon: "zap", color: "#F59E0B" },
+  electric: { icon: "zap", color: "#F59E0B" },
+  hydro: { icon: "zap", color: "#F59E0B" },
+  water: { icon: "droplet", color: "#3B82F6" },
+  gas: { icon: "activity", color: "#F97316" },
+  internet: { icon: "wifi", color: "#8B5CF6" },
+  phone: { icon: "phone", color: "#10B981" },
+  mobile: { icon: "smartphone", color: "#10B981" },
+  insurance: { icon: "shield", color: "#3B82F6" },
+  subscription: { icon: "refresh-cw", color: "#EC4899" },
+  credit: { icon: "credit-card", color: "#E11D48" },
+  card: { icon: "credit-card", color: "#E11D48" },
+  health: { icon: "heart", color: "#EF4444" },
+  car: { icon: "navigation", color: "#10B981" },
+  transport: { icon: "navigation", color: "#10B981" },
+  food: { icon: "coffee", color: "#F97316" },
+  entertainment: { icon: "film", color: "#A855F7" },
+};
+
+function getBillCatMeta(cat?: string, title?: string): { icon: string; color: string } {
+  const text = `${cat || ""} ${title || ""}`.toLowerCase();
+  for (const [key, val] of Object.entries(BILL_CAT_META)) {
+    if (text.includes(key)) return val;
+  }
+  return { icon: "file-text", color: "#64748B" };
+}
+
+function formatBillDue(dueDateStr: string): { label: string; isOverdue: boolean } {
+  try {
+    const d = parseLocalDate(dueDateStr);
+    const now = new Date();
+    now.setHours(0, 0, 0, 0);
+    const due = new Date(d);
+    due.setHours(0, 0, 0, 0);
+    const diffDays = Math.round((due.getTime() - now.getTime()) / (1000 * 60 * 60 * 24));
+    if (diffDays < 0) {
+      return { label: `Overdue (${Math.abs(diffDays)}d ago)`, isOverdue: true };
+    }
+    if (diffDays === 0) {
+      return { label: "Due today", isOverdue: false };
+    }
+    if (diffDays === 1) {
+      return { label: "Due tomorrow", isOverdue: false };
+    }
+    return {
+      label: `Due ${d.toLocaleDateString("en-US", { month: "short", day: "numeric" })}`,
+      isOverdue: false,
+    };
+  } catch {
+    return { label: `Due ${dueDateStr}`, isOverdue: false };
+  }
+}
+
+function addFreqDate(date: Date, freq: string): Date {
+  const d = new Date(date);
+  switch (freq) {
+    case "daily":     d.setDate(d.getDate() + 1);        break;
+    case "weekly":    d.setDate(d.getDate() + 7);        break;
+    case "biweekly":  d.setDate(d.getDate() + 14);       break;
+    case "monthly":   d.setMonth(d.getMonth() + 1);      break;
+    case "quarterly": d.setMonth(d.getMonth() + 3);      break;
+    case "semiannual":d.setMonth(d.getMonth() + 6);      break;
+    case "yearly":    d.setFullYear(d.getFullYear() + 1); break;
+  }
+  return d;
+}
 
 // ── Balance history ───────────────────────────────────────────────────────────
 
@@ -1226,7 +1302,22 @@ export default function AccountDetailScreen() {
   const { id } = useLocalSearchParams<{ id: string }>();
   const colors = useColors();
   const insets = useSafeAreaInsets();
-  const { accounts, transactions, investmentTransactions, updateAccount, deleteAccount, plaidSync, syncPlaidTransactions, reconnectPlaidItem, isSyncing, bills } = useApp();
+  const {
+    accounts,
+    transactions,
+    investmentTransactions,
+    updateAccount,
+    deleteAccount,
+    plaidSync,
+    syncPlaidTransactions,
+    reconnectPlaidItem,
+    isSyncing,
+    bills,
+    addBill,
+    updateBill,
+    deleteBill,
+    markBillPaid,
+  } = useApp();
 
   const account = accounts.find((a) => a.id === id);
   const accountTxns = useMemo(
@@ -1271,6 +1362,54 @@ export default function AccountDetailScreen() {
   const [relinkTargetItem, setRelinkTargetItem] = useState<{ itemId: string; bankName: string } | null>(null);
   const [nowMs, setNowMs] = useState(Date.now());
   const [accountSyncTime, setAccountSyncTime] = useState<string | null>(null);
+
+  // Linked Bills state & handlers
+  const [showAddBill, setShowAddBill] = useState(false);
+  const [selectedBill, setSelectedBill] = useState<Bill | null>(null);
+  const [editBill, setEditBill] = useState<Bill | null>(null);
+  const [thisOnlyParent, setThisOnlyParent] = useState<Bill | null>(null);
+
+  const accountBills = useMemo(() => {
+    if (!account) return [];
+    const accNameLower = (account.name || "").trim().toLowerCase();
+    const accBankLower = (account.bank || "").trim().toLowerCase();
+
+    return (bills || [])
+      .filter((b) => {
+        if (b.accountId === account.id) return true;
+        if (account.plaidAccountId && b.accountId === account.plaidAccountId) return true;
+        if (accNameLower.length > 3 && b.title.toLowerCase().includes(accNameLower)) return true;
+        if (accBankLower.length > 3 && b.title.toLowerCase().includes(accBankLower)) return true;
+        return false;
+      })
+      .sort((a, b) => {
+        if (a.isPaid !== b.isPaid) return a.isPaid ? 1 : -1;
+        return a.dueDate.localeCompare(b.dueDate);
+      });
+  }, [bills, account]);
+
+  const onEditBillThisOnly = (bill: Bill) => {
+    setSelectedBill(null);
+    setEditBill({ ...bill, isRecurring: false, frequency: undefined });
+    setThisOnlyParent(bill);
+  };
+
+  const handleCreateBillThisOnly = (data: Omit<Bill, "id">) => {
+    addBill({ ...data, isRecurring: false, frequency: undefined });
+    if (thisOnlyParent?.frequency) {
+      const next = addFreqDate(new Date(thisOnlyParent.dueDate), thisOnlyParent.frequency);
+      updateBill(thisOnlyParent.id, { dueDate: next.toISOString() });
+    }
+    setThisOnlyParent(null);
+    setEditBill(null);
+  };
+
+  const onDeleteBillThisOnly = (bill: Bill) => {
+    if (bill.frequency) {
+      const next = addFreqDate(new Date(bill.dueDate), bill.frequency);
+      updateBill(bill.id, { dueDate: next.toISOString() });
+    }
+  };
 
   // Live timer ticking every 15s to keep relative sync time dynamically updated
   useEffect(() => {
@@ -1739,6 +1878,139 @@ export default function AccountDetailScreen() {
           <Feather name="chevron-right" size={20} color="#6B7280" />
         </TouchableOpacity>
 
+        {/* ── Linked Bills Section ── */}
+        <View style={styles.ccLinkedBillsSection}>
+          <View style={styles.ccLinkedBillsHeaderRow}>
+            <View style={{ flexDirection: "row", alignItems: "center", gap: 8 }}>
+              <Text style={styles.ccLinkedBillsTitle}>Linked Bills</Text>
+              {accountBills.length > 0 && (
+                <View style={styles.ccLinkedBillsBadge}>
+                  <Text style={styles.ccLinkedBillsBadgeText}>{accountBills.length}</Text>
+                </View>
+              )}
+            </View>
+            <TouchableOpacity
+              style={styles.ccLinkBillBtn}
+              onPress={() => {
+                Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
+                setShowAddBill(true);
+              }}
+              activeOpacity={0.7}
+              hitSlop={6}
+            >
+              <Feather name="plus" size={14} color="#2563EB" />
+              <Text style={styles.ccLinkBillBtnText}>Link Bill</Text>
+            </TouchableOpacity>
+          </View>
+
+          {accountBills.length === 0 ? (
+            <View style={styles.ccLinkedBillsEmptyCard}>
+              <View style={styles.ccLinkedBillsEmptyIconCircle}>
+                <Feather name="calendar" size={20} color="#9CA3AF" />
+              </View>
+              <Text style={styles.ccLinkedBillsEmptyTitle}>No bills linked yet</Text>
+              <Text style={styles.ccLinkedBillsEmptySub}>
+                Link credit card payments, subscriptions, or utilities to pay them directly from this account.
+              </Text>
+              <TouchableOpacity
+                style={styles.ccLinkedBillsAddAction}
+                onPress={() => {
+                  Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
+                  setShowAddBill(true);
+                }}
+                activeOpacity={0.8}
+              >
+                <Feather name="plus-circle" size={15} color="#111827" style={{ marginRight: 6 }} />
+                <Text style={styles.ccLinkedBillsAddActionText}>Link a Bill</Text>
+              </TouchableOpacity>
+            </View>
+          ) : (
+            <View style={styles.ccLinkedBillsCard}>
+              {accountBills.map((b, index) => {
+                const catMeta = getBillCatMeta(b.category, b.title);
+                const dueInfo = formatBillDue(b.dueDate);
+                const isLast = index === accountBills.length - 1;
+
+                return (
+                  <React.Fragment key={b.id}>
+                    <TouchableOpacity
+                      style={styles.ccLinkedBillRow}
+                      activeOpacity={0.7}
+                      onPress={() => {
+                        Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
+                        setSelectedBill(b);
+                      }}
+                    >
+                      {/* Icon */}
+                      <View style={[styles.ccLinkedBillIconBox, { backgroundColor: `${catMeta.color}15` }]}>
+                        <Feather name={catMeta.icon as any} size={18} color={catMeta.color} />
+                      </View>
+
+                      {/* Info */}
+                      <View style={styles.ccLinkedBillInfo}>
+                        <View style={{ flexDirection: "row", alignItems: "center", gap: 6, flexWrap: "wrap" }}>
+                          <Text style={styles.ccLinkedBillName} numberOfLines={1}>
+                            {b.title}
+                          </Text>
+                          {b.isRecurring && b.frequency && (
+                            <View style={styles.ccLinkedBillFreqPill}>
+                              <Text style={styles.ccLinkedBillFreqText}>
+                                {b.frequency.toUpperCase()}
+                              </Text>
+                            </View>
+                          )}
+                        </View>
+                        <Text
+                          style={[
+                            styles.ccLinkedBillDue,
+                            !b.isPaid && dueInfo.isOverdue && { color: "#DC2626", fontFamily: "Inter_600SemiBold" },
+                          ]}
+                        >
+                          {b.isPaid ? "Paid" : dueInfo.label}
+                        </Text>
+                      </View>
+
+                      {/* Right: Amount & Quick Pay Status */}
+                      <View style={styles.ccLinkedBillRight}>
+                        <Text style={styles.ccLinkedBillAmount}>
+                          ${b.amount.toLocaleString("en-US", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
+                        </Text>
+                        <TouchableOpacity
+                          style={[
+                            styles.ccLinkedBillStatusPill,
+                            b.isPaid ? styles.ccLinkedBillPaidPill : styles.ccLinkedBillPayPill,
+                          ]}
+                          onPress={() => {
+                            Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
+                            if (b.isPaid) {
+                              updateBill(b.id, { isPaid: false });
+                            } else {
+                              Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
+                              markBillPaid(b.id);
+                            }
+                          }}
+                          activeOpacity={0.7}
+                          hitSlop={6}
+                        >
+                          {b.isPaid ? (
+                            <>
+                              <Feather name="check" size={11} color="#16A34A" />
+                              <Text style={styles.ccLinkedBillPaidText}>Paid</Text>
+                            </>
+                          ) : (
+                            <Text style={styles.ccLinkedBillPayText}>Pay</Text>
+                          )}
+                        </TouchableOpacity>
+                      </View>
+                    </TouchableOpacity>
+                    {!isLast && <View style={styles.ccLinkedBillDivider} />}
+                  </React.Fragment>
+                );
+              })}
+            </View>
+          )}
+        </View>
+
         {/* ── Include in Networth toggle ── */}
         <TouchableOpacity
           style={styles.ccNetworthRow}
@@ -1825,6 +2097,35 @@ export default function AccountDetailScreen() {
         visible={showAddTx}
         initialTab="EXPENSE"
         onClose={() => setShowAddTx(false)}
+      />
+
+      <BillDetailSheet
+        bill={selectedBill}
+        visible={!!selectedBill}
+        onClose={() => setSelectedBill(null)}
+        onEdit={(b) => {
+          setSelectedBill(null);
+          setEditBill(b);
+        }}
+        onEditThisOnly={onEditBillThisOnly}
+        onDeleteThisOnly={onDeleteBillThisOnly}
+      />
+
+      <EditBillSheet
+        bill={editBill}
+        visible={!!editBill}
+        onClose={() => {
+          setEditBill(null);
+          setThisOnlyParent(null);
+        }}
+        onCreateBill={thisOnlyParent ? handleCreateBillThisOnly : undefined}
+      />
+
+      <AddEntrySheet
+        visible={showAddBill}
+        initialTab="BILLS"
+        defaultAccountId={account.id}
+        onClose={() => setShowAddBill(false)}
       />
 
       <AccountMenuSheet
@@ -3079,5 +3380,185 @@ const styles = StyleSheet.create({
     shadowOpacity: 0.25,
     shadowRadius: 8,
     elevation: 6,
+  },
+  ccLinkedBillsSection: {
+    marginHorizontal: 16,
+    marginTop: 18,
+  },
+  ccLinkedBillsHeaderRow: {
+    flexDirection: "row",
+    justifyContent: "space-between",
+    alignItems: "center",
+    marginBottom: 10,
+    paddingHorizontal: 4,
+  },
+  ccLinkedBillsTitle: {
+    fontSize: 15,
+    fontFamily: "Inter_700Bold",
+    color: "#111827",
+  },
+  ccLinkedBillsBadge: {
+    backgroundColor: "#E5E7EB",
+    paddingHorizontal: 7,
+    paddingVertical: 1,
+    borderRadius: 10,
+  },
+  ccLinkedBillsBadgeText: {
+    fontSize: 11,
+    fontFamily: "Inter_700Bold",
+    color: "#4B5563",
+  },
+  ccLinkBillBtn: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 4,
+    paddingHorizontal: 10,
+    paddingVertical: 5,
+    borderRadius: 14,
+    backgroundColor: "#EFF6FF",
+    borderWidth: 1,
+    borderColor: "#DBEAFE",
+  },
+  ccLinkBillBtnText: {
+    fontSize: 12,
+    fontFamily: "Inter_600SemiBold",
+    color: "#2563EB",
+  },
+  ccLinkedBillsEmptyCard: {
+    backgroundColor: "#FFFFFF",
+    borderRadius: 16,
+    paddingVertical: 24,
+    paddingHorizontal: 20,
+    alignItems: "center",
+    shadowColor: "#000",
+    shadowOffset: { width: 0, height: 1 },
+    shadowOpacity: 0.04,
+    shadowRadius: 4,
+    elevation: 1,
+  },
+  ccLinkedBillsEmptyIconCircle: {
+    width: 44,
+    height: 44,
+    borderRadius: 22,
+    backgroundColor: "#F3F4F6",
+    alignItems: "center",
+    justifyContent: "center",
+    marginBottom: 10,
+  },
+  ccLinkedBillsEmptyTitle: {
+    fontSize: 15,
+    fontFamily: "Inter_600SemiBold",
+    color: "#111827",
+    marginBottom: 4,
+  },
+  ccLinkedBillsEmptySub: {
+    fontSize: 13,
+    fontFamily: "Inter_400Regular",
+    color: "#6B7280",
+    textAlign: "center",
+    lineHeight: 18,
+    marginBottom: 14,
+  },
+  ccLinkedBillsAddAction: {
+    flexDirection: "row",
+    alignItems: "center",
+    backgroundColor: "#F3F4F6",
+    paddingHorizontal: 16,
+    paddingVertical: 9,
+    borderRadius: 20,
+  },
+  ccLinkedBillsAddActionText: {
+    fontSize: 13,
+    fontFamily: "Inter_600SemiBold",
+    color: "#111827",
+  },
+  ccLinkedBillsCard: {
+    backgroundColor: "#FFFFFF",
+    borderRadius: 16,
+    paddingHorizontal: 16,
+    shadowColor: "#000",
+    shadowOffset: { width: 0, height: 1 },
+    shadowOpacity: 0.04,
+    shadowRadius: 4,
+    elevation: 1,
+  },
+  ccLinkedBillRow: {
+    flexDirection: "row",
+    alignItems: "center",
+    paddingVertical: 14,
+    gap: 12,
+  },
+  ccLinkedBillIconBox: {
+    width: 38,
+    height: 38,
+    borderRadius: 19,
+    alignItems: "center",
+    justifyContent: "center",
+  },
+  ccLinkedBillInfo: {
+    flex: 1,
+    gap: 3,
+  },
+  ccLinkedBillName: {
+    fontSize: 14,
+    fontFamily: "Inter_600SemiBold",
+    color: "#111827",
+    maxWidth: 160,
+  },
+  ccLinkedBillFreqPill: {
+    backgroundColor: "#F3F4F6",
+    paddingHorizontal: 6,
+    paddingVertical: 1.5,
+    borderRadius: 6,
+  },
+  ccLinkedBillFreqText: {
+    fontSize: 9,
+    fontFamily: "Inter_700Bold",
+    color: "#6B7280",
+    letterSpacing: 0.3,
+  },
+  ccLinkedBillDue: {
+    fontSize: 12,
+    fontFamily: "Inter_400Regular",
+    color: "#6B7280",
+  },
+  ccLinkedBillRight: {
+    alignItems: "flex-end",
+    gap: 5,
+  },
+  ccLinkedBillAmount: {
+    fontSize: 14,
+    fontFamily: "Inter_700Bold",
+    color: "#111827",
+  },
+  ccLinkedBillStatusPill: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 3,
+    paddingHorizontal: 8,
+    paddingVertical: 2.5,
+    borderRadius: 10,
+  },
+  ccLinkedBillPaidPill: {
+    backgroundColor: "#F0FDF4",
+  },
+  ccLinkedBillPaidText: {
+    fontSize: 11,
+    fontFamily: "Inter_600SemiBold",
+    color: "#16A34A",
+  },
+  ccLinkedBillPayPill: {
+    backgroundColor: "#FEF2F2",
+    borderWidth: 1,
+    borderColor: "#FECACA",
+  },
+  ccLinkedBillPayText: {
+    fontSize: 11,
+    fontFamily: "Inter_600SemiBold",
+    color: "#DC2626",
+  },
+  ccLinkedBillDivider: {
+    height: StyleSheet.hairlineWidth,
+    backgroundColor: "#F3F4F6",
   },
 });

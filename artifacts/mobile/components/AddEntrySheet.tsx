@@ -89,6 +89,7 @@ type TabType = (typeof TABS)[number];
 interface Props {
   visible: boolean;
   initialTab?: TabType;
+  defaultAccountId?: string;
   onClose: () => void;
 }
 
@@ -1567,7 +1568,7 @@ function TransferTab({ onSave, onRegisterSave }: { onSave: () => void; onRegiste
 
 // ─── BILLS tab ────────────────────────────────────────────────────────────────
 
-function BillsTab({ onSave, onRegisterSave }: { onSave: () => void; onRegisterSave: (fn: () => void) => void }) {
+function BillsTab({ defaultAccountId, onSave, onRegisterSave }: { defaultAccountId?: string; onSave: () => void; onRegisterSave: (fn: () => void) => void }) {
   const colors = useColors();
   const { accounts, addBill } = useApp();
 
@@ -1578,10 +1579,14 @@ function BillsTab({ onSave, onRegisterSave }: { onSave: () => void; onRegisterSa
   const [repeat, setRepeat] = useState("Monthly");
   const [remindDays, setRemindDays] = useState("5 days before");
   const [autoPaid, setAutoPaid] = useState(false);
-  const [accountId, setAccountId] = useState(accounts[0]?.id ?? "");
+  const [accountId, setAccountId] = useState(defaultAccountId ?? accounts[0]?.id ?? "");
   const [addExpenseEntry, setAddExpenseEntry] = useState(true);
   const [notes, setNotes] = useState("");
   const [billNumber, setBillNumber] = useState("");
+
+  useEffect(() => {
+    if (defaultAccountId) setAccountId(defaultAccountId);
+  }, [defaultAccountId]);
 
   const [showCatPicker, setShowCatPicker] = useState(false);
   const [showAccPicker, setShowAccPicker] = useState(false);
@@ -1801,7 +1806,7 @@ function BillsTab({ onSave, onRegisterSave }: { onSave: () => void; onRegisterSa
 
 // ─── Main Sheet ────────────────────────────────────────────────────────────────
 
-export default function AddEntrySheet({ visible, initialTab = "EXPENSE", onClose }: Props) {
+export default function AddEntrySheet({ visible, initialTab = "EXPENSE", defaultAccountId, onClose }: Props) {
   const colors = useColors();
   const insets = useSafeAreaInsets();
   const [activeTab, setActiveTab] = useState<TabType>(initialTab);
@@ -1855,7 +1860,7 @@ export default function AddEntrySheet({ visible, initialTab = "EXPENSE", onClose
         {activeTab === "EXPENSE" && <ExpenseTab onSave={onClose} onRegisterSave={registerTabSave} />}
         {activeTab === "INCOME" && <IncomeTab onSave={onClose} onRegisterSave={registerTabSave} />}
         {activeTab === "TRANSFER" && <TransferTab onSave={onClose} onRegisterSave={registerTabSave} />}
-        {activeTab === "BILLS" && <BillsTab onSave={onClose} onRegisterSave={registerTabSave} />}
+        {activeTab === "BILLS" && <BillsTab defaultAccountId={defaultAccountId} onSave={onClose} onRegisterSave={registerTabSave} />}
       </KeyboardAvoidingView>
     </Modal>
   );
