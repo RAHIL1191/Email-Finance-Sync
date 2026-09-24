@@ -314,16 +314,155 @@ router.post("/plaid/exchange-token", async (req, res) => {
       lastSyncedAt: new Date(),
     });
 
+    // 6. Directly persist / upsert accounts in DB
+    const existingHouseholdAccounts = await db
+      .select()
+      .from(accountsTable)
+      .where(eq(accountsTable.householdId, res.locals.householdId));
+
+    const savedAccounts: any[] = [];
+    for (const a of plaidAccounts) {
+      const type = mapAccountType(a.type as string, a.subtype as string | null);
+      const balance = a.balances.current ?? a.balances.available ?? 0;
+      const lastFour = a.mask ? String(a.mask) : null;
+      const name = a.name ?? a.official_name ?? "Account";
+
+      // 1. Exact match by plaidAccountId
+      const existingByPlaid = existingHouseholdAccounts.find(
+        (ea) =>
+          ea.plaidAccountId === a.account_id ||
+          (ea.sharedPlaidAccounts && ea.sharedPlaidAccounts.some((s) => s.plaidAccountId === a.account_id))
+      );
+
+      if (existingByPlaid) {
+        await db
+          .update(accountsTable)
+          .set({
+            balance,
+            updatedAt: new Date(),
+          })
+          .where(eq(accountsTable.id, existingByPlaid.id));
+        savedAccounts.push({
+          id: existingByPlaid.id,
+          plaidAccountId: a.account_id,
+          name: existingByPlaid.name,
+          type: existingByPlaid.type,
+          balance,
+          lastFour: existingByPlaid.lastFour ?? "",
+        });
+        continue;
+      }
+
+      // 2. Check for matching lastFour + bank name (manual account or joint account)
+      const bankLower = resolvedBankName.trim().toLowerCase();
+      const existingByMask =
+        lastFour && lastFour.length >= 2
+          ? existingHouseholdAccounts.find(
+              (ea) =>
+                ea.lastFour === lastFour &&
+                (ea.bank.toLowerCase().includes(bankLower) || bankLower.includes(ea.bank.toLowerCase()))
+            )
+          : null;
+
+      if (existingByMask) {
+        if (!existingByMask.plaidAccountId) {
+          // Manual account being linked to Plaid for the first time
+          await db
+            .update(accountsTable)
+            .set({
+              plaidAccountId: a.account_id,
+              plaidItemId: dbId,
+              balance,
+              updatedAt: new Date(),
+            })
+            .where(eq(accountsTable.id, existingByMask.id));
+
+          savedAccounts.push({
+            id: existingByMask.id,
+            plaidAccountId: a.account_id,
+            name: existingByMask.name,
+            type: existingByMask.type,
+            balance,
+            lastFour: existingByMask.lastFour ?? "",
+          });
+          continue;
+        } else if (existingByMask.plaidItemId && existingByMask.plaidItemId !== dbId) {
+          // Joint/shared account from another item
+          const currentShared = existingByMask.sharedPlaidAccounts
+            ? [...existingByMask.sharedPlaidAccounts]
+            : [
+                {
+                  plaidItemId: existingByMask.plaidItemId,
+                  plaidAccountId: existingByMask.plaidAccountId,
+                  isPrimary: true,
+                },
+              ];
+          if (!currentShared.some((s) => s.plaidItemId === dbId)) {
+            currentShared.push({
+              plaidItemId: dbId,
+              plaidAccountId: a.account_id,
+              isPrimary: false,
+            });
+          }
+          await db
+            .update(accountsTable)
+            .set({
+              isJoint: true,
+              sharedPlaidAccounts: currentShared,
+              balance,
+              updatedAt: new Date(),
+            })
+            .where(eq(accountsTable.id, existingByMask.id));
+
+          savedAccounts.push({
+            id: existingByMask.id,
+            plaidAccountId: a.account_id,
+            name: existingByMask.name,
+            type: existingByMask.type,
+            balance,
+            lastFour: existingByMask.lastFour ?? "",
+          });
+          continue;
+        }
+      }
+
+      // 3. Brand new account -> insert into DB
+      const newAccId = `acc_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 7)}`;
+      const [inserted] = await db
+        .insert(accountsTable)
+        .values({
+          id: newAccId,
+          householdId: res.locals.householdId,
+          deviceId: res.locals.deviceId ?? "backend",
+          name,
+          bank: resolvedBankName,
+          type,
+          color: resolvedBankColor || "#6366f1",
+          balance,
+          lastFour,
+          plaidAccountId: a.account_id,
+          plaidItemId: dbId,
+          isJoint: false,
+          sharedPlaidAccounts: null,
+          createdAt: new Date(),
+          updatedAt: new Date(),
+        })
+        .returning();
+
+      savedAccounts.push({
+        id: inserted.id,
+        plaidAccountId: a.account_id,
+        name: inserted.name,
+        type: inserted.type,
+        balance: inserted.balance,
+        lastFour: inserted.lastFour ?? "",
+      });
+    }
+
     res.json({
       itemId: dbId,
       institutionName: resolvedBankName,
-      accounts: plaidAccounts.map((a) => ({
-        plaidAccountId: a.account_id,
-        name: a.name ?? a.official_name ?? "Account",
-        type: mapAccountType(a.type as string, a.subtype as string | null),
-        balance: a.balances.current ?? a.balances.available ?? 0,
-        lastFour: a.mask ?? "",
-      })),
+      accounts: savedAccounts,
       transactions: transactions.map((t) => mapPlaidTransaction(t, resolvedBankName)),
       transactionCount: transactions.length,
       holdings,
@@ -447,19 +586,48 @@ router.post("/plaid/sync/:itemId", async (req, res) => {
       transactions = transactions.filter((t) => !secondarySharedAccountIds.has(t.account_id));
     }
 
-    // Backfill plaid_item_id + plaid_account_id on DB accounts that are missing them.
-    // This self-heals accounts created before these columns existed.
-    // Do NOT overwrite joint accounts that already belong to a primary item.
+    // Backfill plaid_item_id + plaid_account_id on DB accounts, update balances,
+    // and self-heal by creating any accounts missing from DB.
     for (const pa of plaidAccounts) {
       const match = dbAccts.find(
-        (a) => a.plaidAccountId === pa.account_id ||
-               (a.lastFour === (pa.mask ?? "") && !a.plaidItemId)
+        (a) =>
+          a.plaidAccountId === pa.account_id ||
+          (a.lastFour === (pa.mask ?? "") && !a.plaidItemId) ||
+          (a.sharedPlaidAccounts && a.sharedPlaidAccounts.some((s) => s.plaidAccountId === pa.account_id))
       );
-      if (match && !match.isJoint && (!match.plaidItemId || !match.plaidAccountId)) {
+      const balance = pa.balances.current ?? pa.balances.available ?? 0;
+      if (match) {
+        const updates: any = { balance, updatedAt: new Date() };
+        if (!match.isJoint && (!match.plaidItemId || !match.plaidAccountId)) {
+          updates.plaidItemId = itemId;
+          updates.plaidAccountId = pa.account_id;
+        }
         await db
           .update(accountsTable)
-          .set({ plaidItemId: itemId, plaidAccountId: pa.account_id })
+          .set(updates)
           .where(eq(accountsTable.id, match.id));
+      } else {
+        // Self-heal: insert missing account into DB
+        const type = mapAccountType(pa.type as string, pa.subtype as string | null);
+        const newAccId = `acc_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 7)}`;
+        await db
+          .insert(accountsTable)
+          .values({
+            id: newAccId,
+            householdId: res.locals.householdId,
+            deviceId: res.locals.deviceId ?? "backend",
+            name: pa.name ?? pa.official_name ?? "Account",
+            bank: record.bankName,
+            type,
+            color: record.bankColor || "#6366f1",
+            balance,
+            lastFour: pa.mask ?? null,
+            plaidAccountId: pa.account_id,
+            plaidItemId: itemId,
+            isJoint: false,
+            createdAt: new Date(),
+            updatedAt: new Date(),
+          });
       }
     }
 

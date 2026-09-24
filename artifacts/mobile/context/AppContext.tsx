@@ -446,7 +446,7 @@ interface AppContextType {
     categories: Array<"expenses" | "income" | "transfers" | "transactions" | "accounts" | "bills" | "budgets" | "goals" | "portfolio" | "connections">,
     filters?: { startDate?: string; endDate?: string; accountIds?: string[] }
   ) => Promise<void>;
-  connectPlaid: (item: PlaidItem, newAccounts: Omit<Account, "id">[], initialTransactions: Omit<Transaction, "id">[], rawHoldingsData?: any[], rawInvTxsData?: any[]) => Promise<{ imported: number }>;
+  connectPlaid: (item: PlaidItem, newAccounts: (Omit<Account, "id"> & { id?: string })[], initialTransactions: Omit<Transaction, "id">[], rawHoldingsData?: any[], rawInvTxsData?: any[]) => Promise<{ imported: number }>;
   syncPlaidTransactions: (itemId: string, forceFullSync?: boolean) => Promise<{ imported: number; error?: string }>;
   reconnectPlaidItem: (itemId: string) => Promise<{ imported: number; error?: string }>;
   delinkPlaid: (itemId: string) => void;
@@ -983,13 +983,13 @@ function findAccountMatch(
   const bankLower = bank.trim().toLowerCase();
   const bankMatches = (a: Account) =>
     a.bank.toLowerCase().includes(bankLower) || bankLower.includes(a.bank.toLowerCase());
-  if (lastFour) {
+  if (lastFour && lastFour.trim().length > 0) {
     const strict = accounts.find((a) => a.lastFour === lastFour && bankMatches(a));
     if (strict) return strict;
-  }
-  if (lastFour) {
     const byLastFour = accounts.find((a) => a.lastFour === lastFour);
     if (byLastFour) return byLastFour;
+    // CRITICAL: If lastFour was provided and didn't match, NEVER fall back to an arbitrary account!
+    return undefined;
   }
   return accounts.find(bankMatches);
 }
@@ -3243,7 +3243,7 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
   const connectPlaid = useCallback(
     async (
       item: PlaidItem,
-      newAccounts: Omit<Account, "id">[],
+      newAccounts: (Omit<Account, "id"> & { id?: string })[],
       initialTransactions: Omit<Transaction, "id">[],
       rawHoldingsData?: any[],
       rawInvTxsData?: any[]
@@ -3305,7 +3305,7 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
         // 3. New account — create it (stamp plaidItemId, bank, color so DB insert passes validation)
         const created: Account = {
           ...a,
-          id: genId(),
+          id: (a as any).id || genId(),
           plaidItemId: item.itemId,
           bank: a.bank || item.bankName,
           color: a.color || item.bankColor || "#6366f1",
@@ -3315,7 +3315,11 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
       }
 
       if (toCreate.length > 0) {
-        setAccounts((prev) => [...prev, ...toCreate]);
+        setAccounts((prev) => {
+          const prevIds = new Set(prev.map((p) => p.id));
+          const reallyNew = toCreate.filter((c) => !prevIds.has(c.id));
+          return [...prev, ...reallyNew];
+        });
         bgCall("/api/accounts/bulk-upsert", "POST", householdIdRef.current, deviceIdRef.current, { accounts: toCreate });
       }
       if (toMerge.length > 0) {

@@ -30,6 +30,8 @@ router.post("/accounts/bulk-upsert", async (req, res) => {
         plaidAccountId: a.plaidAccountId ?? null,
         plaidItemId: a.plaidItemId ?? null,
         accountHolder: a.accountHolder ?? null,
+        isJoint: typeof a.isJoint === "boolean" ? a.isJoint : false,
+        sharedPlaidAccounts: a.sharedPlaidAccounts ?? null,
       }));
 
     if (values.length === 0) { res.json({ upserted: 0 }); return; }
@@ -48,6 +50,8 @@ router.post("/accounts/bulk-upsert", async (req, res) => {
           lastFour: sql`excluded.last_four`,
           plaidAccountId: sql`excluded.plaid_account_id`,
           plaidItemId: sql`excluded.plaid_item_id`,
+          isJoint: sql`excluded.is_joint`,
+          sharedPlaidAccounts: sql`excluded.shared_plaid_accounts`,
           updatedAt: new Date(),
         },
       });
@@ -125,6 +129,8 @@ router.put("/accounts/:id", async (req, res) => {
           plaidAccountId: body.plaidAccountId ? String(body.plaidAccountId) : null,
           plaidItemId: body.plaidItemId ? String(body.plaidItemId) : null,
           accountHolder: body.accountHolder ? String(body.accountHolder) : null,
+          isJoint: typeof body.isJoint === "boolean" ? body.isJoint : false,
+          sharedPlaidAccounts: (body.sharedPlaidAccounts as any) ?? null,
         })
         .returning();
       res.json(inserted);

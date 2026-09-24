@@ -5,6 +5,21 @@
 
 ---
 
+## ✅ Reliable Plaid Account Creation & Database Persistence
+Fixed an issue where linking accounts via Plaid would succeed, but accounts were never created or saved in the database.
+- **Server-Side Account Persistence:** Directly creates and upserts Plaid accounts in `accountsTable` during `/api/plaid/exchange-token` and self-heals any missing accounts during `/api/plaid/sync/:itemId`, ensuring the database always stores linked accounts immediately.
+- **Client Account Matching Fix:** Fixed `findAccountMatch` in `AppContext.tsx` so that when `lastFour` is provided and does not match, it returns `undefined` rather than improperly falling back to any account with the same bank name (which previously caused new accounts to be incorrectly skipped as "existing" accounts).
+- **Joint Account & ID Preservation:** Included `isJoint` and `sharedPlaidAccounts` in `bulk-upsert` and account PUT routes, and passed through server-generated account IDs from Plaid Link modal to `connectPlaid`.
+- **Database Backfill:** Backfilled the 3 missing BMO accounts for item `pi_muezydzy_ym4pp` into Neon PostgreSQL and updated the shared Mortgage account.
+
+**Files touched:**
+- `@/artifacts/api-server/src/routes/plaid.ts` — server-side account creation and upsert on exchange-token & sync
+- `@/artifacts/api-server/src/routes/accounts.ts` — support `isJoint` and `sharedPlaidAccounts` in bulk-upsert & PUT
+- `@/artifacts/mobile/context/AppContext.tsx` — strict `lastFour` matching in `findAccountMatch` and ID preservation in `connectPlaid`
+- `@/artifacts/mobile/components/PlaidLinkModal.tsx` — preserve account IDs from exchange-token response
+
+---
+
 ## ✅ Accounts Tab — Reset Button Removal & Type Fix
 Removed the "Reset All Transactions" button from the Accounts tab header to match design mockups, and resolved the TypeScript warning for `wipeData` on the main `AppProvider` context.
 

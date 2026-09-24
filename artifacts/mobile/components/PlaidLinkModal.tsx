@@ -44,6 +44,7 @@ export type Step =
   | "error";            // Generic error
 
 interface DiscoveredAccount {
+  id?: string;
   plaidAccountId: string;
   name: string;
   type: "checking" | "savings" | "credit" | "investment";
@@ -452,7 +453,8 @@ export default function PlaidLinkModal({
     if (selected.length === 0) return;
 
     setStep("importing");
-    const newAccounts: Omit<Account, "id">[] = selected.map((a) => ({
+    const newAccounts: (Omit<Account, "id"> & { id?: string })[] = selected.map((a) => ({
+      id: a.id,
       name: a.name,
       bank: selectedBank?.name || "Bank",
       balance: a.balance,
