@@ -1317,6 +1317,7 @@ export default function AccountDetailScreen() {
     updateBill,
     deleteBill,
     markBillPaid,
+    lastAutoSyncTime,
   } = useApp();
 
   const account = accounts.find((a) => a.id === id);
@@ -1559,9 +1560,49 @@ export default function AccountDetailScreen() {
       const t = new Date(plaidItem.lastSynced).getTime();
       if (!isNaN(t)) candidates.push(t);
     }
+    if (lastAutoSyncTime && lastAutoSyncTime > 0) {
+      candidates.push(lastAutoSyncTime);
+    }
     if (candidates.length === 0) return null;
     return new Date(Math.max(...candidates)).toISOString();
-  }, [isSyncing, accountSyncTime, plaidItem?.lastSynced]);
+  }, [isSyncing, accountSyncTime, plaidItem?.lastSynced, lastAutoSyncTime]);
+
+  const THREE_HOURS_MS = 3 * 60 * 60 * 1000;
+
+  const nextSyncInfo = useMemo(() => {
+    if (isSyncing) return { text: "Sync in progress…", isDue: false };
+    if (!effectiveSyncIso) {
+      return { text: "Next sync in 3 hrs", isDue: false };
+    }
+    const lastSyncMs = new Date(effectiveSyncIso).getTime();
+    if (isNaN(lastSyncMs)) return { text: "Next sync in 3 hrs", isDue: false };
+
+    const nextSyncMs = lastSyncMs + THREE_HOURS_MS;
+    const diffMs = nextSyncMs - nowMs;
+
+    if (diffMs <= 0) {
+      return { text: "Auto-sync scheduled", isDue: true };
+    }
+
+    const diffMins = Math.floor(diffMs / 60000);
+    const hours = Math.floor(diffMins / 60);
+    const mins = diffMins % 60;
+
+    let timeRemainingStr = "";
+    if (hours > 0 && mins > 0) {
+      timeRemainingStr = `in ${hours}h ${mins}m`;
+    } else if (hours > 0) {
+      timeRemainingStr = hours === 1 ? "in 1 hr" : `in ${hours} hrs`;
+    } else if (mins > 0) {
+      timeRemainingStr = `in ${mins} min`;
+    } else {
+      timeRemainingStr = "in < 1 min";
+    }
+
+    return { text: `Next sync ${timeRemainingStr}`, isDue: false };
+  }, [isSyncing, effectiveSyncIso, nowMs]);
+
+  const isPlaidLinked = Boolean(plaidItem || account.plaidItemId);
 
   const lastSyncText = isSyncing
     ? "Syncing now…"
@@ -1797,6 +1838,23 @@ export default function AccountDetailScreen() {
             <View style={{ flex: 1, paddingRight: 8 }}>
               <Text style={styles.ccInfoLabel}>Last Plaid sync</Text>
               <Text style={styles.ccInfoTime}>{lastSyncText}</Text>
+              <View style={styles.ccNextSyncRow}>
+                <Feather
+                  name={nextSyncInfo.isDue ? "refresh-cw" : "clock"}
+                  size={11}
+                  color={nextSyncInfo.isDue ? "#2563EB" : "#6B7280"}
+                />
+                <Text
+                  style={[
+                    styles.ccNextSyncText,
+                    nextSyncInfo.isDue && { color: "#2563EB", fontFamily: "Inter_600SemiBold" },
+                  ]}
+                >
+                  {isPlaidLinked
+                    ? `${nextSyncInfo.text} • 3h interval`
+                    : "Manual account • Not auto-synced"}
+                </Text>
+              </View>
             </View>
             <TouchableOpacity
               style={[
@@ -3151,6 +3209,17 @@ const styles = StyleSheet.create({
     fontFamily: "Inter_600SemiBold",
     color: "#111827",
     marginTop: 2,
+  },
+  ccNextSyncRow: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 4,
+    marginTop: 4,
+  },
+  ccNextSyncText: {
+    fontSize: 11,
+    fontFamily: "Inter_500Medium",
+    color: "#6B7280",
   },
   ccInfoValue: {
     fontSize: 14,

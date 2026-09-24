@@ -471,6 +471,7 @@ interface AppContextType {
   clearAllAlerts: () => void;
   deleteAlert: (id: string) => void;
   refreshTransactionsFromServer: () => Promise<void>;
+  lastAutoSyncTime: number;
 }
 
 const AppContext = createContext<AppContextType | null>(null);
@@ -501,6 +502,7 @@ const STORAGE_KEYS = {
   alerts: "@fintrack/alerts",
   dismissedAlertKeys: "@fintrack/dismissedAlertKeys",
   billReviewMatches: "@fintrack/billReviewMatches",
+  lastAutoSync: "@fintrack/lastAutoSync",
 };
 
 // ── Helpers ──────────────────────────────────────────────────────────────────
@@ -1572,6 +1574,10 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
   const [billReviewMatches, setBillReviewMatches] = useState<BillReviewMatch[]>([]);
   const billReviewMatchesRef = useRef<BillReviewMatch[]>([]);
   useEffect(() => { billReviewMatchesRef.current = billReviewMatches; }, [billReviewMatches]);
+
+  const [lastAutoSyncTime, setLastAutoSyncTime] = useState<number>(0);
+  const lastAutoSyncRef = useRef<number>(0);
+  useEffect(() => { lastAutoSyncRef.current = lastAutoSyncTime; }, [lastAutoSyncTime]);
   
   const deviceIdRef = useRef<string>("");
   const householdIdRef = useRef<string>("");
@@ -1656,7 +1662,7 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
   useEffect(() => {
     (async () => {
       try {
-        const [storedVersion, txRaw, accRaw, billRaw, budgetRaw, goalRaw, projectRaw, catRaw, rulesRaw, emailRaw, plaidRaw, storedDeviceId, storedHouseholdId, storedUserName, storedReviewedIds, taskRaw, invTxRaw, holdRaw, rrspLimitRaw, alertsRaw, dismissedKeysRaw, billReviewMatchesRaw] =
+        const [storedVersion, txRaw, accRaw, billRaw, budgetRaw, goalRaw, projectRaw, catRaw, rulesRaw, emailRaw, plaidRaw, storedDeviceId, storedHouseholdId, storedUserName, storedReviewedIds, taskRaw, invTxRaw, holdRaw, rrspLimitRaw, alertsRaw, dismissedKeysRaw, billReviewMatchesRaw, lastAutoSyncRaw] =
           await Promise.all([
             AsyncStorage.getItem(STORAGE_KEYS.version),
             AsyncStorage.getItem(STORAGE_KEYS.transactions),
@@ -1680,7 +1686,25 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
             AsyncStorage.getItem(STORAGE_KEYS.alerts),
             AsyncStorage.getItem(STORAGE_KEYS.dismissedAlertKeys),
             AsyncStorage.getItem(STORAGE_KEYS.billReviewMatches),
+            AsyncStorage.getItem(STORAGE_KEYS.lastAutoSync),
           ]);
+
+        let initialAutoSync = lastAutoSyncRaw ? Number(lastAutoSyncRaw) : 0;
+        if (!initialAutoSync && plaidRaw) {
+          try {
+            const parsedPlaid = JSON.parse(plaidRaw);
+            const times = (parsedPlaid.items || [])
+              .map((i: any) => (i.lastSynced ? new Date(i.lastSynced).getTime() : 0))
+              .filter((t: number) => !isNaN(t) && t > 0);
+            if (times.length > 0) initialAutoSync = Math.max(...times);
+          } catch {}
+        }
+        if (!initialAutoSync) {
+          initialAutoSync = Date.now();
+          AsyncStorage.setItem(STORAGE_KEYS.lastAutoSync, String(initialAutoSync)).catch(() => {});
+        }
+        lastAutoSyncRef.current = initialAutoSync;
+        setLastAutoSyncTime(initialAutoSync);
 
         const dId = storedDeviceId || generateDeviceId();
         if (!storedDeviceId) await AsyncStorage.setItem(STORAGE_KEYS.deviceId, dId);
@@ -3835,6 +3859,10 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
               : i
           ),
         }));
+        const syncNowTs = Date.now();
+        lastAutoSyncRef.current = syncNowTs;
+        setLastAutoSyncTime(syncNowTs);
+        AsyncStorage.setItem(STORAGE_KEYS.lastAutoSync, String(syncNowTs)).catch(() => {});
         setIsSyncing(false);
         syncLockRef.current = false;
         if (imported > 0) {
@@ -3867,9 +3895,8 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
   useEffect(() => { markBillPaidRef.current = markBillPaid; }, [markBillPaid]);
   const detectBillPaymentsRef = useRef<() => Promise<void>>(async () => {});
 
-  // ── Auto-sync every 3 hours, and on app foreground ─────────────────────────
+  // ── Auto-sync every 3 hours (enforcing persistent interval without eager start) ───────
   const isAutoSyncingRef = useRef(false);
-  const lastAutoSyncRef = useRef<number>(0);
   const lastBillCheckRef = useRef<number>(0);
   const lastDbPullRef = useRef<number>(0);
   useEffect(() => {
@@ -3886,12 +3913,36 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
 
     const doAutoSync = async () => {
       if (isAutoSyncingRef.current) return;
-      const now = Date.now();
-      if (now - lastAutoSyncRef.current < THREE_HOURS) return;
       const items = plaidSyncRef.current.items;
-      if (items.length === 0) return; // Wait until Plaid bank items are loaded from the database!
+      if (!items || items.length === 0) return; // Wait until Plaid bank items are loaded from the database!
+
+      const now = Date.now();
+      let lastTime = lastAutoSyncRef.current;
+      if (!lastTime || lastTime === 0) {
+        const itemTimes = items
+          .map((i) => (i.lastSynced ? new Date(i.lastSynced).getTime() : 0))
+          .filter((t) => !isNaN(t) && t > 0);
+        if (itemTimes.length > 0) {
+          lastTime = Math.max(...itemTimes);
+          lastAutoSyncRef.current = lastTime;
+          setLastAutoSyncTime(lastTime);
+        } else {
+          lastAutoSyncRef.current = now;
+          setLastAutoSyncTime(now);
+          AsyncStorage.setItem(STORAGE_KEYS.lastAutoSync, String(now)).catch(() => {});
+          return;
+        }
+      }
+
+      // Enforce strict 3-hour minimum interval: do NOT sync if less than 3 hours have passed!
+      if (now - lastTime < THREE_HOURS) {
+        return;
+      }
+
       isAutoSyncingRef.current = true;
       lastAutoSyncRef.current = now;
+      setLastAutoSyncTime(now);
+      AsyncStorage.setItem(STORAGE_KEYS.lastAutoSync, String(now)).catch(() => {});
       for (const item of items) {
         try { await syncPlaidTransactionsRef.current(item.itemId); } catch { /* ignore */ }
       }
@@ -3925,10 +3976,6 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
             if (r.ok) {
               const items: PlaidItem[] = await r.json();
               setPlaidSync({ items });
-              // Trigger auto sync immediately after items load if it hasn't run yet!
-              if (items.length > 0 && lastAutoSyncRef.current === 0) {
-                setTimeout(() => { doAutoSync(); }, 100);
-              }
             }
           }),
         fetch(`${base}/api/bills`, { headers: hdrs })
@@ -3954,7 +4001,8 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
     const sub = AppState.addEventListener("change", (state) => {
       if (state === "active") onForeground();
     });
-    const intervalId = setInterval(() => { checkBills(); doAutoSync(); }, THREE_HOURS);
+    // Check periodically every 15 minutes so if 3 hours have passed while app is open, it auto-syncs
+    const intervalId = setInterval(() => { checkBills(); doAutoSync(); }, 15 * 60 * 1000);
     return () => { sub.remove(); clearInterval(intervalId); };
   }, []);
 
@@ -4692,6 +4740,7 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
         alerts, addAlert, markAlertRead, markAllAlertsRead, clearAllAlerts, deleteAlert,
         billReviewMatches, approveBillReviewMatch, dismissBillReviewMatch, detectBillPayments,
         refreshTransactionsFromServer,
+        lastAutoSyncTime,
       }}
     >
       {children}
