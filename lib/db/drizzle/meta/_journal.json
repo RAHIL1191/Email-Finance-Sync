@@ -8,6 +8,13 @@
       "when": 1779479514746,
       "tag": "0000_ordinary_hawkeye",
       "breakpoints": true
+    },
+    {
+      "idx": 2,
+      "version": "7",
+      "when": 1780012860000,
+      "tag": "0002_add_last_notif_state",
+      "breakpoints": true
     }
   ]
 }

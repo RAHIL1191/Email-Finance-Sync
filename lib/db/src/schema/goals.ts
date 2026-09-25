@@ -12,6 +12,7 @@ export const goalsTable = pgTable("goals", {
   category: text("category"),
   color: text("color"),
   notes: text("notes"),
+  lastNotifState: text("last_notif_state"), // approaching | null
   createdAt: timestamp("created_at").defaultNow().notNull(),
   updatedAt: timestamp("updated_at").defaultNow().notNull(),
 });
@@ -27,6 +28,7 @@ export const insertGoalSchema = z.object({
   category: z.string().nullable().optional(),
   color: z.string().nullable().optional(),
   notes: z.string().nullable().optional(),
+  lastNotifState: z.string().nullable().optional(),
 });
 
 export const updateGoalSchema = insertGoalSchema

@@ -131,6 +131,27 @@ export default function Drawer() {
           {/* Divider */}
           <View style={[styles.divider, { backgroundColor: colors.border }]} />
 
+          {/* Search Transactions */}
+          <TouchableOpacity
+            style={styles.menuItem}
+            onPress={() => navigateTo("/search")}
+            activeOpacity={0.8}
+          >
+            <View style={[styles.menuIconWrap, { backgroundColor: "#3b82f6" + "18" }]}>
+              <Feather name="search" size={15} color="#3b82f6" />
+            </View>
+            <View style={styles.menuTextWrap}>
+              <Text style={[styles.menuTitle, { color: colors.foreground }]}>Search Transactions</Text>
+              <Text style={[styles.menuSub, { color: colors.mutedForeground }]}>
+                Search notes, merchant, amount, category
+              </Text>
+            </View>
+            <Feather name="chevron-right" size={16} color={colors.mutedForeground} />
+          </TouchableOpacity>
+
+          {/* Divider */}
+          <View style={[styles.divider, { backgroundColor: colors.border }]} />
+
           {/* AI Spend Review */}
           <TouchableOpacity
             style={styles.menuItem}

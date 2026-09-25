@@ -14,6 +14,7 @@ import categoriesRouter from "./categories.js";
 import categoryRulesRouter from "./categoryRules.js";
 import pushTokensRouter from "./pushTokens.js";
 import billCheckRouter from "./billCheck.js";
+import notificationCheckRouter from "./notificationCheck.js";
 import budgetsRouter from "./budgets.js";
 import goalsRouter from "./goals.js";
 import tasksRouter from "./tasks.js";
@@ -27,6 +28,7 @@ const router: IRouter = Router();
 router.use(healthRouter);
 router.use(configRouter);
 router.use(billCheckRouter); // cron-triggered, auth via X-Cron-Secret — must be before household-auth routers
+router.use(notificationCheckRouter); // unified cron: tasks + bills + budgets + goals
 
 // Plaid Link popup page — must be registered before any household-auth middleware
 // so browser-opened popups (which carry no custom headers) can reach it.

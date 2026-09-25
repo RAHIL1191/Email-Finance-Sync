@@ -12,6 +12,7 @@ export const budgetsTable = pgTable("budgets", {
   period: text("period").notNull(), // weekly | monthly | yearly
   includeInOverall: boolean("include_in_overall").notNull().default(true),
   color: text("color"),
+  lastNotifState: text("last_notif_state"), // warning_{periodKey} | exceeded_{periodKey} | null
   createdAt: timestamp("created_at").defaultNow().notNull(),
   updatedAt: timestamp("updated_at").defaultNow().notNull(),
 });
@@ -27,6 +28,7 @@ export const insertBudgetSchema = z.object({
   period: z.enum(["weekly", "monthly", "yearly"]),
   includeInOverall: z.boolean().optional().default(true),
   color: z.string().nullable().optional(),
+  lastNotifState: z.string().nullable().optional(),
 });
 
 export const updateBudgetSchema = insertBudgetSchema

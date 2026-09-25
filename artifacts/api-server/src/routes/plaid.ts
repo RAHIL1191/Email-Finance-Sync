@@ -531,7 +531,10 @@ router.post("/plaid/sync/:itemId", async (req, res) => {
       const syncRes = await client.transactionsSync({
         access_token: record.accessToken,
         cursor,
-        options: { include_personal_finance_category: true },
+        options: {
+          include_personal_finance_category: true,
+          ...(cursor ? {} : { days_requested: 730 }),
+        },
       });
       transactions = [...transactions, ...syncRes.data.added];
       cursor = syncRes.data.next_cursor;
@@ -540,18 +543,28 @@ router.post("/plaid/sync/:itemId", async (req, res) => {
 
     // transactionsGet: safety net for institutions that don't fully surface
     // transactions via cursor-based sync alone (e.g. BMO credit cards, Wealthsimple).
+    // Query full 730-day (2-year) window with pagination to ensure all 1.5+ years of history are retrieved.
     try {
-      const startDate = new Date(Date.now() - 90 * 86400000).toISOString().slice(0, 10);
+      const startDate = new Date(Date.now() - 730 * 86400000).toISOString().slice(0, 10);
       const endDate   = new Date().toISOString().slice(0, 10);
       const txMap = new Map<string, any>();
       transactions.forEach((t) => txMap.set(t.transaction_id, t));
-      const txRes = await client.transactionsGet({
-        access_token: record.accessToken,
-        start_date: startDate,
-        end_date: endDate,
-        options: { count: 500 },
-      });
-      (txRes.data.transactions ?? []).forEach((t) => txMap.set(t.transaction_id, t));
+      let offset = 0;
+      const pageSize = 500;
+      let total = Infinity;
+      while (offset < total) {
+        const txRes = await client.transactionsGet({
+          access_token: record.accessToken,
+          start_date: startDate,
+          end_date: endDate,
+          options: { count: pageSize, offset },
+        });
+        const page = txRes.data.transactions ?? [];
+        total = txRes.data.total_transactions ?? page.length;
+        page.forEach((t) => txMap.set(t.transaction_id, t));
+        offset += page.length;
+        if (page.length === 0) break;
+      }
       transactions = Array.from(txMap.values());
     } catch {}
 
@@ -893,8 +906,31 @@ function cleanPlaidName(merchantName: string | null | undefined, rawName: string
   }
 
   // If cleaned raw is meaningful use it; otherwise fall back to merchant_name or raw
-  const candidate = s.length >= 3 ? s : (merchant || raw);
-  return toTitleCase(candidate) || "Transaction";
+  let candidate = (merchant && merchant.length >= 3) ? merchant : (s.length >= 3 ? s : (merchant || raw));
+
+  // Strip payment processor prefixes
+  candidate = candidate.replace(/^(SQ\s*\*|SQR\*|TST\*|SP\s*\*|PAYPAL\s*\*|PP\*|PYPL\s*\*|APL\*|AMZN\*|AMZ\*|GOOGLE\s*\*|VENMO\s*\*|STRIPE\s*\*|KLARNA\s*\*)\s*/i, "");
+
+  // Strip phone numbers & URLs
+  candidate = candidate.replace(/\b1?[-.\s]?(8\d{2}|\d{3})[-.\s]\d{3}[-.\s]\d{4}\b/g, " ");
+  candidate = candidate.replace(/\b([a-zA-Z0-9-]+\.)+(com|ca|org|net|io|co)(\/[^\s]*)?/gi, " ");
+
+  // Strip store tags, codes and symbols
+  candidate = candidate.replace(/#\s*[\w\d-]+/g, " ");
+  candidate = candidate.replace(/\b(store|loc|st|branch|terminal|term|pos|auth|ref|trans|id)\s*#?\s*\d+\b/gi, " ");
+  candidate = candidate.replace(/[*_~^+\\/|&@$%=;]/g, " ");
+
+  // Extract pure words (no numbers) and clamp to at most 3 words
+  const words: string[] = [];
+  for (const rawToken of candidate.split(/\s+/)) {
+    const token = rawToken.replace(/^[^a-zA-Z]+|[^a-zA-Z]+$/g, "");
+    if (!token || /\d/.test(token)) continue;
+    if (token.length === 1 && token.toLowerCase() !== "a") continue;
+    words.push(token.charAt(0).toUpperCase() + token.slice(1).toLowerCase());
+    if (words.length === 3) break;
+  }
+
+  return words.length > 0 ? words.join(" ") : (toTitleCase(merchant || raw) || "Transaction");
 }
 
 /** Map Plaid primary + optional detailed category → exact app category name */

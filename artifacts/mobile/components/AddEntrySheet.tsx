@@ -1580,7 +1580,8 @@ function BillsTab({ defaultAccountId, onSave, onRegisterSave }: { defaultAccount
   const [remindDays, setRemindDays] = useState("5 days before");
   const [autoPaid, setAutoPaid] = useState(false);
   const [accountId, setAccountId] = useState(defaultAccountId ?? accounts[0]?.id ?? "");
-  const [addExpenseEntry, setAddExpenseEntry] = useState(true);
+  const [addExpenseEntry, setAddExpenseEntry] = useState(false);
+  const [endDate, setEndDate] = useState<Date | null>(null);
   const [notes, setNotes] = useState("");
   const [billNumber, setBillNumber] = useState("");
 
@@ -1593,6 +1594,7 @@ function BillsTab({ defaultAccountId, onSave, onRegisterSave }: { defaultAccount
   const [showRepeatPicker, setShowRepeatPicker] = useState(false);
   const [showRemindPicker, setShowRemindPicker] = useState(false);
   const [showDatePicker, setShowDatePicker] = useState(false);
+  const [showEndDatePicker, setShowEndDatePicker] = useState(false);
   const [receipts, setReceipts] = useState<string[]>([]);
 
   const selectedAcc = accounts.find((a) => a.id === accountId);
@@ -1625,6 +1627,7 @@ function BillsTab({ defaultAccountId, onSave, onRegisterSave }: { defaultAccount
       title: title.trim(),
       amount: parsed,
       dueDate: toLocalYMD(dueDate),
+      endDate: isRecurring && endDate ? toLocalYMD(endDate) : undefined,
       category: category || "Other",
       isPaid: false,
       isRecurring,
@@ -1639,7 +1642,7 @@ function BillsTab({ defaultAccountId, onSave, onRegisterSave }: { defaultAccount
     });
     setReceipts([]);
     onSave();
-  }, [amount, title, category, dueDate, repeat, accountId, receipts, addBill, onSave]);
+  }, [amount, title, category, dueDate, endDate, repeat, accountId, receipts, addBill, addExpenseEntry, onSave]);
   saveRef.current = save;
 
   return (
@@ -1698,6 +1701,29 @@ function BillsTab({ defaultAccountId, onSave, onRegisterSave }: { defaultAccount
         />
 
         <RowItem icon="repeat" placeholder="Select repeat option" value={repeat !== "Never" ? repeat : undefined} onPress={() => setShowRepeatPicker(true)} />
+
+        {repeat !== "Never" && (
+          <TouchableOpacity
+            style={[styles.row, { borderBottomWidth: StyleSheet.hairlineWidth, borderBottomColor: colors.border }]}
+            onPress={() => setShowEndDatePicker(true)}
+          >
+            <View style={[styles.rowIcon, { backgroundColor: colors.accent }]}>
+              <Feather name="calendar" size={18} color={colors.primary} />
+            </View>
+            <View style={styles.rowContent}>
+              <Text style={[styles.rowLabel, { color: colors.foreground }]}>
+                {endDate ? formatDate(endDate) : "No end date"}
+              </Text>
+              <Text style={[styles.rowValue, { color: colors.mutedForeground }]}>End Date (Optional)</Text>
+            </View>
+            {endDate && (
+              <TouchableOpacity hitSlop={8} onPress={() => setEndDate(null)} style={{ padding: 4 }}>
+                <Feather name="x-circle" size={18} color={colors.mutedForeground} />
+              </TouchableOpacity>
+            )}
+            <Feather name="chevron-right" size={18} color={colors.mutedForeground} />
+          </TouchableOpacity>
+        )}
 
         <RowItem
           icon="bell"
@@ -1799,6 +1825,13 @@ function BillsTab({ defaultAccountId, onSave, onRegisterSave }: { defaultAccount
         selected={remindDays}
         onSelect={setRemindDays}
         onClose={() => setShowRemindPicker(false)}
+      />
+      <DatePickerModal
+        visible={showEndDatePicker}
+        title="Select End Date"
+        date={endDate || dueDate}
+        onChange={(d) => setEndDate(d)}
+        onClose={() => setShowEndDatePicker(false)}
       />
     </KeyboardAwareScrollView>
   );

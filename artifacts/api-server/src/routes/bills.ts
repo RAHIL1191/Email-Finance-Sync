@@ -31,8 +31,10 @@ router.post("/bills", validate(insertBillSchema), async (req, res) => {
       title: req.body.title,
       amount: req.body.amount,
       dueDate: req.body.dueDate,
+      endDate: req.body.endDate ?? null,
       category: req.body.category,
       isPaid: req.body.isPaid ?? false,
+      paidDate: req.body.paidDate ?? null,
       isRecurring: req.body.isRecurring ?? false,
       frequency: req.body.frequency ?? null,
       accountId: req.body.accountId ?? null,
@@ -41,6 +43,7 @@ router.post("/bills", validate(insertBillSchema), async (req, res) => {
       remindDays: req.body.remindDays ?? null,
       autoPaid: req.body.autoPaid ?? false,
       billNumber: req.body.billNumber ?? null,
+      addExpenseEntry: req.body.addExpenseEntry ?? false,
     };
     const [row] = await db
       .insert(billsTable)
@@ -75,8 +78,10 @@ router.post("/bills/batch", async (req, res) => {
         title: b.title,
         amount: Number(b.amount),
         dueDate: String(b.dueDate),
+        endDate: b.endDate ? String(b.endDate) : null,
         category: String(b.category),
         isPaid: b.isPaid ?? false,
+        paidDate: b.paidDate ?? null,
         isRecurring: b.isRecurring ?? false,
         frequency: b.frequency ?? null,
         accountId: b.accountId ?? null,
@@ -85,6 +90,7 @@ router.post("/bills/batch", async (req, res) => {
         remindDays: b.remindDays ?? null,
         autoPaid: b.autoPaid ?? false,
         billNumber: b.billNumber ?? null,
+        addExpenseEntry: b.addExpenseEntry ?? false,
       };
       const [row] = await db
         .insert(billsTable)
@@ -110,8 +116,10 @@ router.put("/bills/:id", validate(updateBillSchema), async (req, res) => {
     if (req.body.title !== undefined) updates.title = req.body.title;
     if (req.body.amount !== undefined) updates.amount = req.body.amount;
     if (req.body.dueDate !== undefined) updates.dueDate = req.body.dueDate;
+    if (req.body.endDate !== undefined) updates.endDate = req.body.endDate;
     if (req.body.category !== undefined) updates.category = req.body.category;
     if (req.body.isPaid !== undefined) updates.isPaid = req.body.isPaid;
+    if (req.body.paidDate !== undefined) updates.paidDate = req.body.paidDate;
     if (req.body.isRecurring !== undefined) updates.isRecurring = req.body.isRecurring;
     if (req.body.frequency !== undefined) updates.frequency = req.body.frequency;
     if (req.body.accountId !== undefined) updates.accountId = req.body.accountId;
@@ -120,6 +128,7 @@ router.put("/bills/:id", validate(updateBillSchema), async (req, res) => {
     if (req.body.remindDays !== undefined) updates.remindDays = req.body.remindDays;
     if (req.body.autoPaid !== undefined) updates.autoPaid = req.body.autoPaid;
     if (req.body.billNumber !== undefined) updates.billNumber = req.body.billNumber;
+    if (req.body.addExpenseEntry !== undefined) updates.addExpenseEntry = req.body.addExpenseEntry;
     updates.updatedAt = new Date();
 
     const [row] = await db
@@ -146,9 +155,10 @@ router.put("/bills/:id", validate(updateBillSchema), async (req, res) => {
 /** POST /api/bills/:id/pay — mark a bill as paid */
 router.post("/bills/:id/pay", async (req, res) => {
   try {
+    const paidDate = req.body.paidDate || new Date().toISOString().split("T")[0];
     const [row] = await db
       .update(billsTable)
-      .set({ isPaid: true, updatedAt: new Date() })
+      .set({ isPaid: true, paidDate, updatedAt: new Date() })
       .where(
         and(
           eq(billsTable.id, String(req.params.id)),

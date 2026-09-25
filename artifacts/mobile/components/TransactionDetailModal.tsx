@@ -16,6 +16,7 @@ import { useSafeAreaInsets } from "react-native-safe-area-context";
 
 import {
   Transaction,
+  formatTxCleanTitle,
   isRefundTransaction,
   parseNoteAndTag,
   getShortBankName,
@@ -29,6 +30,7 @@ import CategoryPickerModal from "./CategoryPickerModal";
 import MerchantPickerModal from "./MerchantPickerModal";
 import { ProjectPickerModal } from "./AddEntrySheet";
 import SimilarTransactionsModal from "./SimilarTransactionsModal";
+import TransactionAvatar from "./TransactionAvatar";
 
 // ─── Calculator Modal ────────────────────────────────────────────────────────
 function CalculatorModal({
@@ -814,10 +816,18 @@ export default function TransactionDetailModal({ visible, onClose, transaction }
             >
               {/* Category icon + title */}
               <View style={s.heroSection}>
-                <View style={[s.heroIcon, { backgroundColor: catColor + "20" }]}>
-                  <Feather name={icon} size={28} color={catColor} />
-                </View>
-                <Text style={[s.heroTitle, { color: colors.foreground }]}>{transaction.title}</Text>
+                <TransactionAvatar
+                  title={transaction.title}
+                  merchant={transaction.merchant}
+                  category={transaction.category}
+                  type={transaction.type}
+                  size={64}
+                  iconSize={30}
+                  style={{ marginBottom: 12 }}
+                />
+                <Text style={[s.heroTitle, { color: colors.foreground }]}>
+                  {formatTxCleanTitle(transaction.title, transaction.merchant)}
+                </Text>
                 <Text style={[s.heroAmount, { color: colors.foreground }]}>
                   ${transaction.amount.toFixed(2)}
                 </Text>

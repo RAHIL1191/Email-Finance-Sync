@@ -4,6 +4,7 @@ import React, { useEffect, useState } from "react";
 import {
   Alert,
   Modal,
+  Platform,
   ScrollView,
   StyleSheet,
   Text,
@@ -12,10 +13,11 @@ import {
   View,
 } from "react-native";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
+import DateTimePicker from "@react-native-community/datetimepicker";
 
 import { Bill, useApp } from "@/context/AppContext";
 import { useColors } from "@/hooks/useColors";
-import { parseLocalDate } from "@/hooks/useLocalDate";
+import { parseLocalDate, toLocalYMD } from "@/hooks/useLocalDate";
 
 // ─── Category icon map ────────────────────────────────────────────────────────
 const CAT_ICON: Record<string, { icon: string; bg: string; fg: string }> = {
@@ -76,12 +78,23 @@ export default function BillDetailSheet({ bill: billProp, visible, onClose, onEd
 
   const [notes, setNotes]               = useState("");
   const [editingNotes, setEditingNotes] = useState(false);
+  const [showPaidDatePicker, setShowPaidDatePicker] = useState(false);
+  const [paidDateObj, setPaidDateObj] = useState(new Date());
 
   const bill = bills.find((b) => b.id === billProp?.id) ?? billProp;
 
   useEffect(() => {
-    if (bill) setNotes(bill.notes ?? "");
-  }, [bill?.id, visible]);
+    if (bill) {
+      setNotes(bill.notes ?? "");
+      if (bill.paidDate) {
+        setPaidDateObj(parseLocalDate(bill.paidDate));
+      } else if (bill.updatedAt && bill.isPaid) {
+        setPaidDateObj(parseLocalDate(bill.updatedAt));
+      } else {
+        setPaidDateObj(new Date());
+      }
+    }
+  }, [bill?.id, bill?.paidDate, bill?.isPaid, visible]);
 
   if (!bill) return null;
 
@@ -91,7 +104,7 @@ export default function BillDetailSheet({ bill: billProp, visible, onClose, onEd
   const isDueSoon = !bill.isPaid && d >= 0 && d <= 3;
 
   const statusText = bill.isPaid
-    ? "Paid"
+    ? (bill.paidDate ? `Paid on ${fmtDate(bill.paidDate)}` : "Paid")
     : isOverdue
     ? `${Math.abs(d)} days past`
     : d === 0
@@ -179,8 +192,14 @@ export default function BillDetailSheet({ bill: billProp, visible, onClose, onEd
 
   const handleMarkPaid = () => {
     Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
-    markBillPaid(bill.id);
+    markBillPaid(bill.id, undefined, { paidDate: toLocalYMD(new Date()) });
     onClose();
+  };
+
+  const handleUpdatePaidDate = (newDate: Date) => {
+    Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
+    setPaidDateObj(newDate);
+    updateBill(bill.id, { paidDate: toLocalYMD(newDate) });
   };
 
   const handleSaveNotes = () => {
@@ -318,8 +337,29 @@ export default function BillDetailSheet({ bill: billProp, visible, onClose, onEd
               <Text style={[styles.infoValue, { color: colors.mutedForeground }]}>{bill.category}</Text>
             </View>
 
+            {/* Paid Date */}
+            {bill.isPaid && (
+              <TouchableOpacity
+                style={[styles.infoRow, { borderBottomColor: colors.border }]}
+                onPress={() => setShowPaidDatePicker(true)}
+                activeOpacity={0.7}
+              >
+                <View style={[styles.infoIconWrap, { backgroundColor: "#10b98125" }]}>
+                  <Feather name="check-circle" size={18} color="#10b981" />
+                </View>
+                <View style={{ flex: 1 }}>
+                  <Text style={[styles.infoLabel, { color: colors.foreground }]}>Paid Date</Text>
+                  <Text style={{ fontSize: 11, color: colors.mutedForeground, marginTop: 1 }}>Tap to change</Text>
+                </View>
+                <Text style={[styles.infoValue, { color: "#10b981", fontFamily: "Inter_600SemiBold" }]}>
+                  {bill.paidDate ? fmtDate(bill.paidDate) : fmtDate(bill.updatedAt || bill.dueDate)}
+                </Text>
+                <Feather name="edit-2" size={14} color={colors.mutedForeground} style={{ marginLeft: 6 }} />
+              </TouchableOpacity>
+            )}
+
             {/* Reminder / Recurrence */}
-            <View style={[styles.infoRow, { borderBottomWidth: 0 }]}>
+            <View style={[styles.infoRow, { borderBottomWidth: bill.endDate ? StyleSheet.hairlineWidth : 0, borderBottomColor: colors.border }]}>
               <View style={[styles.infoIconWrap, { backgroundColor: colors.primary + "25" }]}>
                 <Feather name="bell" size={18} color={colors.primary} />
               </View>
@@ -330,6 +370,19 @@ export default function BillDetailSheet({ bill: billProp, visible, onClose, onEd
                   : "One-time bill"}
               </Text>
             </View>
+
+            {/* End Date */}
+            {bill.endDate && (
+              <View style={[styles.infoRow, { borderBottomWidth: 0 }]}>
+                <View style={[styles.infoIconWrap, { backgroundColor: colors.primary + "25" }]}>
+                  <Feather name="calendar" size={18} color={colors.primary} />
+                </View>
+                <Text style={[styles.infoLabel, { color: colors.foreground }]}>End Date</Text>
+                <Text style={[styles.infoValue, { color: colors.mutedForeground }]}>
+                  Ends {fmtDate(bill.endDate)}
+                </Text>
+              </View>
+            )}
           </View>
 
           {/* Timestamps */}
@@ -348,6 +401,42 @@ export default function BillDetailSheet({ bill: billProp, visible, onClose, onEd
             </View>
           )}
         </ScrollView>
+
+        {/* Paid Date Picker */}
+        {Platform.OS === "android" && showPaidDatePicker && (
+          <DateTimePicker
+            value={paidDateObj}
+            mode="date"
+            display="default"
+            onChange={(_, d) => {
+              setShowPaidDatePicker(false);
+              if (d) handleUpdatePaidDate(d);
+            }}
+          />
+        )}
+
+        {Platform.OS !== "android" && (
+          <Modal visible={showPaidDatePicker} transparent animationType="fade" onRequestClose={() => setShowPaidDatePicker(false)}>
+            <TouchableOpacity style={styles.overlay} activeOpacity={1} onPress={() => setShowPaidDatePicker(false)} />
+            <View style={styles.dateSheetWrap}>
+              <View style={[styles.dateSheetCard, { backgroundColor: colors.card }]}>
+                <View style={[styles.dateSheetHandle, { backgroundColor: colors.border }]} />
+                <View style={styles.dateSheetHeader}>
+                  <Text style={[styles.pickerTitle, { color: colors.foreground }]}>Select Paid Date</Text>
+                  <TouchableOpacity onPress={() => setShowPaidDatePicker(false)} style={[styles.donePill, { backgroundColor: colors.primary }]}>
+                    <Text style={styles.donePillText}>Done</Text>
+                  </TouchableOpacity>
+                </View>
+                <DateTimePicker
+                  value={paidDateObj}
+                  mode="date"
+                  display="inline"
+                  onChange={(_, d) => { if (d) handleUpdatePaidDate(d); }}
+                />
+              </View>
+            </View>
+          </Modal>
+        )}
       </View>
     </Modal>
   );
@@ -433,4 +522,14 @@ const styles = StyleSheet.create({
 
   timestamps: { alignItems: "center", gap: 4, paddingTop: 8 },
   tsText:     { fontSize: 12, fontFamily: "Inter_400Regular" },
+
+  // Date picker sheet (iOS)
+  overlay:         { flex: 1, backgroundColor: "rgba(0,0,0,0.5)" },
+  dateSheetWrap:   { position: "absolute", bottom: 0, left: 0, right: 0 },
+  dateSheetCard:   { borderTopLeftRadius: 20, borderTopRightRadius: 20, paddingBottom: 24, paddingHorizontal: 16 },
+  dateSheetHandle: { width: 36, height: 4, borderRadius: 2, alignSelf: "center", marginTop: 8, marginBottom: 4 },
+  dateSheetHeader: { flexDirection: "row", alignItems: "center", justifyContent: "space-between", paddingHorizontal: 4, paddingVertical: 12 },
+  pickerTitle:     { fontSize: 16, fontFamily: "Inter_600SemiBold" },
+  donePill:        { paddingHorizontal: 16, paddingVertical: 6, borderRadius: 20 },
+  donePillText:    { fontSize: 14, fontFamily: "Inter_600SemiBold", color: "#fff" },
 });

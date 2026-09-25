@@ -255,20 +255,25 @@ export default function EditBillSheet({ bill, visible, onClose, onCreateBill }: 
   const [category,        setCategory]        = useState("");
   const [title,           setTitle]           = useState("");
   const [dueDate,         setDueDate]         = useState(new Date());
+  const [isPaid,          setIsPaid]          = useState(false);
+  const [paidDate,        setPaidDate]        = useState(new Date());
   const [repeat,          setRepeat]          = useState("Monthly");
   const [remindDays,      setRemindDays]      = useState("5 days before");
   const [autoPaid,        setAutoPaid]        = useState(false);
   const [accountId,       setAccountId]       = useState("");
-  const [addExpenseEntry, setAddExpenseEntry] = useState(true);
+  const [addExpenseEntry, setAddExpenseEntry] = useState(false);
+  const [endDate,         setEndDate]         = useState<Date | null>(null);
   const [notes,           setNotes]           = useState("");
   const [billNumber,      setBillNumber]      = useState("");
   const [receipts,        setReceipts]        = useState<string[]>([]);
 
-  const [showCatPicker,    setShowCatPicker]    = useState(false);
-  const [showAccPicker,    setShowAccPicker]    = useState(false);
-  const [showRepeatPicker, setShowRepeatPicker] = useState(false);
-  const [showRemindPicker, setShowRemindPicker] = useState(false);
-  const [showDatePicker,   setShowDatePicker]   = useState(false);
+  const [showCatPicker,      setShowCatPicker]      = useState(false);
+  const [showAccPicker,      setShowAccPicker]      = useState(false);
+  const [showRepeatPicker,   setShowRepeatPicker]   = useState(false);
+  const [showRemindPicker,   setShowRemindPicker]   = useState(false);
+  const [showDatePicker,     setShowDatePicker]     = useState(false);
+  const [showPaidDatePicker, setShowPaidDatePicker] = useState(false);
+  const [showEndDatePicker,  setShowEndDatePicker]  = useState(false);
 
   useEffect(() => {
     if (bill && visible) {
@@ -276,11 +281,20 @@ export default function EditBillSheet({ bill, visible, onClose, onCreateBill }: 
       setCategory(bill.category);
       setTitle(bill.title);
       setDueDate(parseLocalDate(bill.dueDate));
+      setEndDate(bill.endDate ? parseLocalDate(bill.endDate) : null);
+      setIsPaid(bill.isPaid ?? false);
+      if (bill.paidDate) {
+        setPaidDate(parseLocalDate(bill.paidDate));
+      } else if (bill.isPaid) {
+        setPaidDate(bill.updatedAt ? parseLocalDate(bill.updatedAt) : new Date());
+      } else {
+        setPaidDate(new Date());
+      }
       setRepeat(freqToRepeat(bill.frequency, bill.isRecurring));
       setRemindDays(bill.remindDays ?? "5 days before");
       setAutoPaid(bill.autoPaid ?? false);
       setAccountId(bill.accountId ?? "");
-      setAddExpenseEntry(bill.addExpenseEntry ?? true);
+      setAddExpenseEntry(bill.addExpenseEntry ?? false);
       setNotes(bill.notes ?? "");
       setBillNumber(bill.billNumber ?? "");
       setReceipts(bill.receipts ?? []);
@@ -300,8 +314,10 @@ export default function EditBillSheet({ bill, visible, onClose, onCreateBill }: 
       title:            title.trim(),
       amount:           parsed,
       dueDate:          toLocalYMD(dueDate),
+      endDate:          isRecurring && endDate ? toLocalYMD(endDate) : undefined,
       category:         category || "Other",
-      isPaid:           bill.isPaid,
+      isPaid,
+      paidDate:         isPaid ? toLocalYMD(paidDate) : undefined,
       isRecurring,
       frequency:        isRecurring ? (FREQ_MAP[repeat] ?? "monthly") : undefined,
       accountId:        accountId || undefined,
@@ -378,8 +394,71 @@ export default function EditBillSheet({ bill, visible, onClose, onCreateBill }: 
               value={repeat !== "Never" ? repeat : undefined}
               onPress={() => setShowRepeatPicker(true)} />
 
+            {repeat !== "Never" && (
+              <TouchableOpacity
+                style={[styles.row, { borderBottomWidth: StyleSheet.hairlineWidth, borderBottomColor: colors.border }]}
+                onPress={() => setShowEndDatePicker(true)}
+              >
+                <View style={[styles.rowIcon, { backgroundColor: colors.accent }]}>
+                  <Feather name="calendar" size={18} color={colors.primary} />
+                </View>
+                <View style={styles.rowContent}>
+                  <Text style={[styles.rowLabel, { color: colors.foreground }]}>
+                    {endDate ? fmtDate(endDate) : "No end date"}
+                  </Text>
+                  <Text style={[styles.rowValue, { color: colors.mutedForeground }]}>End Date (Optional)</Text>
+                </View>
+                {endDate && (
+                  <TouchableOpacity hitSlop={8} onPress={() => setEndDate(null)} style={{ padding: 4 }}>
+                    <Feather name="x-circle" size={18} color={colors.mutedForeground} />
+                  </TouchableOpacity>
+                )}
+                <Feather name="chevron-right" size={18} color={colors.mutedForeground} />
+              </TouchableOpacity>
+            )}
+
             <RowItem icon="bell" label={`Remind ${remindDays}`}
               onPress={() => setShowRemindPicker(true)} borderBottom={false} />
+          </View>
+
+          {/* ── Card 2.5: Payment Status & Paid Date ── */}
+          <View style={[styles.card, { backgroundColor: colors.card }]}>
+            <View style={[styles.row, { borderBottomWidth: isPaid ? StyleSheet.hairlineWidth : 0, borderBottomColor: colors.border }]}>
+              <View style={[styles.rowIcon, { backgroundColor: isPaid ? "#10b98122" : colors.accent }]}>
+                <Feather name={isPaid ? "check-circle" : "circle"} size={18} color={isPaid ? "#10b981" : colors.mutedForeground} />
+              </View>
+              <View style={{ flex: 1 }}>
+                <Text style={[styles.rowLabel, { color: colors.foreground }]}>Payment Status</Text>
+                <Text style={[styles.rowValue, { color: isPaid ? "#10b981" : colors.mutedForeground }]}>
+                  {isPaid ? "Paid" : "Unpaid"}
+                </Text>
+              </View>
+              <Switch
+                value={isPaid}
+                onValueChange={(val) => {
+                  setIsPaid(val);
+                  if (val && !paidDate) setPaidDate(new Date());
+                }}
+                trackColor={{ false: colors.border, true: "#10b981" }}
+                thumbColor="#fff"
+              />
+            </View>
+
+            {isPaid && (
+              <TouchableOpacity
+                style={[styles.row, { borderBottomWidth: 0 }]}
+                onPress={() => setShowPaidDatePicker(true)}
+              >
+                <View style={[styles.rowIcon, { backgroundColor: "#10b98122" }]}>
+                  <Feather name="calendar" size={18} color="#10b981" />
+                </View>
+                <View style={styles.rowContent}>
+                  <Text style={[styles.rowLabel, { color: colors.foreground }]}>{fmtDate(paidDate)}</Text>
+                  <Text style={[styles.rowValue, { color: "#10b981" }]}>Paid Date · Tap to change</Text>
+                </View>
+                <Feather name="chevron-right" size={18} color={colors.mutedForeground} />
+              </TouchableOpacity>
+            )}
           </View>
 
           {/* ── Card 3: Auto Paid / Account / Add Expense Entry ── */}
@@ -458,6 +537,12 @@ export default function EditBillSheet({ bill, visible, onClose, onCreateBill }: 
 
         <DatePickerModal visible={showDatePicker} title="Select Due Date" date={dueDate}
           onChange={setDueDate} onClose={() => setShowDatePicker(false)} />
+
+        <DatePickerModal visible={showEndDatePicker} title="Select End Date" date={endDate || dueDate}
+          onChange={(d) => { setEndDate(d); setShowEndDatePicker(false); }} onClose={() => setShowEndDatePicker(false)} />
+
+        <DatePickerModal visible={showPaidDatePicker} title="Select Paid Date" date={paidDate}
+          onChange={setPaidDate} onClose={() => setShowPaidDatePicker(false)} />
       </View>
     </Modal>
   );
