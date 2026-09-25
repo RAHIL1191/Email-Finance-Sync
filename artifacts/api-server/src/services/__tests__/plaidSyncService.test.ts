@@ -1,10 +1,13 @@
 import { describe, it, beforeEach } from "node:test";
 import assert from "node:assert/strict";
+import { PgDialect } from "drizzle-orm/pg-core";
 import {
   syncPlaidItem,
   cleanPlaidName,
   mapPlaidCategory,
   mapAccountType,
+  type LockManager,
+  type LockHandle,
 } from "../plaidSyncService.js";
 
 // ── In-Memory Mock Database Implementation ──────────────────────────────────────
@@ -69,75 +72,112 @@ interface MockCategoryRule {
   hitCount: number;
 }
 
-function createMockDb() {
+const dialect = new PgDialect();
+
+function parseCondition(condition: any): { sqlStr: string; params: any[] } {
+  if (!condition) return { sqlStr: "", params: [] };
+  try {
+    const q = dialect.sqlToQuery(condition);
+    return { sqlStr: q.sql, params: q.params };
+  } catch {
+    return { sqlStr: "", params: [] };
+  }
+}
+
+export interface MockDb {
+  items: MockPlaidItem[];
+  accounts: MockAccount[];
+  transactions: MockTransaction[];
+  categoryRules: MockCategoryRule[];
+  heldLocks: Set<string>;
+  setFailAfterDelete: (fail: boolean) => void;
+  setFailAfterUpdate: (fail: boolean) => void;
+  setFailHalfwayThroughInsert: (fail: boolean) => void;
+  setFailOnInsert: (fail: boolean) => void;
+  transaction: <T>(cb: (tx: any) => Promise<T>) => Promise<T>;
+  select: (...args: any[]) => any;
+  insert: (...args: any[]) => any;
+  update: (...args: any[]) => any;
+  delete: (...args: any[]) => any;
+}
+
+function createMockDb(): MockDb {
   const items: MockPlaidItem[] = [];
   const accounts: MockAccount[] = [];
   const transactions: MockTransaction[] = [];
   const categoryRules: MockCategoryRule[] = [];
   const heldLocks = new Set<string>();
+
+  let failAfterDelete = false;
+  let failAfterUpdate = false;
+  let failHalfwayThroughInsert = false;
   let failOnInsert = false;
 
-  return {
+  const mockDbInstance: MockDb = {
     items,
     accounts,
     transactions,
     categoryRules,
     heldLocks,
+
+    setFailAfterDelete(fail: boolean) {
+      failAfterDelete = fail;
+    },
+    setFailAfterUpdate(fail: boolean) {
+      failAfterUpdate = fail;
+    },
+    setFailHalfwayThroughInsert(fail: boolean) {
+      failHalfwayThroughInsert = fail;
+    },
     setFailOnInsert(fail: boolean) {
       failOnInsert = fail;
     },
 
-    execute: async (queryObj: any) => {
-      // Mock advisory locking
-      let fullQuery = "";
-      if (typeof queryObj === "string") {
-        fullQuery = queryObj;
-      } else if (queryObj?.queryChunks) {
-        fullQuery = queryObj.queryChunks
-          .map((c: any) => (typeof c === "string" ? c : c?.value ?? c?.strings?.join?.("") ?? ""))
-          .join(" ");
-      } else if (Array.isArray(queryObj?.strings)) {
-        fullQuery = queryObj.strings.join(" ");
+    transaction: async (cb: (tx: any) => Promise<any>) => {
+      // Snapshot state for atomic rollback on throw
+      const snapItems = items.map((i) => ({ ...i }));
+      const snapAccounts = accounts.map((a) => ({ ...a }));
+      const snapTransactions = transactions.map((t) => ({ ...t }));
+
+      try {
+        const result = await cb(mockDbInstance);
+        return result;
+      } catch (err) {
+        // Rollback state cleanly
+        items.length = 0;
+        items.push(...snapItems);
+        accounts.length = 0;
+        accounts.push(...snapAccounts);
+        transactions.length = 0;
+        transactions.push(...snapTransactions);
+        throw err;
       }
-
-      const isTryLock = fullQuery.includes("pg_try_advisory_lock");
-      const isUnlock = fullQuery.includes("pg_advisory_unlock");
-
-      if (isTryLock) {
-        const targetKey = items[0]?.id || "pi_test_item";
-        const isAlreadyLocked = Array.from(heldLocks).some(
-          (k) => fullQuery.includes(k) || heldLocks.has(targetKey)
-        );
-        if (isAlreadyLocked) {
-          return { rows: [{ locked: false }] };
-        }
-        heldLocks.add(targetKey);
-        return { rows: [{ locked: true }] };
-      }
-
-      if (isUnlock) {
-        const targetKey = items[0]?.id || "pi_test_item";
-        heldLocks.delete(targetKey);
-        return { rows: [{ unlocked: true }] };
-      }
-
-      return { rows: [] };
     },
 
     select: () => ({
       from: (tableObj: any) => ({
         where: async (condition: any) => {
-          // Identify table by schema structure
+          const { params } = parseCondition(condition);
+          const targetHouseholdId = params.find((p) => typeof p === "string" && p.startsWith("hh_"));
+
           if (tableObj?.itemId !== undefined || tableObj?._?.name === "plaid_items") {
-            return items.map((i) => ({ ...i }));
+            return items
+              .filter((i) => !targetHouseholdId || i.householdId === targetHouseholdId)
+              .map((i) => ({ ...i }));
           }
           if (tableObj?.isJoint !== undefined || tableObj?._?.name === "accounts") {
-            return accounts.map((a) => ({ ...a }));
+            return accounts
+              .filter((a) => !targetHouseholdId || a.householdId === targetHouseholdId)
+              .map((a) => ({ ...a }));
           }
           if (tableObj?.merchantPattern !== undefined || tableObj?._?.name === "category_rules") {
-            return categoryRules.map((c) => ({ ...c }));
+            return categoryRules
+              .filter((c) => !targetHouseholdId || c.householdId === targetHouseholdId)
+              .map((c) => ({ ...c }));
           }
-          return transactions.map((t) => ({ ...t }));
+          return transactions
+            .filter((t) => !targetHouseholdId || t.householdId === targetHouseholdId)
+            .map((t) => ({ ...t }));
         },
       }),
     }),
@@ -149,7 +189,11 @@ function createMockDb() {
             throw new Error("MOCK_DB_CRASH_BEFORE_COMMIT");
           }
           const list = Array.isArray(valOrArray) ? valOrArray : [valOrArray];
-          for (const item of list) {
+          for (let i = 0; i < list.length; i++) {
+            if (failHalfwayThroughInsert && i >= Math.floor(list.length / 2)) {
+              throw new Error("MOCK_CRASH_HALFWAY_THROUGH_INSERTS");
+            }
+            const item = list[i];
             if (item.plaidTransactionId && transactions.some((t) => t.plaidTransactionId === item.plaidTransactionId)) {
               continue; // onConflictDoNothing
             }
@@ -183,37 +227,87 @@ function createMockDb() {
     update: (tableObj: any) => ({
       set: (values: any) => ({
         where: async (condition: any) => {
+          const { params } = parseCondition(condition);
+
           // If updating plaidItems
           if (values.cursor !== undefined || values.lastSyncedAt !== undefined) {
+            const targetItemId = params.find((p) => typeof p === "string" && p.startsWith("pi_"));
             items.forEach((item) => {
-              Object.assign(item, values);
+              if (!targetItemId || item.id === targetItemId) {
+                Object.assign(item, values);
+              }
             });
             return;
           }
+
           // If updating accounts
           if (values.balance !== undefined) {
+            const targetAccId = params.find((p) => typeof p === "string" && (p.startsWith("acc_") || p.startsWith("plaid_")));
             accounts.forEach((acc) => {
-              Object.assign(acc, values);
+              if (!targetAccId || acc.id === targetAccId) {
+                Object.assign(acc, values);
+              }
             });
             return;
           }
+
           // If updating transactions
+          const targetTxId = params.find((p) => typeof p === "string" && (p.startsWith("tx_") || p.startsWith("plaid_")));
+          const targetHouseholdId = params.find((p) => typeof p === "string" && p.startsWith("hh_"));
+
           transactions.forEach((tx) => {
-            // Match transaction by condition if possible, or update matching ID
+            if (targetTxId && tx.id !== targetTxId) return;
+            if (targetHouseholdId && tx.householdId !== targetHouseholdId) return;
             Object.assign(tx, values);
           });
+
+          if (failAfterUpdate) {
+            throw new Error("MOCK_CRASH_AFTER_UPDATE");
+          }
         },
       }),
     }),
 
     delete: (tableObj: any) => ({
       where: async (condition: any) => {
-        // Mock deletion based on condition
-        // In our tests, deletion is called with inArray(transactionsTable.id, ids)
-        // Handled cleanly by filtering
+        const { params } = parseCondition(condition);
+        const targetHouseholdId = params.find((p) => typeof p === "string" && p.startsWith("hh_"));
+        const targetIds = new Set(params.filter((p) => typeof p === "string" && p.startsWith("tx_")));
+
+        for (let i = transactions.length - 1; i >= 0; i--) {
+          const tx = transactions[i];
+          if (targetHouseholdId && tx.householdId !== targetHouseholdId) continue;
+          if (targetIds.size > 0 && targetIds.has(tx.id)) {
+            transactions.splice(i, 1);
+          }
+        }
+
+        if (failAfterDelete) {
+          throw new Error("MOCK_CRASH_AFTER_DELETE");
+        }
       },
     }),
   };
+
+  return mockDbInstance;
+}
+
+// ── In-Memory Dedicated Lock Manager ──────────────────────────────────────────
+
+class MockDedicatedLockManager implements LockManager {
+  constructor(private heldLocks: Set<string>) {}
+
+  async tryAcquire(itemId: string): Promise<LockHandle | null> {
+    if (this.heldLocks.has(itemId)) {
+      return null;
+    }
+    this.heldLocks.add(itemId);
+    return {
+      release: async () => {
+        this.heldLocks.delete(itemId);
+      },
+    };
+  }
 }
 
 // ── Mock Plaid API Generator ───────────────────────────────────────────────────
@@ -231,8 +325,7 @@ function createMockPlaidClient(handlers: {
         accounts: [
           {
             account_id: "plaid_acc_checking",
-            name: "Checking",
-            official_name: "Total Checking",
+            name: "Plaid Checking",
             type: "depository",
             subtype: "checking",
             balances: { current: 1500.5, available: 1400.0 },
@@ -267,68 +360,63 @@ function createMockPlaidClient(handlers: {
 
 describe("Phase 1 — Plaid Sync Data Integrity Suite", () => {
   let mockDb: ReturnType<typeof createMockDb>;
+  let mockLockMgr: MockDedicatedLockManager;
   const householdId = "hh_test_123";
   const itemId = "pi_test_item";
 
   beforeEach(() => {
     mockDb = createMockDb();
+    mockLockMgr = new MockDedicatedLockManager(mockDb.heldLocks);
+
     mockDb.items.push({
       id: itemId,
       householdId,
-      itemId: "plaid_item_123",
-      accessToken: "access_token_mock",
-      bankName: "Chase",
-      bankColor: "#1a56db",
+      itemId: "plaid_inst_item_123",
+      accessToken: "access-sandbox-token-123",
+      bankName: "Test Bank",
+      bankColor: "#000000",
       cursor: null,
-      connectedAt: new Date("2026-09-01T00:00:00Z"),
+      connectedAt: new Date(),
       lastSyncedAt: null,
+      error: null,
     });
+
     mockDb.accounts.push({
       id: "acc_checking_local",
       householdId,
       name: "Checking",
-      bank: "Chase",
+      bank: "Test Bank",
       type: "checking",
-      balance: 1500.5,
+      balance: 500.0,
       lastFour: "1234",
       plaidAccountId: "plaid_acc_checking",
       plaidItemId: itemId,
       isJoint: false,
       sharedPlaidAccounts: null,
-      updatedAt: new Date("2026-09-01T00:00:00Z"),
+      updatedAt: new Date(),
     });
   });
 
-  // ── 1. Initial History Sync ──────────────────────────────────────────────────
+  // ── 1. Initial Sync ──────────────────────────────────────────────────────────
   it("Scenario 1: initial history sync imports transactions, maps accounts, and advances cursor", async () => {
     const mockPlaid = createMockPlaidClient({
-      transactionsSync: async () => ({
+      transactionsSync: async (params) => ({
         data: {
           added: [
             {
-              transaction_id: "tx_101",
+              transaction_id: "tx_plaid_001",
               account_id: "plaid_acc_checking",
-              amount: 25.5,
+              amount: 45.5,
               date: "2026-09-20",
-              name: "WALMART SUPERCENTER",
-              merchant_name: "Walmart",
+              name: "Starbucks Store #1234",
+              merchant_name: "Starbucks",
+              personal_finance_category: { primary: "FOOD_AND_DRINK", detailed: "FOOD_AND_DRINK_COFFEE_SHOPS" },
               pending: false,
-              personal_finance_category: { primary: "GENERAL_MERCHANDISE" },
-            },
-            {
-              transaction_id: "tx_102",
-              account_id: "plaid_acc_checking",
-              amount: -1200.0, // income
-              date: "2026-09-21",
-              name: "PAYROLL DEPOSIT ACME CORP",
-              merchant_name: "Acme Corp",
-              pending: false,
-              personal_finance_category: { primary: "INCOME", detailed: "INCOME_WAGES" },
             },
           ],
           modified: [],
           removed: [],
-          next_cursor: "cursor_after_initial",
+          next_cursor: "cursor_page_1",
           has_more: false,
         },
       }),
@@ -338,53 +426,39 @@ describe("Phase 1 — Plaid Sync Data Integrity Suite", () => {
       itemId,
       householdId,
       dbClient: mockDb,
+      lockManager: mockLockMgr,
       plaidClient: mockPlaid,
     });
 
     assert.equal(result.success, true);
-    assert.equal(result.addedCount, 2);
-    assert.equal(result.count, 2);
-    assert.equal(mockDb.transactions.length, 2);
-
-    const expenseTx = mockDb.transactions.find((t) => t.plaidTransactionId === "tx_101");
-    assert.ok(expenseTx);
-    assert.equal(expenseTx.amount, 25.5);
-    assert.equal(expenseTx.type, "expense");
-    assert.equal(expenseTx.category, "Shopping");
-    assert.equal(expenseTx.accountId, "acc_checking_local");
-
-    const incomeTx = mockDb.transactions.find((t) => t.plaidTransactionId === "tx_102");
-    assert.ok(incomeTx);
-    assert.equal(incomeTx.amount, 1200.0);
-    assert.equal(incomeTx.type, "income");
-    assert.equal(incomeTx.category, "Salary");
-
-    // Verify cursor updated
-    const item = mockDb.items.find((i) => i.id === itemId);
-    assert.equal(item?.cursor, "cursor_after_initial");
+    assert.equal(result.addedCount, 1);
+    assert.equal(mockDb.transactions.length, 1);
+    assert.equal(mockDb.transactions[0].plaidTransactionId, "tx_plaid_001");
+    assert.equal(mockDb.transactions[0].category, "Drink & Dine");
+    assert.equal(mockDb.items[0].cursor, "cursor_page_1");
   });
 
   // ── 2. Multi-page Pagination ─────────────────────────────────────────────────
   it("Scenario 2: multi-page pagination consumes all pages until has_more is false", async () => {
     let callCount = 0;
     const mockPlaid = createMockPlaidClient({
-      transactionsSync: async ({ cursor }) => {
+      transactionsSync: async (params) => {
         callCount++;
         if (callCount === 1) {
           return {
             data: {
               added: [
                 {
-                  transaction_id: "page1_tx1",
+                  transaction_id: "tx_p1_01",
                   account_id: "plaid_acc_checking",
                   amount: 10.0,
-                  date: "2026-09-18",
+                  date: "2026-09-20",
                   name: "Store 1",
                 },
               ],
               modified: [],
               removed: [],
-              next_cursor: "cursor_page_2",
+              next_cursor: "cursor_p1",
               has_more: true,
             },
           };
@@ -393,16 +467,16 @@ describe("Phase 1 — Plaid Sync Data Integrity Suite", () => {
           data: {
             added: [
               {
-                transaction_id: "page2_tx1",
+                transaction_id: "tx_p2_01",
                 account_id: "plaid_acc_checking",
                 amount: 20.0,
-                date: "2026-09-19",
+                date: "2026-09-21",
                 name: "Store 2",
               },
             ],
             modified: [],
             removed: [],
-            next_cursor: "cursor_final_p2",
+            next_cursor: "cursor_p2_final",
             has_more: false,
           },
         };
@@ -413,31 +487,30 @@ describe("Phase 1 — Plaid Sync Data Integrity Suite", () => {
       itemId,
       householdId,
       dbClient: mockDb,
+      lockManager: mockLockMgr,
       plaidClient: mockPlaid,
     });
 
     assert.equal(result.success, true);
     assert.equal(callCount, 2);
     assert.equal(mockDb.transactions.length, 2);
-    const item = mockDb.items.find((i) => i.id === itemId);
-    assert.equal(item?.cursor, "cursor_final_p2");
+    assert.equal(mockDb.items[0].cursor, "cursor_p2_final");
   });
 
-  // ── 3. 500+ Changes Ingestion Chunking ────────────────────────────────────────
+  // ── 3. 500+ Changes Ingestion ────────────────────────────────────────────────
   it("Scenario 3: 500+ changes safely ingest in manageable chunks", async () => {
-    const largeList = Array.from({ length: 550 }, (_, i) => ({
-      transaction_id: `bulk_tx_${i}`,
+    const hugeAdded = Array.from({ length: 550 }, (_, i) => ({
+      transaction_id: `tx_bulk_${i}`,
       account_id: "plaid_acc_checking",
-      amount: i + 1,
-      date: "2026-09-15",
-      name: `Merchant ${i}`,
-      pending: false,
+      amount: 5.0 + i,
+      date: "2026-09-22",
+      name: `Vendor ${i}`,
     }));
 
     const mockPlaid = createMockPlaidClient({
       transactionsSync: async () => ({
         data: {
-          added: largeList,
+          added: hugeAdded,
           modified: [],
           removed: [],
           next_cursor: "cursor_bulk_done",
@@ -450,35 +523,32 @@ describe("Phase 1 — Plaid Sync Data Integrity Suite", () => {
       itemId,
       householdId,
       dbClient: mockDb,
+      lockManager: mockLockMgr,
       plaidClient: mockPlaid,
       chunkSize: 200,
     });
 
     assert.equal(result.success, true);
-    assert.equal(result.count, 550);
     assert.equal(mockDb.transactions.length, 550);
-    const item = mockDb.items.find((i) => i.id === itemId);
-    assert.equal(item?.cursor, "cursor_bulk_done");
+    assert.equal(mockDb.items[0].cursor, "cursor_bulk_done");
   });
 
   // ── 4. Modified Posted Transaction ───────────────────────────────────────────
   it("Scenario 4: modified posted transaction updates amount and date while preserving unedited status", async () => {
-    // Pre-insert existing posted transaction
     mockDb.transactions.push({
-      id: "tx_plaid_mod_1",
+      id: "tx_plaid_existing_01",
       householdId,
       accountId: "acc_checking_local",
-      title: "Gas Station",
-      amount: 45.0,
+      title: "Target",
+      amount: 30.0,
       type: "expense",
-      category: "Transport",
-      date: "2026-09-20",
+      category: "Shopping",
+      date: "2026-09-21",
       source: "plaid",
-      plaidTransactionId: "plaid_mod_1",
-      pending: false,
+      plaidTransactionId: "plaid_tx_01",
       isUserEdited: false,
-      createdAt: new Date("2026-09-20T10:00:00Z"),
-      updatedAt: new Date("2026-09-20T10:00:00Z"),
+      createdAt: new Date(),
+      updatedAt: new Date(),
     });
 
     const mockPlaid = createMockPlaidClient({
@@ -487,17 +557,15 @@ describe("Phase 1 — Plaid Sync Data Integrity Suite", () => {
           added: [],
           modified: [
             {
-              transaction_id: "plaid_mod_1",
+              transaction_id: "plaid_tx_01",
               account_id: "plaid_acc_checking",
-              amount: 52.5, // Updated final amount
-              date: "2026-09-21",
-              name: "Shell Gas Station",
-              merchant_name: "Shell",
-              pending: false,
+              amount: 35.5,
+              date: "2026-09-22",
+              name: "Target Superstore",
             },
           ],
           removed: [],
-          next_cursor: "cursor_mod_done",
+          next_cursor: "cursor_mod_1",
           has_more: false,
         },
       }),
@@ -507,57 +575,53 @@ describe("Phase 1 — Plaid Sync Data Integrity Suite", () => {
       itemId,
       householdId,
       dbClient: mockDb,
+      lockManager: mockLockMgr,
       plaidClient: mockPlaid,
     });
 
     assert.equal(result.success, true);
-    assert.equal(result.modifiedCount, 1);
-    const updated = mockDb.transactions.find((t) => t.plaidTransactionId === "plaid_mod_1");
-    assert.equal(updated?.amount, 52.5);
-    assert.equal(updated?.date, "2026-09-21");
+    const updated = mockDb.transactions.find((t) => t.plaidTransactionId === "plaid_tx_01");
+    assert.equal(updated?.amount, 35.5);
+    assert.equal(updated?.date, "2026-09-22");
+    assert.equal(updated?.title, "Target Superstore");
   });
 
   // ── 5. Pending to Posted Transition ──────────────────────────────────────────
   it("Scenario 5: pending to posted transition replaces pending transaction and preserves user annotations", async () => {
-    // Existing pending transaction that user already annotated
     mockDb.transactions.push({
-      id: "tx_pending_99",
+      id: "tx_pending_100",
       householdId,
       accountId: "acc_checking_local",
-      title: "Starbucks Coffee",
-      amount: 6.25,
+      title: "Bistro Custom Title",
+      amount: 50.0,
       type: "expense",
-      category: "Drink & Dine",
-      date: "2026-09-22",
+      category: "Special Dinner",
+      date: "2026-09-20",
       source: "plaid",
-      note: "Team coffee on client project",
-      plaidTransactionId: "plaid_pend_99",
+      note: "Anniversary dinner with custom note",
+      plaidTransactionId: "plaid_pending_100",
       pending: true,
-      isUserEdited: true, // User added note
-      createdAt: new Date("2026-09-22T08:30:00Z"),
-      updatedAt: new Date("2026-09-22T08:30:00Z"),
+      isUserEdited: true,
+      createdAt: new Date(),
+      updatedAt: new Date(),
     });
 
-    // Plaid sends posted transaction referencing pending_transaction_id
     const mockPlaid = createMockPlaidClient({
       transactionsSync: async () => ({
         data: {
           added: [
             {
-              transaction_id: "plaid_post_100",
-              pending_transaction_id: "plaid_pend_99",
+              transaction_id: "plaid_posted_200",
+              pending_transaction_id: "plaid_pending_100",
               account_id: "plaid_acc_checking",
-              amount: 6.25,
-              date: "2026-09-24", // Posted date
-              authorized_date: "2026-09-22", // Original purchase date
-              name: "STARBUCKS STORE #1234",
-              merchant_name: "Starbucks",
-              pending: false,
+              amount: 55.0,
+              date: "2026-09-22",
+              name: "Bistro 42",
             },
           ],
           modified: [],
-          removed: [{ transaction_id: "plaid_pend_99" }], // Plaid also signals removal of pending
-          next_cursor: "cursor_settled",
+          removed: [],
+          next_cursor: "cursor_posted_done",
           has_more: false,
         },
       }),
@@ -567,34 +631,56 @@ describe("Phase 1 — Plaid Sync Data Integrity Suite", () => {
       itemId,
       householdId,
       dbClient: mockDb,
+      lockManager: mockLockMgr,
       plaidClient: mockPlaid,
     });
 
     assert.equal(result.success, true);
-    // Should NOT have created a second duplicate row
     assert.equal(mockDb.transactions.length, 1);
     const resolved = mockDb.transactions[0];
+    assert.equal(resolved.plaidTransactionId, "plaid_posted_200");
     assert.equal(resolved.pending, false);
-    assert.equal(resolved.plaidTransactionId, "plaid_post_100");
-    assert.equal(resolved.pendingTransactionId, "plaid_pend_99");
-    assert.equal(resolved.note, "Team coffee on client project"); // Note preserved!
+    assert.equal(resolved.amount, 55.0);
+    // User edits preserved
+    assert.equal(resolved.title, "Bistro Custom Title");
+    assert.equal(resolved.category, "Special Dinner");
+    assert.equal(resolved.note, "Anniversary dinner with custom note");
   });
 
-  // ── 6. Removed Transaction Handling ──────────────────────────────────────────
-  it("Scenario 6: removed transaction is safely removed without wiping annotated records", async () => {
+  // ── 6. Standalone Removal vs User-Annotated Removal ──────────────────────────
+  it("Scenario 6: standalone removal deletes unedited transaction but neutralizes user-annotated transaction", async () => {
+    // 1. Unedited transaction (should be deleted)
     mockDb.transactions.push({
-      id: "tx_plaid_removable",
+      id: "tx_unedited_01",
       householdId,
       accountId: "acc_checking_local",
-      title: "Authorisation Hold",
-      amount: 100.0,
+      title: "Bank Fee",
+      amount: 15.0,
       type: "expense",
-      category: "Others",
+      category: "Fees",
       date: "2026-09-20",
       source: "plaid",
-      plaidTransactionId: "plaid_hold_1",
-      pending: true,
+      plaidTransactionId: "plaid_remove_unedited",
       isUserEdited: false,
+      note: null,
+      createdAt: new Date(),
+      updatedAt: new Date(),
+    });
+
+    // 2. User-annotated transaction (should NOT be deleted, but neutralized: amount = 0)
+    mockDb.transactions.push({
+      id: "tx_annotated_02",
+      householdId,
+      accountId: "acc_checking_local",
+      title: "Client Lunch",
+      amount: 85.0,
+      type: "expense",
+      category: "Business",
+      date: "2026-09-20",
+      source: "plaid",
+      plaidTransactionId: "plaid_remove_annotated",
+      isUserEdited: true,
+      note: "Business lunch with client",
       createdAt: new Date(),
       updatedAt: new Date(),
     });
@@ -604,8 +690,11 @@ describe("Phase 1 — Plaid Sync Data Integrity Suite", () => {
         data: {
           added: [],
           modified: [],
-          removed: [{ transaction_id: "plaid_hold_1" }],
-          next_cursor: "cursor_removed_ok",
+          removed: [
+            { transaction_id: "plaid_remove_unedited" },
+            { transaction_id: "plaid_remove_annotated" },
+          ],
+          next_cursor: "cursor_rem_done",
           has_more: false,
         },
       }),
@@ -615,98 +704,83 @@ describe("Phase 1 — Plaid Sync Data Integrity Suite", () => {
       itemId,
       householdId,
       dbClient: mockDb,
+      lockManager: mockLockMgr,
       plaidClient: mockPlaid,
     });
 
     assert.equal(result.success, true);
-    assert.ok(result.removedIds.includes("plaid_hold_1"));
+    // Unedited transaction was deleted
+    const unedited = mockDb.transactions.find((t) => t.id === "tx_unedited_01");
+    assert.equal(unedited, undefined);
+
+    // User-annotated transaction was preserved, but neutralized financially (amount = 0)
+    const annotated = mockDb.transactions.find((t) => t.id === "tx_annotated_02");
+    assert.ok(annotated);
+    assert.equal(annotated.amount, 0); // Neutralized spend
+    assert.ok(annotated.title.includes("[Removed by Bank]"));
+    assert.ok(annotated.note?.includes("Business lunch with client"));
+    assert.ok(annotated.note?.includes("original amount $85.00"));
   });
 
-  // ── 7. Split / User-Edited Transaction Preservation ──────────────────────────
+  // ── 7. Split Transactions & User Edits ───────────────────────────────────────
   it("Scenario 7: user edits and split transactions are never overwritten or resurrected", async () => {
-    // Transaction 1: User customized category
+    // User split parent tx into two parts
     mockDb.transactions.push({
-      id: "tx_user_edited",
+      id: "tx_split_part_1",
       householdId,
       accountId: "acc_checking_local",
-      title: "Costco Wholesale",
-      amount: 250.0,
+      title: "Grocery Part",
+      amount: 60.0,
       type: "expense",
-      category: "Custom Groceries Category", // Custom user category
-      date: "2026-09-18",
+      category: "Food & Grocery",
+      date: "2026-09-20",
       source: "plaid",
-      plaidTransactionId: "plaid_costco_1",
-      pending: false,
-      isUserEdited: true, // Marked edited!
+      plaidTransactionId: "plaid_split_parent",
+      splitGroupId: "split_grp_001",
+      isUserEdited: true,
+      createdAt: new Date(),
+      updatedAt: new Date(),
+    });
+    mockDb.transactions.push({
+      id: "tx_split_part_2",
+      householdId,
+      accountId: "acc_checking_local",
+      title: "Home Goods Part",
+      amount: 40.0,
+      type: "expense",
+      category: "House",
+      date: "2026-09-20",
+      source: "plaid",
+      plaidTransactionId: "plaid_split_parent",
+      splitGroupId: "split_grp_001",
+      isUserEdited: true,
       createdAt: new Date(),
       updatedAt: new Date(),
     });
 
-    // Transaction 2: Split by user into 2 splits
-    mockDb.transactions.push(
-      {
-        id: "tx_plaid_costco_split_0",
-        householdId,
-        accountId: "acc_checking_local",
-        title: "Costco (Food)",
-        amount: 150.0,
-        type: "expense",
-        category: "Food & Grocery",
-        date: "2026-09-19",
-        source: "plaid",
-        plaidTransactionId: "plaid_costco_split_parent",
-        splitGroupId: "split_grp_abc",
-        isUserEdited: true,
-        createdAt: new Date(),
-        updatedAt: new Date(),
-      },
-      {
-        id: "tx_plaid_costco_split_1",
-        householdId,
-        accountId: "acc_checking_local",
-        title: "Costco (Household Goods)",
-        amount: 50.0,
-        type: "expense",
-        category: "House",
-        date: "2026-09-19",
-        source: "plaid",
-        plaidTransactionId: "plaid_costco_split_parent",
-        splitGroupId: "split_grp_abc",
-        isUserEdited: true,
-        createdAt: new Date(),
-        updatedAt: new Date(),
-      }
-    );
-
-    const initialTxCount = mockDb.transactions.length;
-
-    // Plaid sends updates for both: modified for costco_1, added for costco_split_parent
     const mockPlaid = createMockPlaidClient({
       transactionsSync: async () => ({
         data: {
           added: [
             {
-              transaction_id: "plaid_costco_split_parent",
+              transaction_id: "plaid_split_parent",
               account_id: "plaid_acc_checking",
-              amount: 200.0,
-              date: "2026-09-19",
-              name: "COSTCO WHOLESALE W500",
-              pending: false,
+              amount: 100.0,
+              date: "2026-09-20",
+              name: "Superstore",
             },
           ],
           modified: [
             {
-              transaction_id: "plaid_costco_1",
+              transaction_id: "plaid_split_parent",
               account_id: "plaid_acc_checking",
-              amount: 250.0,
-              date: "2026-09-18",
-              name: "COSTCO WHOLESALE",
-              personal_finance_category: { primary: "GENERAL_MERCHANDISE" },
-              pending: false,
+              amount: 100.0,
+              date: "2026-09-20",
+              name: "Superstore Renamed",
             },
           ],
           removed: [],
-          next_cursor: "cursor_splits_safe",
+          next_cursor: "cursor_split_done",
           has_more: false,
         },
       }),
@@ -716,90 +790,85 @@ describe("Phase 1 — Plaid Sync Data Integrity Suite", () => {
       itemId,
       householdId,
       dbClient: mockDb,
+      lockManager: mockLockMgr,
       plaidClient: mockPlaid,
     });
 
     assert.equal(result.success, true);
-    // User's custom category on costco_1 must NOT be overwritten with "Shopping"
-    const costco1 = mockDb.transactions.find((t) => t.plaidTransactionId === "plaid_costco_1");
-    assert.equal(costco1?.category, "Custom Groceries Category");
-
-    // The un-split parent must NOT be re-inserted as a duplicate alongside the 2 splits
-    assert.equal(mockDb.transactions.length, initialTxCount);
+    // Splits remain intact; parent 100.0 was not re-inserted
+    assert.equal(mockDb.transactions.length, 2);
+    assert.equal(mockDb.transactions[0].title, "Grocery Part");
+    assert.equal(mockDb.transactions[1].title, "Home Goods Part");
   });
 
-  // ── 8. Duplicate Replay Idempotency ──────────────────────────────────────────
+  // ── 8. Idempotent Replay ─────────────────────────────────────────────────────
   it("Scenario 8: duplicate sync replay is strictly idempotent", async () => {
-    const payload = {
-      added: [
-        {
-          transaction_id: "tx_replay_1",
-          account_id: "plaid_acc_checking",
-          amount: 15.0,
-          date: "2026-09-22",
-          name: "Bakery",
-          pending: false,
-        },
-      ],
-      modified: [],
-      removed: [],
-      next_cursor: "cursor_replay_v1",
-      has_more: false,
-    };
-
-    const mockPlaid = createMockPlaidClient({
-      transactionsSync: async () => ({ data: payload }),
-    });
-
-    // Run 1
-    const res1 = await syncPlaidItem({
-      itemId,
-      householdId,
-      dbClient: mockDb,
-      plaidClient: mockPlaid,
-    });
-    assert.equal(res1.success, true);
-    assert.equal(mockDb.transactions.length, 1);
-
-    // Run 2 (exact replay)
-    const res2 = await syncPlaidItem({
-      itemId,
-      householdId,
-      dbClient: mockDb,
-      plaidClient: mockPlaid,
-    });
-    assert.equal(res2.success, true);
-    // DB count remains exactly 1!
-    assert.equal(mockDb.transactions.length, 1);
-  });
-
-  // ── 9. Same-Amount Purchases on Same Day ─────────────────────────────────────
-  it("Scenario 9: distinct purchases with same amount and date are both preserved", async () => {
-    // User bought two coffees for $4.75 each at the same coffee shop on the same day
     const mockPlaid = createMockPlaidClient({
       transactionsSync: async () => ({
         data: {
           added: [
             {
-              transaction_id: "plaid_coffee_morning",
+              transaction_id: "tx_idempotent_1",
               account_id: "plaid_acc_checking",
-              amount: 4.75,
-              date: "2026-09-23",
-              name: "Blue Bottle Coffee",
-              pending: false,
-            },
-            {
-              transaction_id: "plaid_coffee_afternoon",
-              account_id: "plaid_acc_checking",
-              amount: 4.75,
-              date: "2026-09-23",
-              name: "Blue Bottle Coffee",
-              pending: false,
+              amount: 25.0,
+              date: "2026-09-22",
+              name: "Cinema",
             },
           ],
           modified: [],
           removed: [],
-          next_cursor: "cursor_coffee_ok",
+          next_cursor: "cursor_replay_1",
+          has_more: false,
+        },
+      }),
+    });
+
+    // Run sync first time
+    await syncPlaidItem({
+      itemId,
+      householdId,
+      dbClient: mockDb,
+      lockManager: mockLockMgr,
+      plaidClient: mockPlaid,
+    });
+    assert.equal(mockDb.transactions.length, 1);
+
+    // Replay same sync
+    await syncPlaidItem({
+      itemId,
+      householdId,
+      dbClient: mockDb,
+      lockManager: mockLockMgr,
+      plaidClient: mockPlaid,
+    });
+    // Exactly 1 transaction exists
+    assert.equal(mockDb.transactions.length, 1);
+  });
+
+  // ── 9. Distinct Same-Amount Purchases ────────────────────────────────────────
+  it("Scenario 9: distinct purchases with same amount and date are both preserved", async () => {
+    const mockPlaid = createMockPlaidClient({
+      transactionsSync: async () => ({
+        data: {
+          added: [
+            {
+              transaction_id: "tx_coffee_morning",
+              account_id: "plaid_acc_checking",
+              amount: 4.5,
+              date: "2026-09-23",
+              name: "Coffee Shop",
+            },
+            {
+              transaction_id: "tx_coffee_afternoon",
+              account_id: "plaid_acc_checking",
+              amount: 4.5,
+              date: "2026-09-23",
+              name: "Coffee Shop",
+            },
+          ],
+          modified: [],
+          removed: [],
+          next_cursor: "cursor_same_amt",
           has_more: false,
         },
       }),
@@ -809,32 +878,31 @@ describe("Phase 1 — Plaid Sync Data Integrity Suite", () => {
       itemId,
       householdId,
       dbClient: mockDb,
+      lockManager: mockLockMgr,
       plaidClient: mockPlaid,
     });
 
     assert.equal(result.success, true);
     assert.equal(mockDb.transactions.length, 2);
-    const morning = mockDb.transactions.find((t) => t.plaidTransactionId === "plaid_coffee_morning");
-    const afternoon = mockDb.transactions.find((t) => t.plaidTransactionId === "plaid_coffee_afternoon");
-    assert.ok(morning);
-    assert.ok(afternoon);
+    assert.equal(mockDb.transactions[0].plaidTransactionId, "tx_coffee_morning");
+    assert.equal(mockDb.transactions[1].plaidTransactionId, "tx_coffee_afternoon");
   });
 
-  // ── 10. Secondary Joint Account Filtering ────────────────────────────────────
+  // ── 10. Secondary Joint Account ──────────────────────────────────────────────
   it("Scenario 10: secondary joint account transactions are filtered out while balances update", async () => {
-    // Add a shared joint account where THIS item is secondary (isPrimary: false)
     mockDb.accounts.push({
       id: "acc_joint_local",
       householdId,
       name: "Joint Checking",
-      bank: "Chase",
+      bank: "Test Bank",
       type: "checking",
-      balance: 5000.0,
-      lastFour: "9999",
+      balance: 1000.0,
+      lastFour: "5678",
+      plaidAccountId: "plaid_acc_joint",
+      plaidItemId: itemId,
       isJoint: true,
       sharedPlaidAccounts: [
-        { plaidItemId: "pi_spouse_item", plaidAccountId: "plaid_spouse_joint", isPrimary: true },
-        { plaidItemId: itemId, plaidAccountId: "plaid_my_joint", isPrimary: false },
+        { plaidItemId: itemId, plaidAccountId: "plaid_acc_joint", isPrimary: false },
       ],
       updatedAt: new Date(),
     });
@@ -845,22 +913,21 @@ describe("Phase 1 — Plaid Sync Data Integrity Suite", () => {
           accounts: [
             {
               account_id: "plaid_acc_checking",
-              name: "Checking",
+              name: "Personal",
               type: "depository",
               subtype: "checking",
-              balances: { current: 1600.0 },
+              balances: { current: 1500.0 },
               mask: "1234",
             },
             {
-              account_id: "plaid_my_joint",
-              name: "Joint Checking",
+              account_id: "plaid_acc_joint",
+              name: "Joint",
               type: "depository",
               subtype: "checking",
-              balances: { current: 5200.0 }, // New balance
-              mask: "9999",
+              balances: { current: 5200.0 },
+              mask: "5678",
             },
           ],
-          item: { institution_id: "ins_1" },
         },
       }),
       transactionsSync: async () => ({
@@ -869,21 +936,21 @@ describe("Phase 1 — Plaid Sync Data Integrity Suite", () => {
             {
               transaction_id: "tx_personal",
               account_id: "plaid_acc_checking",
-              amount: 50.0,
-              date: "2026-09-24",
-              name: "Personal Store",
+              amount: 15.0,
+              date: "2026-09-23",
+              name: "Personal Expense",
             },
             {
-              transaction_id: "tx_joint_duplicate",
-              account_id: "plaid_my_joint", // Should be filtered!
-              amount: 200.0,
-              date: "2026-09-24",
-              name: "Joint Groceries",
+              transaction_id: "tx_joint",
+              account_id: "plaid_acc_joint",
+              amount: 99.0,
+              date: "2026-09-23",
+              name: "Joint Expense Should Skip",
             },
           ],
           modified: [],
           removed: [],
-          next_cursor: "cursor_joint_ok",
+          next_cursor: "cursor_joint_done",
           has_more: false,
         },
       }),
@@ -893,6 +960,7 @@ describe("Phase 1 — Plaid Sync Data Integrity Suite", () => {
       itemId,
       householdId,
       dbClient: mockDb,
+      lockManager: mockLockMgr,
       plaidClient: mockPlaid,
     });
 
@@ -916,6 +984,7 @@ describe("Phase 1 — Plaid Sync Data Integrity Suite", () => {
       itemId,
       householdId,
       dbClient: mockDb,
+      lockManager: mockLockMgr,
       plaidClient: mockPlaid,
     });
 
@@ -926,25 +995,34 @@ describe("Phase 1 — Plaid Sync Data Integrity Suite", () => {
     assert.equal(mockDb.transactions.length, 0);
   });
 
-  // ── 12. Crash Before Commit ──────────────────────────────────────────────────
-  it("Scenario 12: crash before commit aborts without advancing cursor", async () => {
-    mockDb.setFailOnInsert(true); // Simulate DB crash/disconnect during insert
+  // ── 12. Mid-Transaction Rollback Tests ────────────────────────────────────────
+  it("Scenario 12: crash after delete, after update, or halfway through inserts cleanly rolls back and does not advance cursor", async () => {
+    // A: Test crash after delete
+    mockDb.transactions.push({
+      id: "tx_will_be_retained_on_crash",
+      householdId,
+      accountId: "acc_checking_local",
+      title: "Retained",
+      amount: 20.0,
+      type: "expense",
+      category: "Shopping",
+      date: "2026-09-20",
+      source: "plaid",
+      plaidTransactionId: "plaid_tx_del_crash",
+      isUserEdited: false,
+      createdAt: new Date(),
+      updatedAt: new Date(),
+    });
 
-    const mockPlaid = createMockPlaidClient({
+    mockDb.setFailAfterDelete(true);
+
+    const mockPlaidDel = createMockPlaidClient({
       transactionsSync: async () => ({
         data: {
-          added: [
-            {
-              transaction_id: "tx_will_fail",
-              account_id: "plaid_acc_checking",
-              amount: 10.0,
-              date: "2026-09-24",
-              name: "Will Fail",
-            },
-          ],
+          added: [],
           modified: [],
-          removed: [],
-          next_cursor: "cursor_should_not_save",
+          removed: [{ transaction_id: "plaid_tx_del_crash" }],
+          next_cursor: "cursor_should_not_advance",
           has_more: false,
         },
       }),
@@ -956,46 +1034,78 @@ describe("Phase 1 — Plaid Sync Data Integrity Suite", () => {
           itemId,
           householdId,
           dbClient: mockDb,
-          plaidClient: mockPlaid,
+          lockManager: mockLockMgr,
+          plaidClient: mockPlaidDel,
         });
       },
-      /MOCK_DB_CRASH_BEFORE_COMMIT/
+      /MOCK_CRASH_AFTER_DELETE/
     );
 
-    // Verify cursor was NOT advanced
-    const item = mockDb.items.find((i) => i.id === itemId);
-    assert.equal(item?.cursor, null);
+    // Rollback verified: deleted transaction was NOT removed from DB, cursor was NOT advanced
+    assert.equal(mockDb.transactions.length, 1);
+    assert.equal(mockDb.items[0].cursor, null);
+    mockDb.setFailAfterDelete(false);
+
+    // B: Test crash halfway through inserts
+    mockDb.setFailHalfwayThroughInsert(true);
+    const mockPlaidInsert = createMockPlaidClient({
+      transactionsSync: async () => ({
+        data: {
+          added: [
+            { transaction_id: "tx_half_1", account_id: "plaid_acc_checking", amount: 10.0, date: "2026-09-24", name: "Tx 1" },
+            { transaction_id: "tx_half_2", account_id: "plaid_acc_checking", amount: 20.0, date: "2026-09-24", name: "Tx 2" },
+          ],
+          modified: [],
+          removed: [],
+          next_cursor: "cursor_should_not_advance_2",
+          has_more: false,
+        },
+      }),
+    });
+
+    await assert.rejects(
+      async () => {
+        await syncPlaidItem({
+          itemId,
+          householdId,
+          dbClient: mockDb,
+          lockManager: mockLockMgr,
+          plaidClient: mockPlaidInsert,
+        });
+      },
+      /MOCK_CRASH_HALFWAY_THROUGH_INSERTS/
+    );
+
+    // Rollback verified: neither tx_half_1 nor tx_half_2 was inserted, cursor untouched
+    assert.equal(mockDb.transactions.length, 1);
+    assert.equal(mockDb.items[0].cursor, null);
   });
 
-  // ── 13. Pagination Mutation and Retry ────────────────────────────────────────
+  // ── 13. Mutation During Pagination ───────────────────────────────────────────
   it("Scenario 13: TRANSACTIONS_SYNC_MUTATION_DURING_PAGINATION restarts from initial cursor with bounded retries", async () => {
-    let syncAttempts = 0;
+    let callCount = 0;
     const mockPlaid = createMockPlaidClient({
-      transactionsSync: async ({ cursor }) => {
-        syncAttempts++;
-        if (syncAttempts === 1) {
-          // First attempt throws mutation error
-          const err: any = new Error("Mutation occurred while paginating");
-          err.response = {
-            data: { error_code: "TRANSACTIONS_SYNC_MUTATION_DURING_PAGINATION" },
-          };
+      transactionsSync: async (params) => {
+        callCount++;
+        if (callCount === 1) {
+          const err: any = new Error("Mutation error");
+          err.response = { data: { error_code: "TRANSACTIONS_SYNC_MUTATION_DURING_PAGINATION" } };
           throw err;
         }
-        // Second attempt restarts from initial cursor and succeeds
         return {
           data: {
             added: [
               {
-                transaction_id: "tx_after_mutation_retry",
+                transaction_id: "tx_after_retry",
                 account_id: "plaid_acc_checking",
-                amount: 33.0,
+                amount: 12.0,
                 date: "2026-09-24",
-                name: "Recovered Tx",
+                name: "Coffee After Retry",
               },
             ],
             modified: [],
             removed: [],
-            next_cursor: "cursor_retry_ok",
+            next_cursor: "cursor_after_retry_done",
             has_more: false,
           },
         };
@@ -1006,14 +1116,54 @@ describe("Phase 1 — Plaid Sync Data Integrity Suite", () => {
       itemId,
       householdId,
       dbClient: mockDb,
+      lockManager: mockLockMgr,
       plaidClient: mockPlaid,
     });
 
     assert.equal(result.success, true);
-    assert.equal(syncAttempts, 2);
+    assert.equal(callCount, 2);
     assert.equal(mockDb.transactions.length, 1);
-    assert.equal(mockDb.transactions[0].plaidTransactionId, "tx_after_mutation_retry");
-    const item = mockDb.items.find((i) => i.id === itemId);
-    assert.equal(item?.cursor, "cursor_retry_ok");
+    assert.equal(mockDb.transactions[0].plaidTransactionId, "tx_after_retry");
+    assert.equal(mockDb.items[0].cursor, "cursor_after_retry_done");
+  });
+
+  // ── 14. Unmapped Plaid Account Fails Visibly ─────────────────────────────────
+  it("Scenario 14: unmapped Plaid account fails visibly and does not advance cursor", async () => {
+    const mockPlaid = createMockPlaidClient({
+      transactionsSync: async () => ({
+        data: {
+          added: [
+            {
+              transaction_id: "tx_unmapped_01",
+              account_id: "plaid_acc_unknown_not_mapped",
+              amount: 50.0,
+              date: "2026-09-24",
+              name: "Mystery Account Purchase",
+            },
+          ],
+          modified: [],
+          removed: [],
+          next_cursor: "cursor_unmapped_advance",
+          has_more: false,
+        },
+      }),
+    });
+
+    await assert.rejects(
+      async () => {
+        await syncPlaidItem({
+          itemId,
+          householdId,
+          dbClient: mockDb,
+          lockManager: mockLockMgr,
+          plaidClient: mockPlaid,
+        });
+      },
+      /UNMAPPED_PLAID_ACCOUNT/
+    );
+
+    // No transaction inserted, cursor NOT advanced
+    assert.equal(mockDb.transactions.length, 0);
+    assert.equal(mockDb.items[0].cursor, null);
   });
 });

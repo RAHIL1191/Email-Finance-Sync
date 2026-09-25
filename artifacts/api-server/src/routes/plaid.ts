@@ -257,8 +257,9 @@ router.post("/plaid/exchange-token", async (req, res) => {
 
 router.post("/plaid/sync/:itemId", async (req, res) => {
   const { itemId } = req.params;
-  const force = !!(req.body as any)?.force;
-  const backfill = !!(req.body as any)?.backfill;
+  const body = req.body as { force?: boolean; backfill?: boolean } | undefined;
+  const force = Boolean(body?.force);
+  const backfill = Boolean(body?.backfill);
 
   try {
     const result = await syncPlaidItem({
@@ -277,17 +278,26 @@ router.post("/plaid/sync/:itemId", async (req, res) => {
     res.json({
       transactions: result.transactions,
       count: result.count,
+      addedCount: result.addedCount,
+      modifiedCount: result.modifiedCount,
+      removedCount: result.removedCount,
       removedIds: result.removedIds,
       holdings: result.holdings,
       investmentTransactions: result.investmentTransactions,
       plaidAccounts: result.plaidAccounts,
+      serverPersisted: true,
     });
-  } catch (err: any) {
-    if (err?.message === "PLAID_ITEM_NOT_FOUND") {
+  } catch (err: unknown) {
+    const errMessage = err instanceof Error ? err.message : String(err);
+    if (errMessage.startsWith("UNMAPPED_PLAID_ACCOUNT")) {
+      res.status(400).json({ error: errMessage });
+      return;
+    }
+    if (errMessage === "PLAID_ITEM_NOT_FOUND") {
       res.status(404).json({ error: "Plaid item not found" });
       return;
     }
-    if (err?.message === "NOT_CONFIGURED") {
+    if (errMessage === "NOT_CONFIGURED") {
       res.status(503).json({ error: "Plaid is not configured" });
       return;
     }

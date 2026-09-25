@@ -1,14 +1,10 @@
-import {
-  Configuration,
-  PlaidApi,
-  PlaidEnvironments,
-  Products,
-  CountryCode,
-  type Transaction as PlaidTransaction,
-} from "plaid";
-import { eq, and, sql, inArray } from "drizzle-orm";
+import { eq, and, inArray, sql } from "drizzle-orm";
+import { Configuration, PlaidApi, PlaidEnvironments } from "plaid";
+import type { Logger } from "pino";
+import type pg from "pg";
 import {
   db as defaultDb,
+  pool as defaultPool,
   plaidItemsTable,
   accountsTable,
   transactionsTable,
@@ -16,19 +12,22 @@ import {
 } from "@workspace/db";
 import { logger } from "../lib/logger.js";
 
-// ── Plaid Client Factory ───────────────────────────────────────────────────────
-
 export function getPlaidClient(): PlaidApi {
   const clientId = process.env.PLAID_CLIENT_ID;
   const secret = process.env.PLAID_SECRET;
-  const env = (process.env.PLAID_ENV ?? "sandbox") as keyof typeof PlaidEnvironments;
-
   if (!clientId || !secret) {
     throw new Error("NOT_CONFIGURED");
   }
+  const env = (process.env.PLAID_ENV || "sandbox").toLowerCase();
+  const basePath =
+    env === "production"
+      ? PlaidEnvironments.production
+      : env === "development"
+        ? PlaidEnvironments.development
+        : PlaidEnvironments.sandbox;
 
-  const config = new Configuration({
-    basePath: PlaidEnvironments[env] ?? PlaidEnvironments.sandbox,
+  const configuration = new Configuration({
+    basePath,
     baseOptions: {
       headers: {
         "PLAID-CLIENT-ID": clientId,
@@ -36,82 +35,163 @@ export function getPlaidClient(): PlaidApi {
       },
     },
   });
-  return new PlaidApi(config);
+  return new PlaidApi(configuration);
 }
 
-// ── Helpers ────────────────────────────────────────────────────────────────────
+type PgPool = typeof defaultPool;
 
-export function mapAccountType(
-  type: string,
-  subtype: string | null
-): "checking" | "savings" | "credit" | "investment" {
-  if (type === "credit" || type === "loan") return "credit";
-  if (type === "investment" || type === "brokerage") return "investment";
-  if (subtype === "savings" || subtype === "money market" || subtype === "cd") return "savings";
-  return "checking";
+// ── Strict Interfaces ─────────────────────────────────────────────────────────
+
+export interface LockHandle {
+  release(): Promise<void>;
 }
 
-const LOWERCASE_PREP = new Set(["from", "to", "and", "or", "of", "in", "at", "by", "for", "the", "a", "an"]);
-export function toTitleCase(str: string): string {
-  return str
-    .trim()
-    .replace(/\b\w+/g, (w, offset) => {
-      const lower = w.toLowerCase();
-      if (offset > 0 && LOWERCASE_PREP.has(lower)) return lower;
-      return w.charAt(0).toUpperCase() + w.slice(1).toLowerCase();
-    });
+export interface LockManager {
+  tryAcquire(itemId: string): Promise<LockHandle | null>;
 }
 
-export function cleanPlaidName(merchantName: string | null | undefined, rawName: string | null | undefined): string {
-  const raw = (rawName ?? "").trim();
-  const merchant = (merchantName ?? "").trim();
+export class PgAdvisoryLockManager implements LockManager {
+  constructor(private pool: PgPool) {}
 
-  // Strip BMO / Canadian-bank bracket prefix codes e.g. [CW], [TF], [IN], [SC]
-  let s = raw.replace(/^\[[A-Z]{2,3}\]\s*/i, "");
-
-  // Empty after stripping → interest charge
-  if (!s) return "Interest";
-
-  // Interac e-Transfer received
-  const interacIn = s.match(/^VIR\s+INTERAC\s+REC[UÇ]?\s+([A-Z][A-Z\s]+?)(?:\s+\d{10,})?$/i);
-  if (interacIn) return `Interac from ${toTitleCase(interacIn[1])}`;
-
-  // Interac e-Transfer sent
-  const interacOut = s.match(/^VIR\s+INTERAC\s+ENV[OO]Y[EÉ]?\s+([A-Z][A-Z\s]+?)(?:\s+\d{10,})?$/i);
-  if (interacOut) return `Interac to ${toTitleCase(interacOut[1])}`;
-
-  // Wire / internal transfer (TF XXXX#ref)
-  if (/^TF[\s#]/i.test(s) || /^VIREMENT/i.test(s)) {
-    const clean = s
-      .replace(/^TF\s*/i, "")
-      .replace(/\s*#[\d\-]+/g, "")
-      .replace(/\b\d+\b/g, "")
-      .replace(/\s+/g, " ")
-      .trim();
-    return clean.length >= 3 ? toTitleCase(clean) : "Wire Transfer";
+  async tryAcquire(itemId: string): Promise<LockHandle | null> {
+    const client = await this.pool.connect();
+    try {
+      const lockKey = `plaid_sync_${itemId}`;
+      const res = await client.query<{ locked: boolean }>(
+        "SELECT pg_try_advisory_lock(hashtext($1)) AS locked",
+        [lockKey]
+      );
+      const isLocked = Boolean(res.rows[0]?.locked);
+      if (!isLocked) {
+        client.release();
+        return null;
+      }
+      let released = false;
+      return {
+        release: async () => {
+          if (released) return;
+          released = true;
+          try {
+            await client.query("SELECT pg_advisory_unlock(hashtext($1))", [lockKey]);
+          } finally {
+            client.release();
+          }
+        },
+      };
+    } catch (err) {
+      client.release();
+      throw err;
+    }
   }
+}
 
-  // Mortgage
-  if (/MTG|HYP/i.test(s)) return "Mortgage Payment";
+export interface PlaidAccountOutput {
+  plaidAccountId: string;
+  name: string;
+  type: string;
+  balance: number;
+  lastFour: string;
+}
 
-  // Strip trailing transaction IDs and reference codes
-  s = s.replace(/\s+\d{10,}$/, "").replace(/\s+#[\d\-]+$/, "").replace(/\s+\d{4}$/, "").trim();
+export interface HoldingOutput {
+  plaidAccountId: string;
+  ticker: string | null;
+  name: string;
+  securityType: string;
+  quantity: number;
+  value: number;
+  costBasis: number | null;
+  currency: string;
+  asOf: string | null;
+}
 
-  // French service charge refund
-  if (/remboursement des frais/i.test(s)) return "Service Fee Refund";
-  if (/programme performance/i.test(s)) return "Programmes & Fees";
+export interface InvestmentTransactionOutput {
+  plaidTxId: string;
+  plaidAccountId: string;
+  date: string;
+  name: string;
+  ticker: string | null;
+  type: string;
+  subtype: string | null;
+  quantity: number | null;
+  amount: number;
+  fees: number | null;
+  currency: string;
+}
 
-  if (s.length <= 10 && /^[A-Z]+$/.test(s) && merchant && merchant.length > s.length) {
-    s = merchant;
-  }
+export interface PlaidOutputTransaction {
+  plaidTransactionId: string;
+  pending: boolean;
+  pendingTransactionId: string | null;
+  title: string;
+  merchant: string;
+  amount: number;
+  type: "income" | "expense";
+  category: string;
+  date: string;
+  accountId: string;
+  plaidAccountId: string;
+  bank: string;
+}
 
-  let candidate = (merchant && merchant.length >= 3) ? merchant : (s.length >= 3 ? s : (merchant || raw));
+export interface SyncDatabase {
+  transaction: <T>(cb: (tx: any) => Promise<T>) => Promise<T>;
+  select: (...args: any[]) => any;
+  insert: (...args: any[]) => any;
+  update: (...args: any[]) => any;
+  delete: (...args: any[]) => any;
+}
 
-  // Strip payment processor prefixes
-  candidate = candidate.replace(/^(SQ\s*\*|SQR\*|TST\*|SP\s*\*|PAYPAL\s*\*|PP\*|PYPL\s*\*|APL\*|AMZN\*|AMZ\*|GOOGLE\s*\*|VENMO\s*\*|STRIPE\s*\*|KLARNA\s*\*)\s*/i, "");
+export type SyncDb = typeof defaultDb | SyncDatabase;
 
-  // Strip phone numbers & URLs
-  candidate = candidate.replace(/\b1?[-.\s]?(8\d{2}|\d{3})[-.\s]\d{3}[-.\s]\d{4}\b/g, " ");
+export interface SyncPlaidItemOptions {
+  itemId: string;
+  householdId: string;
+  force?: boolean;
+  backfill?: boolean;
+  plaidClient?: PlaidApi;
+  dbClient?: SyncDb;
+  poolClient?: pg.Pool;
+  lockManager?: LockManager;
+  logger?: Logger;
+  chunkSize?: number;
+}
+
+export interface SyncPlaidItemResult {
+  success: boolean;
+  addedCount: number;
+  modifiedCount: number;
+  removedCount: number;
+  transactions: PlaidOutputTransaction[];
+  count: number;
+  removedIds: string[];
+  holdings: HoldingOutput[];
+  investmentTransactions: InvestmentTransactionOutput[];
+  plaidAccounts: PlaidAccountOutput[];
+  cursor?: string | null;
+  error?: string;
+  status?: string;
+}
+
+// ── Pure Utility Functions ───────────────────────────────────────────────────
+
+function toTitleCase(str: string): string {
+  return str.replace(/\w\S*/g, (txt) => txt.charAt(0).toUpperCase() + txt.slice(1).toLowerCase());
+}
+
+export function cleanPlaidName(merchant: string | null | undefined, raw: string): string {
+  let candidate = (merchant || raw || "").trim();
+
+  // Strip prefixes
+  candidate = candidate.replace(
+    /^(SQ\s*\*|SQU\s*\*|TST\s*\*|PAYPAL\s*\*|PP\s*\*|AMZN\s+MKTP\s+US\*|SP\s*\*|FSP\s*\*|WPY\s*\*)/i,
+    ""
+  );
+
+  // Strip pending / authorization prefixes
+  candidate = candidate.replace(/^(PENDING\s*-\s*|POS\s+PURCHASE\s+|DEBIT\s+PURCHASE\s+-?\s*)/i, "");
+
+  // Strip URLs and domains
   candidate = candidate.replace(/\b([a-zA-Z0-9-]+\.)+(com|ca|org|net|io|co)(\/[^\s]*)?/gi, " ");
 
   // Strip store tags, codes and symbols
@@ -162,29 +242,42 @@ export function mapPlaidCategory(primary?: string | null, detailed?: string | nu
     case "TRANSFER_OUT":
       return "Transfer";
     case "LOAN_PAYMENTS":
-      return "Loan & Debts";
+      return "Debt";
     case "BANK_FEES":
-      return "Fees & Charges";
-    case "GOVERNMENT_AND_NON_PROFIT":
-    case "GENERAL_SERVICES":
-      return "Others";
+      return "Fees";
     default:
-      return "Others";
+      return "General";
   }
 }
 
-export function buildSecMap(securities: any[]): Map<string, any> {
-  const m = new Map<string, any>();
-  for (const s of securities || []) m.set(s.security_id, s);
+export function mapAccountType(type: string, subtype: string | null): string {
+  if (type === "investment") return "investment";
+  if (type === "credit") return "credit";
+  if (subtype === "checking") return "checking";
+  if (subtype === "savings") return "savings";
+  if (subtype === "credit card") return "credit";
+  if (subtype === "cd" || subtype === "money market") return "savings";
+  if (subtype === "mortgage" || subtype === "student" || subtype === "auto") return "loan";
+  return "other";
+}
+
+export function buildSecMap(securities: unknown[] = []): Map<string, Record<string, unknown>> {
+  const m = new Map<string, Record<string, unknown>>();
+  for (const s of securities) {
+    const sec = s as Record<string, unknown>;
+    if (sec && typeof sec.security_id === "string") {
+      m.set(sec.security_id, sec);
+    }
+  }
   return m;
 }
 
-export function mapHolding(h: any, secMap: Map<string, any>) {
-  const sec = secMap.get(h.security_id);
-  const qty = (h.quantity ?? 0) as number;
-  const instValue = h.institution_value as number | null;
-  const instPrice = h.institution_price as number | null;
-  const closePrice = sec?.close_price as number | null;
+export function mapHolding(h: Record<string, unknown>, secMap: Map<string, Record<string, unknown>>): HoldingOutput {
+  const sec = typeof h.security_id === "string" ? secMap.get(h.security_id) : undefined;
+  const qty = typeof h.quantity === "number" ? h.quantity : 0;
+  const instPrice = typeof h.institution_price === "number" ? h.institution_price : null;
+  const instValue = typeof h.institution_value === "number" ? h.institution_value : null;
+  const closePrice = typeof sec?.close_price === "number" ? (sec.close_price as number) : null;
   let value = 0;
   if (instValue != null && instValue > 0) {
     value = instValue;
@@ -194,91 +287,68 @@ export function mapHolding(h: any, secMap: Map<string, any>) {
     value = qty * closePrice;
   }
   return {
-    plaidAccountId: h.account_id as string,
+    plaidAccountId: String(h.account_id),
     ticker: (sec?.ticker_symbol as string | null) ?? null,
-    name: (sec?.name ?? "Unknown") as string,
-    securityType: (sec?.type ?? "other") as string,
+    name: (sec?.name as string) ?? "Unknown",
+    securityType: (sec?.type as string) ?? "other",
     quantity: qty,
     value,
-    costBasis: (h.cost_basis ?? null) as number | null,
-    currency: (h.iso_currency_code ?? h.unofficial_currency_code ?? "CAD") as string,
-    asOf: (h.institution_price_as_of ?? sec?.close_price_as_of ?? null) as string | null,
+    costBasis: typeof h.cost_basis === "number" ? h.cost_basis : null,
+    currency: String(h.iso_currency_code ?? h.unofficial_currency_code ?? "CAD"),
+    asOf: (h.institution_price_as_of as string | null) ?? (sec?.close_price_as_of as string | null) ?? null,
   };
 }
 
-export function mapInvestmentTransaction(t: any, secMap: Map<string, any>) {
-  const sec = secMap.get(t.security_id);
+export function mapInvestmentTransaction(
+  t: Record<string, unknown>,
+  secMap: Map<string, Record<string, unknown>>
+): InvestmentTransactionOutput {
+  const sec = typeof t.security_id === "string" ? secMap.get(t.security_id) : undefined;
   return {
-    plaidTxId: t.investment_transaction_id as string,
-    plaidAccountId: t.account_id as string,
-    date: t.date as string,
-    name: (sec?.name ?? t.name ?? "Unknown") as string,
-    ticker: (sec?.ticker_symbol ?? null) as string | null,
-    type: (t.type ?? "other") as string,
-    subtype: (t.subtype ?? null) as string | null,
-    quantity: (t.quantity ?? null) as number | null,
-    amount: Math.abs(t.amount ?? 0) as number,
-    fees: (t.fees ?? null) as number | null,
-    currency: (t.iso_currency_code ?? t.unofficial_currency_code ?? "CAD") as string,
+    plaidTxId: String(t.investment_transaction_id),
+    plaidAccountId: String(t.account_id),
+    date: String(t.date),
+    name: (sec?.name as string) ?? (t.name as string) ?? "Unknown",
+    ticker: (sec?.ticker_symbol as string | null) ?? null,
+    type: (t.type as string) ?? "other",
+    subtype: (t.subtype as string | null) ?? null,
+    quantity: typeof t.quantity === "number" ? t.quantity : null,
+    amount: Math.abs(typeof t.amount === "number" ? t.amount : 0),
+    fees: typeof t.fees === "number" ? t.fees : null,
+    currency: String(t.iso_currency_code ?? t.unofficial_currency_code ?? "CAD"),
   };
 }
 
-export function mapPlaidTransactionToOutput(t: any, bankName: string) {
+export function mapPlaidTransactionToOutput(
+  t: Record<string, unknown>,
+  bankName: string
+): PlaidOutputTransaction {
   const amount = typeof t.amount === "number" ? t.amount : 0;
-  const primary: string =
-    t.personal_finance_category?.primary ??
-    (Array.isArray(t.category) ? t.category[0] : null) ??
-    "OTHER";
-  const detailed: string | undefined = t.personal_finance_category?.detailed;
-  const merchant: string = t.merchant_name ?? "";
-  const title = cleanPlaidName(merchant, t.name);
+  const pfc = t.personal_finance_category as { primary?: string; detailed?: string } | undefined;
+  const catArr = Array.isArray(t.category) ? t.category : [];
+  const primary: string = pfc?.primary ?? (catArr.length > 0 ? String(catArr[0]) : "OTHER");
+  const detailed: string | undefined = pfc?.detailed;
+  const merchant: string = typeof t.merchant_name === "string" ? t.merchant_name : "";
+  const rawName: string = typeof t.name === "string" ? t.name : "";
+  const title = cleanPlaidName(merchant, rawName);
 
   return {
-    plaidTransactionId: t.transaction_id as string,
-    pending: !!t.pending,
-    pendingTransactionId: (t.pending_transaction_id as string | null) ?? null,
+    plaidTransactionId: String(t.transaction_id),
+    pending: Boolean(t.pending),
+    pendingTransactionId: typeof t.pending_transaction_id === "string" ? t.pending_transaction_id : null,
     title,
     merchant: merchant || title,
     amount: Math.abs(amount),
-    type: amount > 0 ? ("expense" as const) : ("income" as const),
+    type: amount > 0 ? "expense" : "income",
     category: mapPlaidCategory(primary, detailed),
-    date: (t.authorized_date ?? t.date ?? new Date().toISOString().slice(0, 10)) as string,
-    accountId: t.account_id as string,
-    plaidAccountId: t.account_id as string,
+    date: String(t.authorized_date ?? t.date ?? new Date().toISOString().slice(0, 10)),
+    accountId: String(t.account_id),
+    plaidAccountId: String(t.account_id),
     bank: bankName,
   };
 }
 
-// ── Types ──────────────────────────────────────────────────────────────────────
-
-export interface SyncPlaidItemOptions {
-  itemId: string;
-  householdId: string;
-  force?: boolean;
-  backfill?: boolean;
-  plaidClient?: PlaidApi;
-  dbClient?: any;
-  logger?: any;
-  chunkSize?: number;
-}
-
-export interface SyncPlaidItemResult {
-  success: boolean;
-  addedCount: number;
-  modifiedCount: number;
-  removedCount: number;
-  transactions: any[];
-  count: number;
-  removedIds: string[];
-  holdings: any[];
-  investmentTransactions: any[];
-  plaidAccounts: any[];
-  cursor?: string | null;
-  error?: string;
-  status?: string;
-}
-
-// ── Plaid Sync Engine ──────────────────────────────────────────────────────────
+// ── Main Plaid Sync Service ───────────────────────────────────────────────────
 
 export async function syncPlaidItem(options: SyncPlaidItemOptions): Promise<SyncPlaidItemResult> {
   const {
@@ -290,43 +360,43 @@ export async function syncPlaidItem(options: SyncPlaidItemOptions): Promise<Sync
   } = options;
 
   const db = options.dbClient ?? defaultDb;
+  const pool = options.poolClient ?? defaultPool;
   const log = options.logger ?? logger;
   const client = options.plaidClient ?? getPlaidClient();
 
-  // 1. Cross-process / cross-instance lock using PostgreSQL advisory lock
-  let lockAcquired = false;
-  if (db && typeof db.execute === "function") {
-    try {
-      const lockRes = await db.execute(
-        sql`SELECT pg_try_advisory_lock(hashtext('plaid_sync_' || ${itemId})) AS locked`
-      );
-      const rows = lockRes?.rows || lockRes;
-      lockAcquired = !!(rows?.[0]?.locked ?? true);
-      if (!lockAcquired) {
-        log.warn({ itemId, householdId }, "Plaid sync already in progress for this item (advisory lock busy)");
-        return {
-          success: false,
-          status: "locked",
-          error: "SYNC_ALREADY_IN_PROGRESS",
-          addedCount: 0,
-          modifiedCount: 0,
-          removedCount: 0,
-          transactions: [],
-          count: 0,
-          removedIds: [],
-          holdings: [],
-          investmentTransactions: [],
-          plaidAccounts: [],
-        };
-      }
-    } catch (lockErr) {
-      log.warn({ lockErr }, "Postgres advisory lock check skipped (non-pg or mock db)");
-    }
+  // 1. Dedicated session-level advisory lock
+  // Lock MUST be acquired on a dedicated connection and held across the entire sync.
+  const lockMgr: LockManager = options.lockManager ?? new PgAdvisoryLockManager(pool);
+  let lockHandle: LockHandle | null = null;
+
+  try {
+    lockHandle = await lockMgr.tryAcquire(itemId);
+  } catch (lockAcquireErr) {
+    log.error({ err: lockAcquireErr, itemId, householdId }, "Advisory lock acquisition failed; failing closed");
+    throw new Error(`LOCK_ACQUISITION_FAILED: ${lockAcquireErr instanceof Error ? lockAcquireErr.message : String(lockAcquireErr)}`);
+  }
+
+  if (!lockHandle) {
+    log.warn({ itemId, householdId }, "Plaid sync already in progress for this item (advisory lock busy)");
+    return {
+      success: false,
+      status: "locked",
+      error: "SYNC_ALREADY_IN_PROGRESS",
+      addedCount: 0,
+      modifiedCount: 0,
+      removedCount: 0,
+      transactions: [],
+      count: 0,
+      removedIds: [],
+      holdings: [],
+      investmentTransactions: [],
+      plaidAccounts: [],
+    };
   }
 
   try {
-    // 2. Fetch Plaid item record
-    const [record] = await db
+    // 2. Fetch Plaid item record (scoped to household)
+    const [record]: (typeof plaidItemsTable.$inferSelect | undefined)[] = await db
       .select()
       .from(plaidItemsTable)
       .where(and(eq(plaidItemsTable.id, itemId), eq(plaidItemsTable.householdId, householdId)));
@@ -335,322 +405,361 @@ export async function syncPlaidItem(options: SyncPlaidItemOptions): Promise<Sync
       throw new Error("PLAID_ITEM_NOT_FOUND");
     }
 
-    // 3. Fetch accounts from Plaid
-    const accountsRes = await client.accountsGet({ access_token: record.accessToken });
-    const plaidAccounts = accountsRes.data.accounts || [];
-
-    // 4. Fetch accounts in household from DB to map and check joint/secondary accounts
-    const dbAccts = await db
+    // 3. Fetch household accounts
+    const dbAccts: (typeof accountsTable.$inferSelect)[] = await db
       .select()
       .from(accountsTable)
       .where(eq(accountsTable.householdId, householdId));
 
-    // Identify investment account IDs (filter out standard transactions for them)
-    const investmentAccountIds = new Set(
-      plaidAccounts
-        .filter((a) => mapAccountType(a.type as string, a.subtype as string | null) === "investment")
-        .map((a) => a.account_id)
-    );
+    // 4. Authoritative Plaid account balances via /accounts/get
+    const acctRes = await client.accountsGet({ access_token: record.accessToken });
+    const plaidAccounts = acctRes.data.accounts || [];
 
-    // Identify secondary shared/joint account IDs (only primary item imports transactions)
-    const secondarySharedAccountIds = new Set<string>();
-    for (const acc of dbAccts) {
-      if (acc.sharedPlaidAccounts && Array.isArray(acc.sharedPlaidAccounts)) {
-        for (const spa of acc.sharedPlaidAccounts) {
-          if (spa.plaidItemId === itemId && spa.isPrimary === false) {
-            secondarySharedAccountIds.add(spa.plaidAccountId);
-          }
-        }
-      }
-    }
-
-    // 5. Update / Self-heal accounts in DB
+    // Build mapping: plaidAccountId -> local account id
     const plaidAccToLocalIdMap: Record<string, string> = {};
     for (const pa of plaidAccounts) {
-      const match = dbAccts.find(
-        (a: any) =>
-          a.plaidAccountId === pa.account_id ||
-          (a.lastFour === (pa.mask ?? "") && !a.plaidItemId) ||
-          (a.sharedPlaidAccounts && a.sharedPlaidAccounts.some((s: any) => s.plaidAccountId === pa.account_id))
-      );
-      const balance = pa.balances.current ?? pa.balances.available ?? 0;
+      const match = dbAccts.find((a) => {
+        if (a.plaidItemId === itemId && a.plaidAccountId === pa.account_id) return true;
+        if (a.plaidItemId === itemId && a.lastFour && pa.mask && a.lastFour === pa.mask) return true;
+        if (a.sharedPlaidAccounts && Array.isArray(a.sharedPlaidAccounts)) {
+          const sharedList = a.sharedPlaidAccounts as Array<{ plaidItemId: string; plaidAccountId?: string }>;
+          return sharedList.some((s) => s.plaidItemId === itemId && s.plaidAccountId === pa.account_id);
+        }
+        return false;
+      });
       if (match) {
         plaidAccToLocalIdMap[pa.account_id] = match.id;
-        const updates: any = { balance, updatedAt: new Date() };
-        if (!match.isJoint && (!match.plaidItemId || !match.plaidAccountId)) {
-          updates.plaidItemId = itemId;
-          updates.plaidAccountId = pa.account_id;
-        }
-        await db.update(accountsTable).set(updates).where(eq(accountsTable.id, match.id));
-      } else {
-        const type = mapAccountType(pa.type as string, pa.subtype as string | null);
-        const newAccId = `acc_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 7)}`;
-        plaidAccToLocalIdMap[pa.account_id] = newAccId;
-        await db.insert(accountsTable).values({
-          id: newAccId,
-          householdId,
-          deviceId: "backend",
-          name: pa.name ?? pa.official_name ?? "Account",
-          bank: record.bankName,
-          type,
-          color: record.bankColor || "#6366f1",
-          balance,
-          lastFour: pa.mask ?? null,
-          plaidAccountId: pa.account_id,
-          plaidItemId: itemId,
-          isJoint: false,
-          createdAt: new Date(),
-          updatedAt: new Date(),
-        });
       }
     }
 
-    // 6. Pagination loop with TRANSACTIONS_SYNC_MUTATION_DURING_PAGINATION handling
-    const initialCursor = force ? undefined : (record.cursor ?? undefined);
-    let nextCursor = initialCursor;
-    let rawAdded: PlaidTransaction[] = [];
-    let rawModified: PlaidTransaction[] = [];
-    let rawRemoved: { transaction_id: string }[] = [];
+    // Identify secondary joint accounts to skip importing duplicate transactions
+    const secondaryPlaidAccountIds = new Set<string>();
+    for (const [paId, localAccId] of Object.entries(plaidAccToLocalIdMap)) {
+      const acc = dbAccts.find((a) => a.id === localAccId);
+      if (acc?.isJoint && acc.sharedPlaidAccounts && Array.isArray(acc.sharedPlaidAccounts)) {
+        const sharedList = acc.sharedPlaidAccounts as Array<{ plaidItemId: string; isPrimary?: boolean }>;
+        const entry = sharedList.find((s) => s.plaidItemId === itemId);
+        if (entry && entry.isPrimary === false) {
+          secondaryPlaidAccountIds.add(paId);
+        }
+      }
+    }
+
+    // 5. Update account balances in DB
+    for (const pa of plaidAccounts) {
+      const localId = plaidAccToLocalIdMap[pa.account_id];
+      if (localId) {
+        const rawBalance = pa.balances.current ?? pa.balances.available ?? 0;
+        const acctObj = dbAccts.find((a) => a.id === localId);
+        const signedBalance = acctObj?.type === "credit" ? -Math.abs(rawBalance) : rawBalance;
+        await db
+          .update(accountsTable)
+          .set({
+            balance: signedBalance,
+            plaidAccountId: pa.account_id,
+            plaidItemId: itemId,
+            updatedAt: new Date(),
+          })
+          .where(and(eq(accountsTable.id, localId), eq(accountsTable.householdId, householdId)));
+      }
+    }
+
+    // 6. Pagination loop with bounded retries on TRANSACTIONS_SYNC_MUTATION_DURING_PAGINATION
+    const initialCursor = force ? "" : (record.cursor || "");
+    let currentCursor = initialCursor;
+    let nextCursor = currentCursor;
+    let hasMore = true;
+
+    const allAdded: Record<string, unknown>[] = [];
+    const allModified: Record<string, unknown>[] = [];
+    const allRemoved: Array<{ transaction_id: string }> = [];
 
     const MAX_MUTATION_RETRIES = 3;
-    let mutationAttempts = 0;
-    let paginationSuccess = false;
+    let mutationAttempt = 0;
 
-    while (mutationAttempts < MAX_MUTATION_RETRIES && !paginationSuccess) {
+    while (hasMore) {
       try {
-        let cursor = initialCursor;
-        let hasMore = true;
-        const pageAdded: PlaidTransaction[] = [];
-        const pageModified: PlaidTransaction[] = [];
-        const pageRemoved: { transaction_id: string }[] = [];
-
-        while (hasMore) {
-          const syncRes = await client.transactionsSync({
-            access_token: record.accessToken,
-            cursor,
-            options: {
-              include_personal_finance_category: true,
-              ...(cursor ? {} : { days_requested: 730 }),
-            },
-          });
-
-          pageAdded.push(...(syncRes.data.added || []));
-          pageModified.push(...(syncRes.data.modified || []));
-          pageRemoved.push(...(syncRes.data.removed || []));
-
-          cursor = syncRes.data.next_cursor;
-          hasMore = syncRes.data.has_more;
+        const syncParams: { access_token: string; cursor?: string; count: number } = {
+          access_token: record.accessToken,
+          count: 500,
+        };
+        if (currentCursor) {
+          syncParams.cursor = currentCursor;
         }
 
-        // Entire pagination loop completed cleanly
-        rawAdded = pageAdded;
-        rawModified = pageModified;
-        rawRemoved = pageRemoved;
-        nextCursor = cursor;
-        paginationSuccess = true;
-      } catch (syncErr: any) {
-        const errCode = syncErr?.response?.data?.error_code || syncErr?.error_code;
-        if (errCode === "TRANSACTIONS_SYNC_MUTATION_DURING_PAGINATION") {
-          mutationAttempts++;
+        const syncRes = await client.transactionsSync(syncParams);
+        const data = syncRes.data;
+
+        if (Array.isArray(data.added)) {
+          allAdded.push(...(data.added as unknown as Record<string, unknown>[]));
+        }
+        if (Array.isArray(data.modified)) {
+          allModified.push(...(data.modified as unknown as Record<string, unknown>[]));
+        }
+        if (Array.isArray(data.removed)) {
+          allRemoved.push(...(data.removed as Array<{ transaction_id: string }>));
+        }
+
+        hasMore = data.has_more;
+        currentCursor = data.next_cursor;
+        nextCursor = data.next_cursor;
+      } catch (syncErr: unknown) {
+        const plaidErrorCode = (syncErr as { response?: { data?: { error_code?: string } } })?.response?.data?.error_code;
+        if (plaidErrorCode === "TRANSACTIONS_SYNC_MUTATION_DURING_PAGINATION") {
+          mutationAttempt++;
+          if (mutationAttempt > MAX_MUTATION_RETRIES) {
+            log.error({ itemId, mutationAttempt }, "Exceeded max retries for TRANSACTIONS_SYNC_MUTATION_DURING_PAGINATION");
+            throw syncErr;
+          }
           log.warn(
-            { itemId, attempt: mutationAttempts, max: MAX_MUTATION_RETRIES },
+            { itemId, attempt: mutationAttempt, max: MAX_MUTATION_RETRIES },
             "TRANSACTIONS_SYNC_MUTATION_DURING_PAGINATION encountered. Restarting pagination from initial cursor."
           );
-          if (mutationAttempts >= MAX_MUTATION_RETRIES) {
-            throw new Error(`MUTATION_DURING_PAGINATION_LIMIT_EXCEEDED: ${syncErr.message}`);
-          }
+          currentCursor = initialCursor;
+          allAdded.length = 0;
+          allModified.length = 0;
+          allRemoved.length = 0;
+          hasMore = true;
           continue;
         }
         throw syncErr;
       }
     }
 
-    // 7. Optional / Controlled transactionsGet fallback for institutions with async link delay
-    // ONLY executed if backfill is explicitly requested OR on initial link when sync returned 0 transactions
-    const removedIdSet = new Set(rawRemoved.map((r) => r.transaction_id));
-    if (backfill || (rawAdded.length === 0 && rawModified.length === 0 && !initialCursor)) {
+    // 7. Optional backfill using /transactions/get if requested or initial sync yielded 0
+    if (backfill || (initialCursor === "" && allAdded.length === 0)) {
       try {
-        const daysBack = backfill ? 730 : 90;
-        const startDate = new Date(Date.now() - daysBack * 86400000).toISOString().slice(0, 10);
+        const startDate = new Date(Date.now() - 730 * 86400000).toISOString().slice(0, 10);
         const endDate = new Date().toISOString().slice(0, 10);
-        const txMap = new Map<string, any>();
-        rawAdded.forEach((t) => txMap.set(t.transaction_id, t));
-
         let offset = 0;
-        const pageSize = 500;
+        const count = 500;
         let total = Infinity;
+
         while (offset < total) {
-          const txRes = await client.transactionsGet({
+          const backfillRes = await client.transactionsGet({
             access_token: record.accessToken,
             start_date: startDate,
             end_date: endDate,
-            options: { count: pageSize, offset },
+            options: { count, offset },
           });
-          const page = txRes.data.transactions ?? [];
-          total = txRes.data.total_transactions ?? page.length;
-          for (const t of page) {
-            // NEVER resurrect a transaction that was marked as removed
-            if (!removedIdSet.has(t.transaction_id)) {
-              txMap.set(t.transaction_id, t);
+          const bData = backfillRes.data;
+          total = bData.total_transactions;
+          const txs = bData.transactions || [];
+
+          const existingPlaidIds = new Set(allAdded.map((t) => String(t.transaction_id)));
+          for (const tx of txs) {
+            if (!existingPlaidIds.has(tx.transaction_id)) {
+              allAdded.push(tx as unknown as Record<string, unknown>);
+              existingPlaidIds.add(tx.transaction_id);
             }
           }
-          offset += page.length;
-          if (!backfill || page.length === 0) break;
+
+          offset += txs.length;
+          if (txs.length === 0) break;
         }
-        rawAdded = Array.from(txMap.values());
-      } catch (getErr: any) {
-        log.warn({ getErr: getErr?.message }, "transactionsGet backfill skipped/failed");
+      } catch (bfErr: unknown) {
+        log.warn({ bfErr: (bfErr as Error)?.message }, "Optional /transactions/get backfill failed/skipped");
       }
     }
 
-    // 8. Filter out investment accounts and secondary shared accounts
-    const validAdded = rawAdded.filter(
-      (t) => !investmentAccountIds.has(t.account_id) && !secondarySharedAccountIds.has(t.account_id)
-    );
-    const validModified = rawModified.filter(
-      (t) => !investmentAccountIds.has(t.account_id) && !secondarySharedAccountIds.has(t.account_id)
-    );
-    const validRemoved = rawRemoved;
+    // 8. Filter out transactions belonging to secondary joint accounts
+    const validAdded = allAdded.filter((t) => !secondaryPlaidAccountIds.has(String(t.account_id)));
+    const validModified = allModified.filter((t) => !secondaryPlaidAccountIds.has(String(t.account_id)));
+    const validRemoved = allRemoved;
 
-    // 9. Load user category rules for household
-    const userRules = await db
+    // 9. Load category rules for auto-categorization
+    const rules: (typeof categoryRulesTable.$inferSelect)[] = await db
       .select()
       .from(categoryRulesTable)
       .where(eq(categoryRulesTable.householdId, householdId));
 
-    const applyRuleCategory = (title: string, defaultCategory: string): string => {
-      const needle = title.toLowerCase().replace(/[^a-z0-9\s]/g, "").replace(/\s+/g, " ").trim();
-      if (!needle || userRules.length === 0) return defaultCategory;
-      const exact = userRules.find((r: any) => r.merchantPattern === needle);
-      if (exact) return exact.category;
-      const partial = userRules
-        .filter((r: any) => r.merchantPattern && (needle.includes(r.merchantPattern) || r.merchantPattern.includes(needle)))
-        .sort((a: any, b: any) => (b.hitCount ?? 0) - (a.hitCount ?? 0))[0];
-      return partial?.category ?? defaultCategory;
-    };
+    function applyRuleCategory(cleanTitle: string, defaultCategory: string): string {
+      const lower = cleanTitle.toLowerCase();
+      for (const rule of rules) {
+        if (rule.merchantExact && lower === rule.merchantExact.toLowerCase()) {
+          return rule.category;
+        }
+        if (rule.merchantPattern && lower.includes(rule.merchantPattern.toLowerCase())) {
+          return rule.category;
+        }
+      }
+      return defaultCategory;
+    }
 
-    // 10. Durable Ingestion Execution (Apply Removed, Modified, Added)
-    // Gather all existing transactions for this household to match and protect user edits
-    const existingTxs = await db
+    // 10. Load existing household transactions to resolve pending->posted, splits, edits
+    const existingHouseholdTxs: (typeof transactionsTable.$inferSelect)[] = await db
       .select()
       .from(transactionsTable)
       .where(eq(transactionsTable.householdId, householdId));
 
-    const existingByPlaidTxId = new Map<string, any>();
-    const existingByPendingTxId = new Map<string, any>();
+    const existingByPlaidTxId = new Map<string, typeof transactionsTable.$inferSelect>();
     const existingSplitsByPlaidId = new Set<string>();
 
-    for (const et of existingTxs) {
-      if (et.plaidTransactionId) {
-        existingByPlaidTxId.set(et.plaidTransactionId, et);
+    for (const tx of existingHouseholdTxs) {
+      if (tx.plaidTransactionId) {
+        existingByPlaidTxId.set(tx.plaidTransactionId, tx);
       }
-      if (et.pendingTransactionId) {
-        existingByPendingTxId.set(et.pendingTransactionId, et);
-      }
-      if (et.splitGroupId && et.plaidTransactionId) {
-        existingSplitsByPlaidId.add(et.plaidTransactionId);
-      }
-      if (et.id && et.id.includes("_split_") && et.plaidTransactionId) {
-        existingSplitsByPlaidId.add(et.plaidTransactionId);
+      if (tx.splitGroupId && tx.plaidTransactionId) {
+        existingSplitsByPlaidId.add(tx.plaidTransactionId);
       }
     }
 
+    // ── Prepare Operations ──────────────────────────────────────────────────
+
+    // A. Removals
     const removedIdsToDelete: string[] = [];
+    const preservedRemovalsToApply: Array<{
+      id: string;
+      values: Partial<typeof transactionsTable.$inferInsert>;
+    }> = [];
     const actuallyRemovedPlaidIds: string[] = [];
 
-    // A. Process Removals
     for (const r of validRemoved) {
+      const existing = existingByPlaidTxId.get(r.transaction_id);
+      if (!existing) continue;
+
       actuallyRemovedPlaidIds.push(r.transaction_id);
-      const existing = existingByPlaidTxId.get(r.transaction_id) || existingByPendingTxId.get(r.transaction_id);
-      if (existing) {
-        // Protect user-edited, user-annotated, or user-split transactions from hard deletion
-        if (existing.isUserEdited || existing.splitGroupId || (existing.note && existing.note.trim().length > 0)) {
-          log.info({ id: existing.id, plaidId: r.transaction_id }, "Preserving user-edited/annotated transaction on Plaid removal");
-        } else {
-          removedIdsToDelete.push(existing.id);
-        }
+
+      if (existing.isUserEdited || (existing.note && existing.note.trim().length > 0)) {
+        // User customized or annotated this transaction:
+        // Preserve user annotation/notes while neutralizing the financial spend so it no longer counts
+        const cleanTitle = existing.title.replace(/^\[Removed by Bank\]\s*/i, "");
+        const originalAmountStr = existing.amount.toFixed(2);
+        const originalNote = existing.note ? existing.note.trim() : "";
+        const bankAnnotation = `[Removed by Bank: original amount $${originalAmountStr}]`;
+        const updatedNote = originalNote
+          ? (originalNote.includes("[Removed by Bank") ? originalNote : `${originalNote} ${bankAnnotation}`)
+          : bankAnnotation;
+
+        preservedRemovalsToApply.push({
+          id: existing.id,
+          values: {
+            amount: 0,
+            pending: false,
+            title: `[Removed by Bank] ${cleanTitle}`,
+            note: updatedNote,
+            updatedAt: new Date(),
+          },
+        });
+      } else {
+        removedIdsToDelete.push(existing.id);
       }
     }
 
-    // B. Process Modifications
-    const updatesToApply: Array<{ id: string; values: any }> = [];
-    const addedFromModified: PlaidTransaction[] = [];
+    // B. Modifications
+    const updatesToApply: Array<{
+      id: string;
+      values: Partial<typeof transactionsTable.$inferInsert>;
+    }> = [];
+    const addedFromModified: Record<string, unknown>[] = [];
 
     for (const m of validModified) {
-      const existing = existingByPlaidTxId.get(m.transaction_id) || existingByPendingTxId.get(m.transaction_id);
+      const txId = String(m.transaction_id);
+      const existing = existingByPlaidTxId.get(txId);
       if (existing) {
-        const primaryCat = m.personal_finance_category?.primary ?? (Array.isArray(m.category) ? m.category[0] : null);
-        const detailedCat = m.personal_finance_category?.detailed;
-        const defaultCat = mapPlaidCategory(primaryCat, detailedCat);
-        const cleanTitle = cleanPlaidName(m.merchant_name, m.name);
-        const localAccountId = plaidAccToLocalIdMap[m.account_id] || existing.accountId;
+        // If split by user, do not overwrite split parts
+        if (existingSplitsByPlaidId.has(txId)) {
+          continue;
+        }
 
-        const updatePayload: any = {
-          amount: Math.abs(m.amount ?? existing.amount),
-          pending: !!m.pending,
-          pendingTransactionId: m.pending_transaction_id ?? existing.pendingTransactionId,
-          date: m.authorized_date ?? m.date ?? existing.date,
+        const plaidAccId = String(m.account_id);
+        const localAccountId = plaidAccToLocalIdMap[plaidAccId];
+        if (!localAccountId) {
+          throw new Error(
+            `UNMAPPED_PLAID_ACCOUNT: Plaid account '${plaidAccId}' is not linked to any household account`
+          );
+        }
+
+        const cleanTitle = cleanPlaidName(
+          typeof m.merchant_name === "string" ? m.merchant_name : null,
+          typeof m.name === "string" ? m.name : ""
+        );
+        const pfc = m.personal_finance_category as { primary?: string; detailed?: string } | undefined;
+        const catArr = Array.isArray(m.category) ? m.category : [];
+        const primaryCat = pfc?.primary ?? (catArr.length > 0 ? String(catArr[0]) : null);
+        const defaultCat = mapPlaidCategory(primaryCat, pfc?.detailed);
+
+        const updatePayload: Partial<typeof transactionsTable.$inferInsert> = {
+          amount: Math.abs(typeof m.amount === "number" ? m.amount : existing.amount),
+          date: String(m.authorized_date ?? m.date ?? existing.date),
+          pending: Boolean(m.pending),
+          pendingTransactionId: typeof m.pending_transaction_id === "string" ? m.pending_transaction_id : null,
           accountId: localAccountId,
-          plaidAccountId: m.account_id,
+          plaidAccountId: plaidAccId,
           updatedAt: new Date(),
         };
 
         // If user has NOT customized this transaction, refresh title and category
         if (!existing.isUserEdited && (!existing.note || existing.note.trim().length === 0)) {
           updatePayload.title = cleanTitle;
-          updatePayload.merchant = m.merchant_name || cleanTitle;
+          updatePayload.merchant = (typeof m.merchant_name === "string" ? m.merchant_name : "") || cleanTitle;
           updatePayload.category = applyRuleCategory(cleanTitle, defaultCat);
         }
 
         updatesToApply.push({ id: existing.id, values: updatePayload });
       } else {
-        // Plaid sent a modified transaction not yet present in DB: treat as added
         addedFromModified.push(m);
       }
     }
 
-    // C. Process Additions
+    // C. Additions
     const combinedAdded = [...validAdded, ...addedFromModified];
-    const insertsToApply: any[] = [];
-    const pendingToResolveUpdates: Array<{ id: string; values: any }> = [];
+    const insertsToApply: (typeof transactionsTable.$inferInsert)[] = [];
+    const pendingToResolveUpdates: Array<{
+      id: string;
+      values: Partial<typeof transactionsTable.$inferInsert>;
+    }> = [];
 
     for (const a of combinedAdded) {
-      // 1. Check if already exists in DB by plaidTransactionId (replay / idempotency)
-      const existingExact = existingByPlaidTxId.get(a.transaction_id);
+      const aTxId = String(a.transaction_id);
+
+      // Check account mapping: MUST NOT fall back to arbitrary default account
+      const plaidAccId = String(a.account_id);
+      const localAccountId = plaidAccToLocalIdMap[plaidAccId];
+      if (!localAccountId) {
+        throw new Error(
+          `UNMAPPED_PLAID_ACCOUNT: Plaid account '${plaidAccId}' is not linked to any household account`
+        );
+      }
+
+      // Replay / idempotency check
+      const existingExact = existingByPlaidTxId.get(aTxId);
       if (existingExact) {
-        // Replay: already in DB, skip insert
         continue;
       }
 
-      // 2. Check if this transaction was already split by the user
-      if (existingSplitsByPlaidId.has(a.transaction_id)) {
-        log.info({ plaidId: a.transaction_id }, "Skipping un-split insert for already user-split transaction");
+      // User split check
+      if (existingSplitsByPlaidId.has(aTxId)) {
         continue;
       }
 
-      // 3. Check if this is a posted transaction replacing an existing pending transaction
-      if (a.pending_transaction_id && existingByPlaidTxId.has(a.pending_transaction_id)) {
-        const pendingTx = existingByPlaidTxId.get(a.pending_transaction_id);
-        const cleanTitle = cleanPlaidName(a.merchant_name, a.name);
-        const primaryCat = a.personal_finance_category?.primary ?? (Array.isArray(a.category) ? a.category[0] : null);
-        const defaultCat = mapPlaidCategory(primaryCat, a.personal_finance_category?.detailed);
-        const localAccountId = plaidAccToLocalIdMap[a.account_id] || pendingTx.accountId;
+      // Pending-to-posted resolution
+      const pendingTxId = typeof a.pending_transaction_id === "string" ? a.pending_transaction_id : null;
+      if (pendingTxId && existingByPlaidTxId.has(pendingTxId)) {
+        const pendingTx = existingByPlaidTxId.get(pendingTxId)!;
+        const cleanTitle = cleanPlaidName(
+          typeof a.merchant_name === "string" ? a.merchant_name : null,
+          typeof a.name === "string" ? a.name : ""
+        );
+        const pfc = a.personal_finance_category as { primary?: string; detailed?: string } | undefined;
+        const catArr = Array.isArray(a.category) ? a.category : [];
+        const primaryCat = pfc?.primary ?? (catArr.length > 0 ? String(catArr[0]) : null);
+        const defaultCat = mapPlaidCategory(primaryCat, pfc?.detailed);
 
-        const updatePayload: any = {
-          plaidTransactionId: a.transaction_id,
+        const updatePayload: Partial<typeof transactionsTable.$inferInsert> = {
+          plaidTransactionId: aTxId,
           pending: false,
-          pendingTransactionId: a.pending_transaction_id,
-          amount: Math.abs(a.amount ?? pendingTx.amount),
-          date: a.authorized_date ?? a.date ?? pendingTx.date,
+          pendingTransactionId: pendingTxId,
+          amount: Math.abs(typeof a.amount === "number" ? a.amount : pendingTx.amount),
+          date: String(a.authorized_date ?? a.date ?? pendingTx.date),
           accountId: localAccountId,
-          plaidAccountId: a.account_id,
+          plaidAccountId: plaidAccId,
           updatedAt: new Date(),
         };
 
-        // Preserve user category/notes if user edited the pending transaction
         if (!pendingTx.isUserEdited && (!pendingTx.note || pendingTx.note.trim().length === 0)) {
           updatePayload.title = cleanTitle;
-          updatePayload.merchant = a.merchant_name || cleanTitle;
+          updatePayload.merchant = (typeof a.merchant_name === "string" ? a.merchant_name : "") || cleanTitle;
           updatePayload.category = applyRuleCategory(cleanTitle, defaultCat);
         }
 
@@ -658,33 +767,38 @@ export async function syncPlaidItem(options: SyncPlaidItemOptions): Promise<Sync
         continue;
       }
 
-      // 4. Truly new transaction -> insert into DB
-      const cleanTitle = cleanPlaidName(a.merchant_name, a.name);
-      const primaryCat = a.personal_finance_category?.primary ?? (Array.isArray(a.category) ? a.category[0] : null);
-      const defaultCat = mapPlaidCategory(primaryCat, a.personal_finance_category?.detailed);
+      // Fresh transaction insert
+      const cleanTitle = cleanPlaidName(
+        typeof a.merchant_name === "string" ? a.merchant_name : null,
+        typeof a.name === "string" ? a.name : ""
+      );
+      const pfc = a.personal_finance_category as { primary?: string; detailed?: string } | undefined;
+      const catArr = Array.isArray(a.category) ? a.category : [];
+      const primaryCat = pfc?.primary ?? (catArr.length > 0 ? String(catArr[0]) : null);
+      const defaultCat = mapPlaidCategory(primaryCat, pfc?.detailed);
       const mappedCategory = applyRuleCategory(cleanTitle, defaultCat);
-      const localAccountId = plaidAccToLocalIdMap[a.account_id] || (dbAccts[0]?.id ?? "acc_default");
+      const rawAmount = typeof a.amount === "number" ? a.amount : 0;
 
       insertsToApply.push({
-        id: `tx_plaid_${a.transaction_id}`,
+        id: `tx_plaid_${aTxId}`,
         householdId,
         deviceId: "server_plaid_sync",
         accountId: localAccountId,
         title: cleanTitle,
-        amount: Math.abs(a.amount ?? 0),
-        type: (a.amount ?? 0) > 0 ? ("expense" as const) : ("income" as const),
+        amount: Math.abs(rawAmount),
+        type: rawAmount > 0 ? "expense" : "income",
         category: mappedCategory,
-        date: a.authorized_date ?? a.date ?? new Date().toISOString().slice(0, 10),
+        date: String(a.authorized_date ?? a.date ?? new Date().toISOString().slice(0, 10)),
         source: "plaid",
-        merchant: a.merchant_name || cleanTitle,
+        merchant: (typeof a.merchant_name === "string" ? a.merchant_name : "") || cleanTitle,
         plaidItemId: itemId,
-        plaidAccountId: a.account_id,
+        plaidAccountId: plaidAccId,
         fromEmail: false,
         bank: record.bankName,
         note: null,
-        plaidTransactionId: a.transaction_id,
-        pending: !!a.pending,
-        pendingTransactionId: a.pending_transaction_id ?? null,
+        plaidTransactionId: aTxId,
+        pending: Boolean(a.pending),
+        pendingTransactionId: pendingTxId,
         splitGroupId: null,
         isUserEdited: false,
         createdAt: new Date(),
@@ -692,61 +806,91 @@ export async function syncPlaidItem(options: SyncPlaidItemOptions): Promise<Sync
       });
     }
 
-    // 11. Chunked / Checkpointed Database Persistence
-    // Execute removals
-    if (removedIdsToDelete.length > 0) {
-      await db
-        .delete(transactionsTable)
+    // ── 11. Atomic Database Transaction ─────────────────────────────────────
+    // All removals, preserved updates, modifications, chunked inserts, and cursor advance
+    // execute inside a single transactional boundary. If any step fails, the entire sync
+    // rolls back atomically and the cursor does NOT advance.
+    await db.transaction(async (tx) => {
+      // 1. Removals of unedited transactions
+      if (removedIdsToDelete.length > 0) {
+        await tx
+          .delete(transactionsTable)
+          .where(
+            and(
+              eq(transactionsTable.householdId, householdId),
+              inArray(transactionsTable.id, removedIdsToDelete)
+            )
+          );
+      }
+
+      // 2. Preserved removals (user-annotated: neutralized amount = 0, title & notes preserved)
+      for (const pr of preservedRemovalsToApply) {
+        await tx
+          .update(transactionsTable)
+          .set(pr.values)
+          .where(
+            and(
+              eq(transactionsTable.id, pr.id),
+              eq(transactionsTable.householdId, householdId)
+            )
+          );
+      }
+
+      // 3. Modifications & pending->posted resolutions
+      const allUpdates = [...updatesToApply, ...pendingToResolveUpdates];
+      for (const u of allUpdates) {
+        await tx
+          .update(transactionsTable)
+          .set(u.values)
+          .where(
+            and(
+              eq(transactionsTable.id, u.id),
+              eq(transactionsTable.householdId, householdId)
+            )
+          );
+      }
+
+      // 4. Inserts in bounded chunks inside the transaction
+      for (let i = 0; i < insertsToApply.length; i += chunkSize) {
+        const chunk = insertsToApply.slice(i, i + chunkSize);
+        await tx
+          .insert(transactionsTable)
+          .values(chunk)
+          .onConflictDoNothing();
+      }
+
+      // 5. Advance cursor and record lastSyncedAt atomically
+      await tx
+        .update(plaidItemsTable)
+        .set({
+          cursor: nextCursor ?? null,
+          lastSyncedAt: new Date(),
+          error: null,
+        })
         .where(
           and(
-            eq(transactionsTable.householdId, householdId),
-            inArray(transactionsTable.id, removedIdsToDelete)
+            eq(plaidItemsTable.id, itemId),
+            eq(plaidItemsTable.householdId, householdId)
           )
         );
-    }
-
-    // Execute updates (modifications and pending→posted resolutions)
-    const allUpdates = [...updatesToApply, ...pendingToResolveUpdates];
-    for (const u of allUpdates) {
-      await db
-        .update(transactionsTable)
-        .set(u.values)
-        .where(and(eq(transactionsTable.id, u.id), eq(transactionsTable.householdId, householdId)));
-    }
-
-    // Execute inserts in safe chunks
-    for (let i = 0; i < insertsToApply.length; i += chunkSize) {
-      const chunk = insertsToApply.slice(i, i + chunkSize);
-      await db
-        .insert(transactionsTable)
-        .values(chunk)
-        .onConflictDoNothing();
-    }
-
-    // Update cursor and lastSyncedAt atomically after successful ingestion
-    await db
-      .update(plaidItemsTable)
-      .set({
-        cursor: nextCursor ?? null,
-        lastSyncedAt: new Date(),
-        error: null,
-      })
-      .where(eq(plaidItemsTable.id, itemId));
+    });
 
     // 12. Investment Data Sync (if item has investment accounts)
-    let holdings: ReturnType<typeof mapHolding>[] = [];
-    let investmentTransactions: ReturnType<typeof mapInvestmentTransaction>[] = [];
+    let holdings: HoldingOutput[] = [];
+    let investmentTransactions: InvestmentTransactionOutput[] = [];
     const hasInvestment = plaidAccounts.some(
-      (a) => mapAccountType(a.type as string, a.subtype as string | null) === "investment"
+      (a) => mapAccountType(a.type, a.subtype ?? null) === "investment"
     );
 
     if (hasInvestment) {
       try {
         const holdRes = await client.investmentsHoldingsGet({ access_token: record.accessToken });
         const secMap = buildSecMap(holdRes.data.securities);
-        holdings = (holdRes.data.holdings || []).map((h) => mapHolding(h, secMap));
-      } catch (invErr: any) {
-        log.warn({ invErr: invErr?.message }, "investmentsHoldingsGet skipped/failed");
+        holdings = (holdRes.data.holdings || []).map((h) =>
+          mapHolding(h as unknown as Record<string, unknown>, secMap)
+        );
+      } catch (invErr: unknown) {
+        log.warn({ invErr: (invErr as Error)?.message }, "investmentsHoldingsGet skipped/failed");
       }
       try {
         const iStartDate = new Date(Date.now() - 730 * 86400000).toISOString().slice(0, 10);
@@ -764,26 +908,28 @@ export async function syncPlaidItem(options: SyncPlaidItemOptions): Promise<Sync
           invTotal = invRes.data.total_investment_transactions;
           const secMap = buildSecMap(invRes.data.securities);
           const page = (invRes.data.investment_transactions || []).map((t) =>
-            mapInvestmentTransaction(t, secMap)
+            mapInvestmentTransaction(t as unknown as Record<string, unknown>, secMap)
           );
           investmentTransactions.push(...page);
           invOffset += page.length;
           if (page.length === 0) break;
         }
-      } catch (invErr: any) {
-        log.warn({ invErr: invErr?.message }, "investmentsTransactionsGet skipped/failed");
+      } catch (invErr: unknown) {
+        log.warn({ invErr: (invErr as Error)?.message }, "investmentsTransactionsGet skipped/failed");
       }
     }
 
-    // 13. Map output transactions for backward compatibility with mobile client
+    // 13. Map output transactions
     const allPlaidRaw = [...combinedAdded];
-    const outputTransactions = allPlaidRaw.map((t) => mapPlaidTransactionToOutput(t, record.bankName));
+    const outputTransactions = allPlaidRaw.map((t) =>
+      mapPlaidTransactionToOutput(t, record.bankName)
+    );
 
     return {
       success: true,
       addedCount: insertsToApply.length + pendingToResolveUpdates.length,
       modifiedCount: updatesToApply.length,
-      removedCount: removedIdsToDelete.length,
+      removedCount: removedIdsToDelete.length + preservedRemovalsToApply.length,
       transactions: outputTransactions,
       count: outputTransactions.length,
       removedIds: actuallyRemovedPlaidIds,
@@ -792,18 +938,20 @@ export async function syncPlaidItem(options: SyncPlaidItemOptions): Promise<Sync
       plaidAccounts: plaidAccounts.map((a) => ({
         plaidAccountId: a.account_id,
         name: a.name ?? a.official_name ?? "Account",
-        type: mapAccountType(a.type as string, a.subtype as string | null),
+        type: mapAccountType(a.type, a.subtype ?? null),
         balance: a.balances.current ?? a.balances.available ?? 0,
         lastFour: a.mask ?? "",
       })),
       cursor: nextCursor ?? null,
     };
   } finally {
-    // Release PostgreSQL advisory lock
-    if (lockAcquired && db && typeof db.execute === "function") {
+    // Release dedicated connection advisory lock
+    if (lockHandle) {
       try {
-        await db.execute(sql`SELECT pg_advisory_unlock(hashtext('plaid_sync_' || ${itemId}))`);
-      } catch {}
+        await lockHandle.release();
+      } catch (releaseErr) {
+        log.error({ err: releaseErr, itemId }, "Error releasing advisory lock");
+      }
     }
   }
 }

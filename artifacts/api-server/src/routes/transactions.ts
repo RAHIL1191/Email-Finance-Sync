@@ -385,25 +385,26 @@ router.post("/transactions/bulk", async (req, res) => {
       return;
     }
 
-    // 6. Insert or update transactions using correct sql excluded references
+    // 6. Insert or update transactions using protected sql excluded references
+    // Never overwrite fields on transactions that have been user-edited or neutralized by bank removal
     const rows = await db
       .insert(transactionsTable)
       .values(finalPayload)
       .onConflictDoUpdate({
         target: transactionsTable.id,
         set: {
-          title: sql`excluded.title`,
-          amount: sql`excluded.amount`,
-          type: sql`excluded.type`,
-          category: sql`excluded.category`,
+          title: sql`CASE WHEN ${transactionsTable.isUserEdited} THEN ${transactionsTable.title} ELSE excluded.title END`,
+          amount: sql`CASE WHEN ${transactionsTable.isUserEdited} OR ${transactionsTable.title} LIKE '[Removed by Bank]%' THEN ${transactionsTable.amount} ELSE excluded.amount END`,
+          type: sql`CASE WHEN ${transactionsTable.isUserEdited} THEN ${transactionsTable.type} ELSE excluded.type END`,
+          category: sql`CASE WHEN ${transactionsTable.isUserEdited} THEN ${transactionsTable.category} ELSE excluded.category END`,
+          merchant: sql`CASE WHEN ${transactionsTable.isUserEdited} THEN ${transactionsTable.merchant} ELSE excluded.merchant END`,
+          note: sql`COALESCE(${transactionsTable.note}, excluded.note)`,
           accountId: sql`excluded.account_id`,
           date: sql`excluded.date`,
           source: sql`excluded.source`,
-          merchant: sql`excluded.merchant`,
           plaidItemId: sql`excluded.plaid_item_id`,
           plaidAccountId: sql`excluded.plaid_account_id`,
           bank: sql`excluded.bank`,
-          note: sql`excluded.note`,
           pending: sql`excluded.pending`,
           pendingTransactionId: sql`excluded.pending_transaction_id`,
           updatedAt: sql`excluded.updated_at`,
@@ -420,9 +421,14 @@ router.post("/transactions/bulk", async (req, res) => {
 /** PUT /api/transactions/:id — update a transaction */
 router.put("/transactions/:id", validate(updateTransactionSchema), async (req, res) => {
   try {
+    const updateBody = req.body as Partial<typeof transactionsTable.$inferInsert>;
     const [row] = await db
       .update(transactionsTable)
-      .set({ ...(req.body as Record<string, unknown>), isUserEdited: true, updatedAt: new Date() } as any)
+      .set({
+        ...updateBody,
+        isUserEdited: true,
+        updatedAt: new Date(),
+      })
       .where(
         and(
           eq(transactionsTable.id, String(req.params.id)),

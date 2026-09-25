@@ -7,7 +7,9 @@
     "dev": "pnpm run build && pnpm run start",
     "build": "node ./build.mjs",
     "start": "node --enable-source-maps ./server.mjs",
-    "test": "tsx --import ./src/services/__tests__/test-setup.mjs --test src/services/__tests__/plaidSyncService.test.ts",
+    "test:unit": "tsx --import ./src/services/__tests__/test-setup.mjs --test src/services/__tests__/plaidSyncService.test.ts",
+    "test:integration": "tsx --env-file=../../.env --test src/services/__tests__/plaidSyncService.pg.integration.test.ts",
+    "test": "tsx --env-file=../../.env --test src/services/__tests__/*.test.ts",
     "typecheck": "tsc -p tsconfig.json --noEmit"
   },
   "dependencies": {
@@ -26,6 +28,7 @@
     "pino": "^9",
     "pino-http": "^10",
     "plaid": "^42.2.0",
+    "pg": "^8.20.0",
     "zod": "catalog:"
   },
   "devDependencies": {
@@ -36,6 +39,7 @@
     "@types/mailparser": "^3.4.6",
     "@types/node": "catalog:",
     "@types/nodemailer": "^8.0.2",
+    "@types/pg": "^8.18.0",
     "esbuild": "^0.27.3",
     "esbuild-plugin-pino": "^2.3.3",
     "pino-pretty": "^13",
