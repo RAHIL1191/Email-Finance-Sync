@@ -10,6 +10,7 @@ export const plaidItemsTable = pgTable("plaid_items", {
   cursor: text("cursor"),
   connectedAt: timestamp("connected_at").defaultNow().notNull(),
   lastSyncedAt: timestamp("last_synced_at"),
+  error: text("error"),
 });
 
 export type PlaidItemRecord = typeof plaidItemsTable.$inferSelect;

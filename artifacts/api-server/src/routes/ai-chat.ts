@@ -165,7 +165,7 @@ router.post("/ai/chat", async (req, res) => {
       ];
 
       for (const call of message.tool_calls) {
-        const { name, arguments: argsString } = call.function;
+        const { name, arguments: argsString } = (call as any).function;
         let args: any = {};
         try {
           args = JSON.parse(argsString);

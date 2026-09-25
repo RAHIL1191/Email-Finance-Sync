@@ -22,6 +22,8 @@ export const transactionsTable = pgTable("transactions", {
   plaidTransactionId: text("plaid_transaction_id"),
   pending: boolean("pending").default(false),
   pendingTransactionId: text("pending_transaction_id"),
+  splitGroupId: text("split_group_id"),
+  isUserEdited: boolean("is_user_edited").default(false),
   createdAt: timestamp("created_at").defaultNow().notNull(),
   updatedAt: timestamp("updated_at").defaultNow().notNull(),
 }, (table) => ({
@@ -50,6 +52,8 @@ export const insertTransactionSchema = z.object({
   plaidTransactionId: z.string().nullable().optional(),
   pending: z.boolean().optional().default(false),
   pendingTransactionId: z.string().nullable().optional(),
+  splitGroupId: z.string().nullable().optional(),
+  isUserEdited: z.boolean().optional().default(false),
 });
 
 export const updateTransactionSchema = insertTransactionSchema

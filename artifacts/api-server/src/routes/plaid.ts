@@ -9,34 +9,22 @@ import {
 import { eq, and } from "drizzle-orm";
 import { db, plaidItemsTable, accountsTable, transactionsTable } from "@workspace/db";
 import { requireHouseholdId } from "../middlewares/validate.js";
+import {
+  syncPlaidItem,
+  getPlaidClient,
+  cleanPlaidName,
+  mapAccountType,
+  mapPlaidCategory,
+  mapHolding,
+  mapInvestmentTransaction,
+  buildSecMap,
+  mapPlaidTransactionToOutput,
+} from "../services/plaidSyncService.js";
 
 const router = Router();
 
 // ── All routes in this router require X-Household-ID header ───────────────
 router.use(requireHouseholdId);
-
-// ── Plaid client factory ───────────────────────────────────────────────────
-
-function getPlaidClient(): PlaidApi {
-  const clientId = process.env.PLAID_CLIENT_ID;
-  const secret = process.env.PLAID_SECRET;
-  const env = (process.env.PLAID_ENV ?? "sandbox") as keyof typeof PlaidEnvironments;
-
-  if (!clientId || !secret) {
-    throw new Error("NOT_CONFIGURED");
-  }
-
-  const config = new Configuration({
-    basePath: PlaidEnvironments[env] ?? PlaidEnvironments.sandbox,
-    baseOptions: {
-      headers: {
-        "PLAID-CLIENT-ID": clientId,
-        "PLAID-SECRET": secret,
-      },
-    },
-  });
-  return new PlaidApi(config);
-}
 
 function plaidError(err: unknown): string {
   const e = err as any;
@@ -207,100 +195,7 @@ router.post("/plaid/exchange-token", async (req, res) => {
       }
     }
 
-    // 3. Fetch initial transactions via sync cursor — request up to 2 years on first add
-    let transactions: any[] = [];
-    let cursor: string | undefined;
-    try {
-      let hasMore = true;
-      while (hasMore) {
-        const syncRes = await client.transactionsSync({
-          access_token,
-          cursor,
-          options: { include_personal_finance_category: true, days_requested: 730 },
-        });
-        transactions = [...transactions, ...syncRes.data.added];
-        cursor = syncRes.data.next_cursor;
-        hasMore = syncRes.data.has_more;
-      }
-    } catch {
-      // Fall back to /transactions/get if sync throws
-    }
-
-    // Paginate transactionsGet with 730-day window to catch any transactions
-    // that transactionsSync missed (e.g. BMO credit cards, Wealthsimple async).
-    try {
-      const startDate = new Date(Date.now() - 730 * 86400000).toISOString().slice(0, 10);
-      const endDate = new Date().toISOString().slice(0, 10);
-      const txMap = new Map();
-      transactions.forEach((t) => txMap.set(t.transaction_id, t));
-      let offset = 0;
-      const pageSize = 500;
-      let total = Infinity;
-      while (offset < total) {
-        const txRes = await client.transactionsGet({
-          access_token,
-          start_date: startDate,
-          end_date: endDate,
-          options: { count: pageSize, offset },
-        });
-        const page = txRes.data.transactions ?? [];
-        total = txRes.data.total_transactions ?? page.length;
-        page.forEach((t) => txMap.set(t.transaction_id, t));
-        offset += page.length;
-        if (page.length === 0) break;
-      }
-      transactions = Array.from(txMap.values());
-    } catch {}
-
-    // Filter out standard transactions that belong to investment accounts.
-    // Investment accounts sync holdings + investment transactions separately.
-    const investmentAccountIds = new Set(
-      plaidAccounts
-        .filter((a) => mapAccountType(a.type as string, a.subtype as string | null) === "investment")
-        .map((a) => a.account_id)
-    );
-    transactions = transactions.filter((t) => !investmentAccountIds.has(t.account_id));
-
-    // 4. Fetch investment holdings + transactions (best-effort)
-    let holdings: ReturnType<typeof mapHolding>[] = [];
-    let investmentTransactions: ReturnType<typeof mapInvestmentTransaction>[] = [];
-    try {
-      const holdRes = await client.investmentsHoldingsGet({ access_token });
-      const secMap = buildSecMap(holdRes.data.securities);
-      holdings = holdRes.data.holdings.map((h) => mapHolding(h, secMap));
-    } catch (invErr) {
-      req.log.warn({ invErr }, "investmentsHoldingsGet failed (product may not be enabled for this item)");
-    }
-    try {
-      const iStartDate = new Date(Date.now() - 730 * 86400000).toISOString().slice(0, 10);
-      const iEndDate = new Date().toISOString().slice(0, 10);
-      let invOffset = 0;
-      const invCount = 500;
-      let invTotal = Infinity;
-      while (investmentTransactions.length < invTotal) {
-        const invRes = await client.investmentsTransactionsGet({
-          access_token,
-          start_date: iStartDate,
-          end_date: iEndDate,
-          options: { count: invCount, offset: invOffset },
-        });
-        invTotal = invRes.data.total_investment_transactions;
-        const secMap = buildSecMap(invRes.data.securities);
-        const page = invRes.data.investment_transactions.map((t) => mapInvestmentTransaction(t, secMap));
-        investmentTransactions = [...investmentTransactions, ...page];
-        invOffset += page.length;
-        if (page.length === 0) break;
-      }
-    } catch (invErr: any) {
-      req.log.warn({
-        err: invErr?.message || String(invErr),
-        code: invErr?.response?.data?.error_code,
-        type: invErr?.response?.data?.error_type,
-        msg: invErr?.response?.data?.error_message
-      }, "investmentTransactionsGet failed (product may not be enabled for this item)");
-    }
-
-    // 5. Store item in DB
+    // 3. Store item in DB with null cursor initially
     const dbId = `pi_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 7)}`;
     await db.insert(plaidItemsTable).values({
       id: dbId,
@@ -309,164 +204,48 @@ router.post("/plaid/exchange-token", async (req, res) => {
       accessToken: access_token,
       bankName: resolvedBankName,
       bankColor: resolvedBankColor,
-      cursor: cursor ?? null,
+      cursor: null,
       connectedAt: new Date(),
       lastSyncedAt: new Date(),
     });
 
-    // 6. Directly persist / upsert accounts in DB
+    // 4. Durably ingest initial transactions + accounts + investments on server
+    const syncResult = await syncPlaidItem({
+      itemId: dbId,
+      householdId: res.locals.householdId,
+      backfill: true,
+      logger: req.log,
+    });
+
+    // Fetch accounts now saved in DB for this item
     const existingHouseholdAccounts = await db
       .select()
       .from(accountsTable)
       .where(eq(accountsTable.householdId, res.locals.householdId));
 
-    const savedAccounts: any[] = [];
-    for (const a of plaidAccounts) {
-      const type = mapAccountType(a.type as string, a.subtype as string | null);
-      const balance = a.balances.current ?? a.balances.available ?? 0;
-      const lastFour = a.mask ? String(a.mask) : null;
-      const name = a.name ?? a.official_name ?? "Account";
-
-      // 1. Exact match by plaidAccountId
-      const existingByPlaid = existingHouseholdAccounts.find(
-        (ea) =>
-          ea.plaidAccountId === a.account_id ||
-          (ea.sharedPlaidAccounts && ea.sharedPlaidAccounts.some((s) => s.plaidAccountId === a.account_id))
-      );
-
-      if (existingByPlaid) {
-        await db
-          .update(accountsTable)
-          .set({
-            balance,
-            updatedAt: new Date(),
-          })
-          .where(eq(accountsTable.id, existingByPlaid.id));
-        savedAccounts.push({
-          id: existingByPlaid.id,
-          plaidAccountId: a.account_id,
-          name: existingByPlaid.name,
-          type: existingByPlaid.type,
-          balance,
-          lastFour: existingByPlaid.lastFour ?? "",
-        });
-        continue;
-      }
-
-      // 2. Check for matching lastFour + bank name (manual account or joint account)
-      const bankLower = resolvedBankName.trim().toLowerCase();
-      const existingByMask =
-        lastFour && lastFour.length >= 2
-          ? existingHouseholdAccounts.find(
-              (ea) =>
-                ea.lastFour === lastFour &&
-                (ea.bank.toLowerCase().includes(bankLower) || bankLower.includes(ea.bank.toLowerCase()))
-            )
-          : null;
-
-      if (existingByMask) {
-        if (!existingByMask.plaidAccountId) {
-          // Manual account being linked to Plaid for the first time
-          await db
-            .update(accountsTable)
-            .set({
-              plaidAccountId: a.account_id,
-              plaidItemId: dbId,
-              balance,
-              updatedAt: new Date(),
-            })
-            .where(eq(accountsTable.id, existingByMask.id));
-
-          savedAccounts.push({
-            id: existingByMask.id,
-            plaidAccountId: a.account_id,
-            name: existingByMask.name,
-            type: existingByMask.type,
-            balance,
-            lastFour: existingByMask.lastFour ?? "",
-          });
-          continue;
-        } else if (existingByMask.plaidItemId && existingByMask.plaidItemId !== dbId) {
-          // Joint/shared account from another item
-          const currentShared = existingByMask.sharedPlaidAccounts
-            ? [...existingByMask.sharedPlaidAccounts]
-            : [
-                {
-                  plaidItemId: existingByMask.plaidItemId,
-                  plaidAccountId: existingByMask.plaidAccountId,
-                  isPrimary: true,
-                },
-              ];
-          if (!currentShared.some((s) => s.plaidItemId === dbId)) {
-            currentShared.push({
-              plaidItemId: dbId,
-              plaidAccountId: a.account_id,
-              isPrimary: false,
-            });
-          }
-          await db
-            .update(accountsTable)
-            .set({
-              isJoint: true,
-              sharedPlaidAccounts: currentShared,
-              balance,
-              updatedAt: new Date(),
-            })
-            .where(eq(accountsTable.id, existingByMask.id));
-
-          savedAccounts.push({
-            id: existingByMask.id,
-            plaidAccountId: a.account_id,
-            name: existingByMask.name,
-            type: existingByMask.type,
-            balance,
-            lastFour: existingByMask.lastFour ?? "",
-          });
-          continue;
-        }
-      }
-
-      // 3. Brand new account -> insert into DB
-      const newAccId = `acc_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 7)}`;
-      const [inserted] = await db
-        .insert(accountsTable)
-        .values({
-          id: newAccId,
-          householdId: res.locals.householdId,
-          deviceId: res.locals.deviceId ?? "backend",
-          name,
-          bank: resolvedBankName,
-          type,
-          color: resolvedBankColor || "#6366f1",
-          balance,
-          lastFour,
-          plaidAccountId: a.account_id,
-          plaidItemId: dbId,
-          isJoint: false,
-          sharedPlaidAccounts: null,
-          createdAt: new Date(),
-          updatedAt: new Date(),
-        })
-        .returning();
-
-      savedAccounts.push({
-        id: inserted.id,
-        plaidAccountId: a.account_id,
-        name: inserted.name,
-        type: inserted.type,
-        balance: inserted.balance,
-        lastFour: inserted.lastFour ?? "",
-      });
-    }
+    const itemAccounts = existingHouseholdAccounts.filter(
+      (a) =>
+        a.plaidItemId === dbId ||
+        (a.sharedPlaidAccounts &&
+          Array.isArray(a.sharedPlaidAccounts) &&
+          a.sharedPlaidAccounts.some((s: any) => s.plaidItemId === dbId))
+    );
 
     res.json({
       itemId: dbId,
       institutionName: resolvedBankName,
-      accounts: savedAccounts,
-      transactions: transactions.map((t) => mapPlaidTransaction(t, resolvedBankName)),
-      transactionCount: transactions.length,
-      holdings,
-      investmentTransactions,
+      accounts: itemAccounts.map((a) => ({
+        id: a.id,
+        plaidAccountId: a.plaidAccountId,
+        name: a.name,
+        type: a.type,
+        balance: a.balance,
+        lastFour: a.lastFour ?? "",
+      })),
+      transactions: syncResult.transactions,
+      transactionCount: syncResult.transactions.length,
+      holdings: syncResult.holdings,
+      investmentTransactions: syncResult.investmentTransactions,
     });
   } catch (err) {
     req.log.error({ err }, "Failed to exchange Plaid token");
@@ -478,240 +257,40 @@ router.post("/plaid/exchange-token", async (req, res) => {
 
 router.post("/plaid/sync/:itemId", async (req, res) => {
   const { itemId } = req.params;
-
-  const [record] = await db
-    .select()
-    .from(plaidItemsTable)
-    .where(
-      and(
-        eq(plaidItemsTable.id, itemId),
-        eq(plaidItemsTable.householdId, res.locals.householdId)
-      )
-    );
-
-  if (!record) {
-    res.status(404).json({ error: "Plaid item not found" });
-    return;
-  }
-
-  let client: PlaidApi;
-  try {
-    client = getPlaidClient();
-  } catch {
-    res.status(503).json({ error: "Plaid is not configured" });
-    return;
-  }
+  const force = !!(req.body as any)?.force;
+  const backfill = !!(req.body as any)?.backfill;
 
   try {
-    const force = !!(req.body as any)?.force;
-    let transactions: any[] = [];
-    let cursor = force ? undefined : (record.cursor ?? undefined);
+    const result = await syncPlaidItem({
+      itemId,
+      householdId: res.locals.householdId,
+      force,
+      backfill,
+      logger: req.log,
+    });
 
-    // Optionally trigger on-demand refresh (paid Plaid add-ons, set PLAID_REFRESH_ENABLED=true to enable).
-    // Fired without await so the refresh runs in the background and never blocks the response.
-    // Plaid will push a webhook when fresh data is ready; the next sync will pick it up.
-    if (process.env.PLAID_REFRESH_ENABLED === "true") {
-      Promise.allSettled([
-        client.transactionsRefresh({ access_token: record.accessToken }),
-        client.investmentsRefresh({ access_token: record.accessToken }),
-      ]).then(([txR, invR]) => {
-        if (txR.status === "rejected") req.log.warn({ err: (txR as any).reason?.message }, "transactionsRefresh skipped");
-        if (invR.status === "rejected") req.log.warn({ err: (invR as any).reason?.message }, "investmentsRefresh skipped");
-      });
-    }
-
-    // Fetch accounts + transactions in parallel
-    const [accountsRes] = await Promise.all([
-      client.accountsGet({ access_token: record.accessToken }),
-    ]);
-    const plaidAccounts = accountsRes.data.accounts;
-
-    let hasMore = true;
-    while (hasMore) {
-      const syncRes = await client.transactionsSync({
-        access_token: record.accessToken,
-        cursor,
-        options: {
-          include_personal_finance_category: true,
-          ...(cursor ? {} : { days_requested: 730 }),
-        },
-      });
-      transactions = [...transactions, ...syncRes.data.added];
-      cursor = syncRes.data.next_cursor;
-      hasMore = syncRes.data.has_more;
-    }
-
-    // transactionsGet: safety net for institutions that don't fully surface
-    // transactions via cursor-based sync alone (e.g. BMO credit cards, Wealthsimple).
-    // Query full 730-day (2-year) window with pagination to ensure all 1.5+ years of history are retrieved.
-    try {
-      const startDate = new Date(Date.now() - 730 * 86400000).toISOString().slice(0, 10);
-      const endDate   = new Date().toISOString().slice(0, 10);
-      const txMap = new Map<string, any>();
-      transactions.forEach((t) => txMap.set(t.transaction_id, t));
-      let offset = 0;
-      const pageSize = 500;
-      let total = Infinity;
-      while (offset < total) {
-        const txRes = await client.transactionsGet({
-          access_token: record.accessToken,
-          start_date: startDate,
-          end_date: endDate,
-          options: { count: pageSize, offset },
-        });
-        const page = txRes.data.transactions ?? [];
-        total = txRes.data.total_transactions ?? page.length;
-        page.forEach((t) => txMap.set(t.transaction_id, t));
-        offset += page.length;
-        if (page.length === 0) break;
-      }
-      transactions = Array.from(txMap.values());
-    } catch {}
-
-    // Filter out standard transactions that belong to investment accounts.
-    // Investment accounts sync holdings + investment transactions separately.
-    const investmentAccountIds = new Set(
-      plaidAccounts
-        .filter((a) => mapAccountType(a.type as string, a.subtype as string | null) === "investment")
-        .map((a) => a.account_id)
-    );
-    transactions = transactions.filter((t) => !investmentAccountIds.has(t.account_id));
-
-    // Fetch accounts in household to check for joint/secondary accounts
-    const dbAccts = await db
-      .select()
-      .from(accountsTable)
-      .where(eq(accountsTable.householdId, res.locals.householdId));
-
-    // Filter out transactions for shared/joint accounts where THIS item is NOT the primary syncer.
-    // The primary item syncs transactions; secondary items only update account balances.
-    const secondarySharedAccountIds = new Set<string>();
-    for (const acc of dbAccts) {
-      if (acc.sharedPlaidAccounts && Array.isArray(acc.sharedPlaidAccounts)) {
-        for (const spa of acc.sharedPlaidAccounts) {
-          if (spa.plaidItemId === itemId && spa.isPrimary === false) {
-            secondarySharedAccountIds.add(spa.plaidAccountId);
-          }
-        }
-      }
-    }
-    if (secondarySharedAccountIds.size > 0) {
-      transactions = transactions.filter((t) => !secondarySharedAccountIds.has(t.account_id));
-    }
-
-    // Backfill plaid_item_id + plaid_account_id on DB accounts, update balances,
-    // and self-heal by creating any accounts missing from DB.
-    for (const pa of plaidAccounts) {
-      const match = dbAccts.find(
-        (a) =>
-          a.plaidAccountId === pa.account_id ||
-          (a.lastFour === (pa.mask ?? "") && !a.plaidItemId) ||
-          (a.sharedPlaidAccounts && a.sharedPlaidAccounts.some((s) => s.plaidAccountId === pa.account_id))
-      );
-      const balance = pa.balances.current ?? pa.balances.available ?? 0;
-      if (match) {
-        const updates: any = { balance, updatedAt: new Date() };
-        if (!match.isJoint && (!match.plaidItemId || !match.plaidAccountId)) {
-          updates.plaidItemId = itemId;
-          updates.plaidAccountId = pa.account_id;
-        }
-        await db
-          .update(accountsTable)
-          .set(updates)
-          .where(eq(accountsTable.id, match.id));
-      } else {
-        // Self-heal: insert missing account into DB
-        const type = mapAccountType(pa.type as string, pa.subtype as string | null);
-        const newAccId = `acc_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 7)}`;
-        await db
-          .insert(accountsTable)
-          .values({
-            id: newAccId,
-            householdId: res.locals.householdId,
-            deviceId: res.locals.deviceId ?? "backend",
-            name: pa.name ?? pa.official_name ?? "Account",
-            bank: record.bankName,
-            type,
-            color: record.bankColor || "#6366f1",
-            balance,
-            lastFour: pa.mask ?? null,
-            plaidAccountId: pa.account_id,
-            plaidItemId: itemId,
-            isJoint: false,
-            createdAt: new Date(),
-            updatedAt: new Date(),
-          });
-      }
-    }
-
-    // Update cursor + last synced timestamp
-    await db
-      .update(plaidItemsTable)
-      .set({ cursor: cursor ?? null, lastSyncedAt: new Date() })
-      .where(eq(plaidItemsTable.id, itemId));
-
-    // Fetch investment holdings + transactions alongside regular sync,
-    // but only if this item actually has investment accounts. Calling these APIs
-    // on a credit card / chequing item always returns PRODUCTS_NOT_SUPPORTED.
-    let holdings: ReturnType<typeof mapHolding>[] = [];
-    let investmentTransactions: ReturnType<typeof mapInvestmentTransaction>[] = [];
-    const hasInvestmentAccounts = plaidAccounts.some(
-      (a) => mapAccountType(a.type as string, a.subtype as string | null) === "investment"
-    );
-
-    if (hasInvestmentAccounts) {
-      try {
-        const holdRes = await client.investmentsHoldingsGet({ access_token: record.accessToken });
-        const secMap = buildSecMap(holdRes.data.securities);
-        holdings = holdRes.data.holdings.map((h) => mapHolding(h, secMap));
-      } catch (invErr) {
-        req.log.warn({ invErr }, "investmentsHoldingsGet failed during sync");
-      }
-      try {
-        const iStartDate = new Date(Date.now() - 730 * 86400000).toISOString().slice(0, 10);
-        const iEndDate = new Date().toISOString().slice(0, 10);
-        let invOffset = 0;
-        const invCount = 500;
-        let invTotal = Infinity;
-        while (investmentTransactions.length < invTotal) {
-          const invRes = await client.investmentsTransactionsGet({
-            access_token: record.accessToken,
-            start_date: iStartDate,
-            end_date: iEndDate,
-            options: { count: invCount, offset: invOffset },
-          });
-          invTotal = invRes.data.total_investment_transactions;
-          const secMap = buildSecMap(invRes.data.securities);
-          const page = invRes.data.investment_transactions.map((t) => mapInvestmentTransaction(t, secMap));
-          investmentTransactions = [...investmentTransactions, ...page];
-          invOffset += page.length;
-          if (page.length === 0) break;
-        }
-      } catch (invErr: any) {
-        req.log.warn({
-          err: invErr?.message || String(invErr),
-          code: invErr?.response?.data?.error_code,
-          type: invErr?.response?.data?.error_type,
-          msg: invErr?.response?.data?.error_message
-        }, "investmentTransactionsGet failed during sync");
-      }
+    if (!result.success && result.status === "locked") {
+      res.status(409).json({ error: "Sync already in progress for this bank connection" });
+      return;
     }
 
     res.json({
-      transactions: transactions.map((t) => mapPlaidTransaction(t, record.bankName)),
-      count: transactions.length,
-      holdings,
-      investmentTransactions,
-      // Return Plaid accounts so client can self-heal accountIds / plaidAccMap
-      plaidAccounts: plaidAccounts.map((a) => ({
-        plaidAccountId: a.account_id,
-        name: a.name ?? a.official_name ?? "Account",
-        type: mapAccountType(a.type as string, a.subtype as string | null),
-        balance: a.balances.current ?? a.balances.available ?? 0,
-        lastFour: a.mask ?? "",
-      })),
+      transactions: result.transactions,
+      count: result.count,
+      removedIds: result.removedIds,
+      holdings: result.holdings,
+      investmentTransactions: result.investmentTransactions,
+      plaidAccounts: result.plaidAccounts,
     });
-  } catch (err) {
+  } catch (err: any) {
+    if (err?.message === "PLAID_ITEM_NOT_FOUND") {
+      res.status(404).json({ error: "Plaid item not found" });
+      return;
+    }
+    if (err?.message === "NOT_CONFIGURED") {
+      res.status(503).json({ error: "Plaid is not configured" });
+      return;
+    }
     req.log.error({ err }, "Failed to sync Plaid transactions");
     res.status(500).json({ error: plaidError(err) });
   }
@@ -785,222 +364,6 @@ router.delete("/plaid/disconnect/:itemId", async (req, res) => {
 
   res.json({ success: true, removedAccounts: removedCount });
 });
-
-// ── Helpers ───────────────────────────────────────────────────────────────
-
-function buildSecMap(securities: any[]): Map<string, any> {
-  const m = new Map<string, any>();
-  for (const s of securities) m.set(s.security_id, s);
-  return m;
-}
-
-function mapHolding(h: any, secMap: Map<string, any>) {
-  const sec = secMap.get(h.security_id);
-  const qty = (h.quantity ?? 0) as number;
-  const instValue = h.institution_value as number | null;
-  const instPrice = h.institution_price as number | null;
-  const closePrice = sec?.close_price as number | null;
-  // Best-effort value: institution_value → institution_price*qty → close_price*qty
-  let value = 0;
-  if (instValue != null && instValue > 0) {
-    value = instValue;
-  } else if (instPrice != null && instPrice > 0 && qty > 0) {
-    value = qty * instPrice;
-  } else if (closePrice != null && closePrice > 0 && qty > 0) {
-    value = qty * closePrice;
-  }
-  return {
-    plaidAccountId: h.account_id as string,
-    ticker: (sec?.ticker_symbol as string | null) ?? null,
-    name: (sec?.name ?? "Unknown") as string,
-    securityType: (sec?.type ?? "other") as string,
-    quantity: qty,
-    value,
-    costBasis: (h.cost_basis ?? null) as number | null,
-    currency: (h.iso_currency_code ?? h.unofficial_currency_code ?? "CAD") as string,
-    asOf: (h.institution_price_as_of ?? sec?.close_price_as_of ?? null) as string | null,
-  };
-}
-
-function mapInvestmentTransaction(t: any, secMap: Map<string, any>) {
-  const sec = secMap.get(t.security_id);
-  return {
-    plaidTxId: t.investment_transaction_id as string,
-    plaidAccountId: t.account_id as string,
-    date: t.date as string,
-    name: (sec?.name ?? t.name ?? "Unknown") as string,
-    ticker: (sec?.ticker_symbol ?? null) as string | null,
-    type: (t.type ?? "other") as string,
-    subtype: (t.subtype ?? null) as string | null,
-    quantity: (t.quantity ?? null) as number | null,
-    amount: Math.abs(t.amount ?? 0) as number,
-    fees: (t.fees ?? null) as number | null,
-    currency: (t.iso_currency_code ?? t.unofficial_currency_code ?? "CAD") as string,
-  };
-}
-
-function mapAccountType(
-  type: string,
-  subtype: string | null
-): "checking" | "savings" | "credit" | "investment" {
-  if (type === "credit" || type === "loan") return "credit";
-  if (type === "investment" || type === "brokerage") return "investment";
-  if (subtype === "savings" || subtype === "money market" || subtype === "cd") return "savings";
-  return "checking";
-}
-
-const LOWERCASE_PREP = new Set(["from","to","and","or","of","in","at","by","for","the","a","an"]);
-function toTitleCase(str: string): string {
-  return str
-    .trim()
-    .replace(/\b\w+/g, (w, offset) => {
-      const lower = w.toLowerCase();
-      if (offset > 0 && LOWERCASE_PREP.has(lower)) return lower;
-      return w.charAt(0).toUpperCase() + w.slice(1).toLowerCase();
-    });
-}
-
-function cleanPlaidName(merchantName: string | null | undefined, rawName: string | null | undefined): string {
-  const raw = (rawName ?? "").trim();
-  const merchant = (merchantName ?? "").trim();
-
-  // Strip BMO / Canadian-bank bracket prefix codes e.g. [CW], [TF], [IN], [SC]
-  let s = raw.replace(/^\[[A-Z]{2,3}\]\s*/i, "");
-
-  // Empty after stripping → interest charge
-  if (!s) return "Interest";
-
-  // Interac e-Transfer received
-  const interacIn = s.match(/^VIR\s+INTERAC\s+REC[UÇ]?\s+([A-Z][A-Z\s]+?)(?:\s+\d{10,})?$/i);
-  if (interacIn) return `Interac from ${toTitleCase(interacIn[1])}`;
-
-  // Interac e-Transfer sent
-  const interacOut = s.match(/^VIR\s+INTERAC\s+ENV[OO]Y[EÉ]?\s+([A-Z][A-Z\s]+?)(?:\s+\d{10,})?$/i);
-  if (interacOut) return `Interac to ${toTitleCase(interacOut[1])}`;
-
-  // Wire / internal transfer (TF XXXX#ref)
-  if (/^TF[\s#]/i.test(s) || /^VIREMENT/i.test(s)) {
-    const clean = s
-      .replace(/^TF\s*/i, "")
-      .replace(/\s*#[\d\-]+/g, "")
-      .replace(/\b\d+\b/g, "")
-      .replace(/\s+/g, " ")
-      .trim();
-    return clean.length >= 3 ? toTitleCase(clean) : "Wire Transfer";
-  }
-
-  // Mortgage
-  if (/MTG|HYP/i.test(s)) return "Mortgage Payment";
-
-  // Strip trailing transaction IDs and reference codes
-  s = s.replace(/\s+\d{10,}$/, "").replace(/\s+#[\d\-]+$/, "").replace(/\s+\d{4}$/, "").trim();
-
-  // French service charge refund
-  if (/remboursement des frais/i.test(s)) return "Service Fee Refund";
-  if (/programme performance/i.test(s)) return "Programmes & Fees";
-
-  // If raw still looks like a garbled abbreviation (all-caps run-together ≤ 10 chars)
-  // prefer merchant_name if it's longer and more readable
-  if (s.length <= 10 && /^[A-Z]+$/.test(s) && merchant && merchant.length > s.length) {
-    s = merchant;
-  }
-
-  // If cleaned raw is meaningful use it; otherwise fall back to merchant_name or raw
-  let candidate = (merchant && merchant.length >= 3) ? merchant : (s.length >= 3 ? s : (merchant || raw));
-
-  // Strip payment processor prefixes
-  candidate = candidate.replace(/^(SQ\s*\*|SQR\*|TST\*|SP\s*\*|PAYPAL\s*\*|PP\*|PYPL\s*\*|APL\*|AMZN\*|AMZ\*|GOOGLE\s*\*|VENMO\s*\*|STRIPE\s*\*|KLARNA\s*\*)\s*/i, "");
-
-  // Strip phone numbers & URLs
-  candidate = candidate.replace(/\b1?[-.\s]?(8\d{2}|\d{3})[-.\s]\d{3}[-.\s]\d{4}\b/g, " ");
-  candidate = candidate.replace(/\b([a-zA-Z0-9-]+\.)+(com|ca|org|net|io|co)(\/[^\s]*)?/gi, " ");
-
-  // Strip store tags, codes and symbols
-  candidate = candidate.replace(/#\s*[\w\d-]+/g, " ");
-  candidate = candidate.replace(/\b(store|loc|st|branch|terminal|term|pos|auth|ref|trans|id)\s*#?\s*\d+\b/gi, " ");
-  candidate = candidate.replace(/[*_~^+\\/|&@$%=;]/g, " ");
-
-  // Extract pure words (no numbers) and clamp to at most 3 words
-  const words: string[] = [];
-  for (const rawToken of candidate.split(/\s+/)) {
-    const token = rawToken.replace(/^[^a-zA-Z]+|[^a-zA-Z]+$/g, "");
-    if (!token || /\d/.test(token)) continue;
-    if (token.length === 1 && token.toLowerCase() !== "a") continue;
-    words.push(token.charAt(0).toUpperCase() + token.slice(1).toLowerCase());
-    if (words.length === 3) break;
-  }
-
-  return words.length > 0 ? words.join(" ") : (toTitleCase(merchant || raw) || "Transaction");
-}
-
-/** Map Plaid primary + optional detailed category → exact app category name */
-function mapPlaidCategory(primary: string, detailed?: string): string {
-  const d = (detailed ?? "").toUpperCase();
-  switch (primary) {
-    case "FOOD_AND_DRINK":
-      if (d.includes("GROCERIES") || d.includes("SUPERMARKETS")) return "Food & Grocery";
-      return "Drink & Dine"; // restaurants, fast food, coffee, bars
-    case "GENERAL_MERCHANDISE":
-      return "Shopping";
-    case "TRANSPORTATION":
-      return "Transport";
-    case "TRAVEL":
-      return "Travel & Vacation";
-    case "ENTERTAINMENT":
-      return "Entertainment";
-    case "PERSONAL_CARE":
-      return "Personal Care";
-    case "MEDICAL":
-      return "Health & Fitness";
-    case "RENT_AND_UTILITIES":
-      return "Bills & Utilities";
-    case "HOME_IMPROVEMENT":
-      return "House";
-    case "INCOME":
-      if (d.includes("WAGES") || d.includes("PAYROLL") || d.includes("SALARY")) return "Salary";
-      return "Business";
-    case "TRANSFER_IN":
-    case "TRANSFER_OUT":
-      return "Transfer";
-    case "LOAN_PAYMENTS":
-      return "Loan & Debts";
-    case "BANK_FEES":
-      return "Fees & Charges";
-    case "GOVERNMENT_AND_NON_PROFIT":
-      return "Others";
-    case "GENERAL_SERVICES":
-      return "Others";
-    default:
-      return "Others";
-  }
-}
-
-function mapPlaidTransaction(t: any, bankName: string) {
-  const amount = typeof t.amount === "number" ? t.amount : 0;
-  const primary: string =
-    t.personal_finance_category?.primary ??
-    (Array.isArray(t.category) ? t.category[0] : null) ??
-    "OTHER";
-  const detailed: string | undefined = t.personal_finance_category?.detailed;
-  const merchant: string = t.merchant_name ?? "";
-  const title = cleanPlaidName(merchant, t.name);
-
-  return {
-    plaidTransactionId: t.transaction_id as string,
-    pending: t.pending as boolean,
-    pendingTransactionId: t.pending_transaction_id as string | null,
-    title,
-    merchant: merchant || title,
-    amount: Math.abs(amount),
-    type: amount > 0 ? ("expense" as const) : ("income" as const),
-    category: mapPlaidCategory(primary, detailed),
-    // Prefer authorized_date (actual purchase day) over the posted date
-    date: (t.authorized_date ?? t.date ?? new Date().toISOString().slice(0, 10)) as string,
-    accountId: t.account_id as string,
-    plaidAccountId: t.account_id as string,
-    bank: bankName,
-  };
-}
 
 // ── GET /api/plaid/link-page (exported for public registration in routes/index.ts) ──
 // Served as a popup window — no household auth needed since the browser

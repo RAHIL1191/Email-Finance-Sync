@@ -299,6 +299,17 @@ router.post("/transactions/bulk", async (req, res) => {
         const otherTx = candidatesForFuzzy[j];
         if (duplicatesToEvictFuzzy.has(otherTx.id)) continue;
 
+        // Never evict distinct Plaid transactions with different plaidTransactionIds
+        if (primaryTx.plaidTransactionId && otherTx.plaidTransactionId && primaryTx.plaidTransactionId !== otherTx.plaidTransactionId) {
+          continue;
+        }
+
+        // Fuzzy match should ONLY collapse pending into posted, not two distinct posted purchases!
+        const hasPendingAndPosted = (primaryTx.pending && !otherTx.pending) || (!primaryTx.pending && otherTx.pending);
+        if (!hasPendingAndPosted) {
+          continue;
+        }
+
         const isMatch = (
           primaryTx.accountId === otherTx.accountId &&
           (primaryTx.type || "expense") === (otherTx.type || "expense") &&
@@ -320,16 +331,14 @@ router.post("/transactions/bulk", async (req, res) => {
             }
           }
 
-          const w1 = s1.split(/\s+/).filter(w => w.length >= 3 && !["the","inc","ltd","llc","corp","preauthorized","debit","retail","purchase"].includes(w));
-          const w2 = s2.split(/\s+/).filter(w => w.length >= 3 && !["the","inc","ltd","llc","corp","preauthorized","debit","retail","purchase"].includes(w));
-          const commonWords = w1.filter(w => w2.includes(w));
+          const w1 = s1.split(/\s+/).filter((w: string) => w.length >= 3 && !["the","inc","ltd","llc","corp","preauthorized","debit","retail","purchase"].includes(w));
+          const w2 = s2.split(/\s+/).filter((w: string) => w.length >= 3 && !["the","inc","ltd","llc","corp","preauthorized","debit","retail","purchase"].includes(w));
+          const commonWords = w1.filter((w: string) => w2.includes(w));
           const isTitleMatch = s1 === s2 || (commonWords.length >= 1 && (s1.includes(s2) || s2.includes(s1) || commonWords[0].length >= 4));
 
           if (isTitleMatch) {
-            let toEvict = otherTx.id;
-            if (primaryTx.pending && !otherTx.pending) {
-              toEvict = primaryTx.id;
-            }
+            // Evict the pending transaction in favor of the posted one
+            const toEvict = primaryTx.pending ? primaryTx.id : otherTx.id;
             duplicatesToEvictFuzzy.add(toEvict);
             if (toEvict === primaryTx.id) break;
           }
@@ -413,7 +422,7 @@ router.put("/transactions/:id", validate(updateTransactionSchema), async (req, r
   try {
     const [row] = await db
       .update(transactionsTable)
-      .set({ ...(req.body as Record<string, unknown>), updatedAt: new Date() } as any)
+      .set({ ...(req.body as Record<string, unknown>), isUserEdited: true, updatedAt: new Date() } as any)
       .where(
         and(
           eq(transactionsTable.id, String(req.params.id)),
