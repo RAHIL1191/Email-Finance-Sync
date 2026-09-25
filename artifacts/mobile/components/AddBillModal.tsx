@@ -90,7 +90,10 @@ export default function AddBillModal({ visible, onClose }: Props) {
   const [amount, setAmount] = useState("");
   const [category, setCategory] = useState("Other");
   const [dueDate, setDueDate] = useState(new Date());
+  const [isPaid, setIsPaid] = useState(false);
+  const [paidDate, setPaidDate] = useState(new Date());
   const [showDatePicker, setShowDatePicker] = useState(false);
+  const [showPaidDatePicker, setShowPaidDatePicker] = useState(false);
   const [showCatPicker, setShowCatPicker] = useState(false);
   const [isRecurring, setIsRecurring] = useState(true);
   const [frequency, setFrequency] = useState<"weekly" | "monthly" | "yearly">("monthly");
@@ -112,7 +115,8 @@ export default function AddBillModal({ visible, onClose }: Props) {
       amount: parsed,
       dueDate: toLocalYMD(dueDate),
       category,
-      isPaid: false,
+      isPaid,
+      paidDate: isPaid ? toLocalYMD(paidDate) : undefined,
       isRecurring,
       frequency: isRecurring ? frequency : undefined,
       remindDays,
@@ -121,6 +125,8 @@ export default function AddBillModal({ visible, onClose }: Props) {
     setAmount("");
     setCategory("Other");
     setDueDate(new Date());
+    setIsPaid(false);
+    setPaidDate(new Date());
     setRemindDays("3");
     onClose();
   };
@@ -295,6 +301,69 @@ export default function AddBillModal({ visible, onClose }: Props) {
                 ))}
               </View>
             )}
+          </View>
+
+          <View style={styles.section}>
+            <TouchableOpacity
+              style={[
+                styles.toggleRow,
+                { backgroundColor: colors.card, borderColor: colors.border },
+              ]}
+              onPress={() => setIsPaid(!isPaid)}
+            >
+              <Text style={[styles.toggleLabel, { color: colors.foreground }]}>
+                Already Paid
+              </Text>
+              <View
+                style={[
+                  styles.toggle,
+                  { backgroundColor: isPaid ? "#10b981" : colors.muted },
+                ]}
+              >
+                <View
+                  style={[
+                    styles.toggleThumb,
+                    { transform: [{ translateX: isPaid ? 20 : 2 }] },
+                  ]}
+                />
+              </View>
+            </TouchableOpacity>
+
+            {isPaid && (
+              <TouchableOpacity
+                style={[
+                  styles.input,
+                  {
+                    backgroundColor: colors.card,
+                    borderColor: colors.border,
+                    flexDirection: "row",
+                    justifyContent: "space-between",
+                    alignItems: "center",
+                    marginTop: 8,
+                  },
+                ]}
+                onPress={() => setShowPaidDatePicker(true)}
+              >
+                <View>
+                  <Text style={{ color: colors.foreground, fontFamily: "Inter_400Regular", fontSize: 15 }}>
+                    {paidDate.toLocaleDateString("en-US", {
+                      month: "short",
+                      day: "numeric",
+                      year: "numeric",
+                    })}
+                  </Text>
+                  <Text style={{ fontSize: 11, color: "#10b981", marginTop: 2 }}>Paid Date</Text>
+                </View>
+                <Feather name="calendar" size={16} color="#10b981" />
+              </TouchableOpacity>
+            )}
+            <BillDatePickerModal
+              visible={showPaidDatePicker}
+              date={paidDate}
+              onChange={(d) => setPaidDate(d)}
+              onClose={() => setShowPaidDatePicker(false)}
+              colors={colors}
+            />
           </View>
         </KeyboardAwareScrollView>
       </View>

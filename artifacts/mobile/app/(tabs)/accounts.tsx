@@ -4,10 +4,12 @@ import { router } from "expo-router";
 import React, { useMemo, useState } from "react";
 import {
   ActivityIndicator,
+  Alert,
   Dimensions,
   Linking,
   Modal,
   Platform,
+  RefreshControl,
   ScrollView,
   StyleSheet,
   Switch,
@@ -24,6 +26,8 @@ import { LinearGradient as ExpoLinearGradient } from "expo-linear-gradient";
 import AddAccountModal from "@/components/AddAccountModal";
 import ConfirmModal from "@/components/ConfirmModal";
 import PlaidLinkModal from "@/components/PlaidLinkModal";
+import SyncStatusModal from "@/components/SyncStatusModal";
+import type { SyncSummaryResult } from "@/context/AppContext";
 import {
   Account,
   PlaidItem,
@@ -538,6 +542,7 @@ export default function AccountsScreen() {
     emailSync,
     userName,
     totalBalance,
+    refreshAllAccountsAndTransactions,
   } = useApp();
 
   const [activeFilter, setActiveFilter] = useState<FilterType>("All");
@@ -547,6 +552,30 @@ export default function AccountsScreen() {
   const [showEmailConnect, setShowEmailConnect] = useState(false);
   const [showInstitutions, setShowInstitutions] = useState(false);
   const [relinkItem, setRelinkItem] = useState<PlaidItem | null>(null);
+  const [refreshing, setRefreshing] = useState(false);
+  const [syncResult, setSyncResult] = useState<SyncSummaryResult | null>(null);
+  const [showSyncModal, setShowSyncModal] = useState(false);
+
+  const handleRefresh = async () => {
+    setRefreshing(true);
+    try {
+      const res = await refreshAllAccountsAndTransactions();
+      setSyncResult(res);
+      setShowSyncModal(true);
+      if (res.needsAttention) {
+        Haptics.notificationAsync(Haptics.NotificationFeedbackType.Warning);
+      } else {
+        Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
+      }
+    } catch (err: any) {
+      Alert.alert(
+        "Sync Error",
+        err?.message || "Failed to refresh accounts. Please check your network connection."
+      );
+    } finally {
+      setRefreshing(false);
+    }
+  };
 
   // Greeting based on hour
   const greeting = useMemo(() => {
@@ -653,6 +682,13 @@ export default function AccountsScreen() {
         contentContainerStyle={{
           paddingBottom: Platform.OS === "web" ? 34 + 84 : insets.bottom + 84,
         }}
+        refreshControl={
+          <RefreshControl
+            refreshing={refreshing}
+            onRefresh={handleRefresh}
+            tintColor="#2563EB"
+          />
+        }
       >
         {/* ── Header: Accounts Title & Circular Add (+) Button ── */}
         <View style={styles.headerSection}>
@@ -908,6 +944,25 @@ export default function AccountsScreen() {
         onAddEmail={() => {
           setShowInstitutions(false);
           setTimeout(() => setShowEmailConnect(true), 350);
+        }}
+      />
+      <SyncStatusModal
+        visible={showSyncModal}
+        result={syncResult}
+        onClose={() => setShowSyncModal(false)}
+        onReconnect={(itemId, bankName) => {
+          const match = plaidSync.items.find((i) => i.itemId === itemId);
+          if (match) {
+            setRelinkItem(match);
+          } else {
+            setRelinkItem({
+              itemId,
+              bankName,
+              bankColor: "#2563EB",
+              connectedAt: new Date().toISOString(),
+              accountIds: [],
+            });
+          }
         }}
       />
     </SafeAreaView>

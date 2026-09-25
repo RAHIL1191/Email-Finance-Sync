@@ -1,5 +1,6 @@
 import AsyncStorage from "@react-native-async-storage/async-storage";
-import { AppState, Platform } from "react-native";
+import { Alert, AppState, Platform } from "react-native";
+import * as Haptics from "expo-haptics";
 import { router } from "expo-router";
 import {
   cancelBillNotifications,
@@ -14,6 +15,8 @@ import {
   cancelTaskDueNotification,
   checkBudgetAndNotify,
 } from "@/services/notificationService";
+import { reconcileNotifications } from "@/services/notificationReconciler";
+import { consumePendingNotifActions } from "@/services/notificationActionBridge";
 import { parseLocalDate, toLocalYMD, localYM } from "@/hooks/useLocalDate";
 import SnoozeModal from "@/components/SnoozeModal";
 import React, {
@@ -57,6 +60,8 @@ export interface Transaction {
   pending?: boolean;
   pendingTransactionId?: string | null;
 }
+
+export { formatTxCleanTitle } from "@/utils/formatTxTitle";
 
 export function parseNoteAndTag(raw: string | undefined): { cleanNote: string; tag: string } {
   if (!raw) return { cleanNote: "", tag: "" };
@@ -135,8 +140,10 @@ export interface Bill {
   title: string;
   amount: number;
   dueDate: string;
+  endDate?: string;
   category: string;
   isPaid: boolean;
+  paidDate?: string;
   isRecurring: boolean;
   frequency?: "daily" | "weekly" | "biweekly" | "monthly" | "quarterly" | "semiannual" | "yearly";
   accountId?: string;
@@ -301,6 +308,25 @@ export interface PlaidSync {
   items: PlaidItem[];
 }
 
+export interface AccountSyncStatus {
+  itemId: string;
+  bankName: string;
+  imported: number;
+  error?: string;
+  needsRelogin?: boolean;
+}
+
+export interface SyncSummaryResult {
+  totalImported: number;
+  accountsChecked: number;
+  items: AccountSyncStatus[];
+  emailImported?: number;
+  emailError?: string;
+  needsAttention: boolean;
+  allUpToDate: boolean;
+  timestamp: string;
+}
+
 export interface InvestmentTransaction {
   id: string;
   plaidTxId: string;
@@ -409,7 +435,7 @@ interface AppContextType {
   addBill: (b: Omit<Bill, "id">) => void;
   updateBill: (id: string, b: Partial<Bill>) => void;
   deleteBill: (id: string) => void;
-  markBillPaid: (id: string, newAmount?: number, options?: { skipAddTransaction?: boolean }) => void;
+  markBillPaid: (id: string, newAmount?: number, options?: { skipAddTransaction?: boolean; paidDate?: string }) => void;
   billReviewMatches: BillReviewMatch[];
   approveBillReviewMatch: (matchId: string) => void;
   dismissBillReviewMatch: (matchId: string) => void;
@@ -471,6 +497,7 @@ interface AppContextType {
   clearAllAlerts: () => void;
   deleteAlert: (id: string) => void;
   refreshTransactionsFromServer: () => Promise<void>;
+  refreshAllAccountsAndTransactions: (options?: { force?: boolean; showPopup?: boolean }) => Promise<SyncSummaryResult>;
   lastAutoSyncTime: number;
 }
 
@@ -1584,6 +1611,7 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
   const accountsRef = useRef<Account[]>([]);
   const transactionsRef = useRef<Transaction[]>([]);
   const syncLockRef = useRef(false);
+  const itemLastAttemptRef = useRef<Record<string, number>>({});
   const billsRef = useRef<Bill[]>([]);
   const budgetsRef = useRef<Budget[]>([]);
   const goalsRef = useRef<Goal[]>([]);
@@ -1603,6 +1631,8 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
   }, [categories]);
   const plaidSyncRef = useRef<PlaidSync>({ items: [] });
   useEffect(() => { plaidSyncRef.current = plaidSync; }, [plaidSync]);
+  const emailSyncRef = useRef<EmailSync>(emailSync);
+  useEffect(() => { emailSyncRef.current = emailSync; }, [emailSync]);
   useEffect(() => { transactionsRef.current = transactions; }, [transactions]);
   useEffect(() => { billsRef.current = bills; }, [bills]);
   useEffect(() => { budgetsRef.current = budgets; }, [budgets]);
@@ -1804,6 +1834,21 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
           AsyncStorage.setItem(STORAGE_KEYS.tasks, JSON.stringify(healedTasks)).catch(() => {});
         }
         setupTaskNotificationsOnInit(healedTasks);
+        // Run reconciler after init to clean up any orphaned notifications
+        reconcileNotifications(healedTasks, migratedBills).catch(() => {});
+        // Consume any pending background notification actions (complete/snooze pressed while killed)
+        consumePendingNotifActions().then((actions) => {
+          for (const action of actions) {
+            if (action.action === 'complete') {
+              if (action.entityType === 'task') {
+                setTasks((prev) => prev.map((t) => t.id === action.entityId ? { ...t, isCompleted: true, updatedAt: new Date().toISOString() } : t));
+              } else if (action.entityType === 'bill') {
+                setBills((prev) => prev.map((b) => b.id === action.entityId ? { ...b, isPaid: true, updatedAt: new Date().toISOString() } : b));
+              }
+            }
+            // Snooze actions are already handled by the background handler rescheduling via notifeeService
+          }
+        }).catch(() => {});
         setProjects(projectRaw ? JSON.parse(projectRaw) : []);
         setCategoryRules(rulesRaw ? JSON.parse(rulesRaw) : []);
         if (emailRaw) setEmailSync(JSON.parse(emailRaw));
@@ -1813,34 +1858,12 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
         if (storedUserName) setUserNameState(storedUserName);
         if (storedReviewedIds) setReviewedTransactionIds(JSON.parse(storedReviewedIds));
 
-        // Parse alerts or seed default matching screenshot
+        // Parse stored alerts
         let loadedAlerts: AlertLog[] = [];
         if (alertsRaw) {
           try {
             loadedAlerts = JSON.parse(alertsRaw);
           } catch {}
-        }
-        if (loadedAlerts.length === 0) {
-          const makeRelDate = (daysAgo: number, hours = 9, minutes = 0) => {
-            const d = new Date();
-            d.setDate(d.getDate() - daysAgo);
-            d.setHours(hours, minutes, 0, 0);
-            return d.toISOString();
-          };
-          loadedAlerts = [
-            { id: "s1", title: "4 overdue bills", body: "Electricity, Electricity, Electricity, Electricity", type: "bill", date: makeRelDate(0, 8, 29), isRead: false },
-            { id: "s2", title: "4 overdue bills", body: "Electricity, Electricity, Electricity, Electricity", type: "bill", date: makeRelDate(1, 15, 30), isRead: true },
-            { id: "s3", title: "3 overdue bills", body: "Electricity, Electricity, Electricity", type: "bill", date: makeRelDate(2, 11, 20), isRead: true },
-            { id: "s4", title: "3 overdue bills", body: "Electricity, Electricity, Electricity", type: "bill", date: makeRelDate(3, 10, 15), isRead: true },
-            { id: "s5", title: "3 overdue bills", body: "Electricity, Electricity, Electricity", type: "bill", date: makeRelDate(4, 9, 0), isRead: true },
-            { id: "s6", title: "3 overdue bills", body: "Electricity, Electricity, Electricity", type: "bill", date: makeRelDate(5, 8, 45), isRead: true },
-            { id: "s7", title: "3 overdue bills", body: "Electricity, Electricity, Electricity", type: "bill", date: makeRelDate(6, 17, 10), isRead: true },
-            { id: "s8", title: "3 overdue bills", body: "Electricity, Electricity, Electricity", type: "bill", date: makeRelDate(7, 14, 25), isRead: true },
-            { id: "s9", title: "Payment: Electricity", body: "Due Today", type: "bill", date: makeRelDate(8, 8, 0), isRead: true },
-            { id: "s10", title: "2 overdue bills", body: "Electricity, Electricity", type: "bill", date: makeRelDate(8, 8, 30), isRead: true },
-            { id: "s11", title: "2 overdue bills", body: "Electricity, Electricity", type: "bill", date: makeRelDate(9, 10, 0), isRead: true },
-            { id: "s12", title: "Upcoming: Electricity", body: "Due in 1d", type: "bill", date: makeRelDate(9, 8, 15), isRead: true },
-          ];
         }
         setAlerts(loadedAlerts);
         if (dismissedKeysRaw) {
@@ -2024,11 +2047,10 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
             .then(async (r) => {
               if (r.ok) {
                 const remoteBills: Bill[] = await r.json();
-                mergeById(setBills, remoteBills);
-                const remoteIds = new Set((remoteBills || []).map((b) => b.id));
-                const missingOnServer = (billsRef.current || []).filter((b) => !remoteIds.has(b.id));
-                if (missingOnServer.length > 0) {
-                  apiCall("/api/bills/batch", "POST", hId, dId, { bills: missingOnServer });
+                if (Array.isArray(remoteBills)) {
+                  setBills(remoteBills);
+                  billsRef.current = remoteBills;
+                  AsyncStorage.setItem(STORAGE_KEYS.bills, JSON.stringify(remoteBills)).catch(() => {});
                 }
               }
             }),
@@ -2551,11 +2573,17 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
           }
         }
 
-        if (updated.reminderEnabled && updated.reminderDate)
-          scheduleTaskReminder({ id: updated.id, title: updated.title, reminderDate: updated.reminderDate, reminderFrequency: updated.reminderFrequency, notes: updated.notes });
-        else cancelTaskReminder(id);
+        if (updated.isCompleted) {
+          // Task completed — cancel all notifications (reconciler will also clean up)
+          cancelTaskReminder(id);
+          cancelTaskDueNotification(id);
+        } else {
+          if (updated.reminderEnabled && updated.reminderDate)
+            scheduleTaskReminder({ id: updated.id, title: updated.title, reminderDate: updated.reminderDate, reminderFrequency: updated.reminderFrequency, notes: updated.notes });
+          else cancelTaskReminder(id);
 
-        scheduleTaskDueNotification({ id: updated.id, title: updated.title, dueDate: updated.dueDate, notes: updated.notes });
+          scheduleTaskDueNotification({ id: updated.id, title: updated.title, dueDate: updated.dueDate, notes: updated.notes });
+        }
         return updated;
       });
 
@@ -2624,9 +2652,15 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
   }, []);
 
   const deleteBill = useCallback((id: string) => {
-    setBills((prev) => prev.filter((b) => b.id !== id));
-    apiCall(`/api/bills/${id}`, "DELETE", householdIdRef.current, deviceIdRef.current);
-    cancelBillNotifications(id);
+    const actualId = id.includes("_occ_") ? id.split("_occ_")[0] : id;
+    billsRef.current = billsRef.current.filter((b) => b.id !== actualId);
+    setBills((prev) => {
+      const next = prev.filter((b) => b.id !== actualId);
+      AsyncStorage.setItem(STORAGE_KEYS.bills, JSON.stringify(next)).catch(() => {});
+      return next;
+    });
+    apiCall(`/api/bills/${actualId}`, "DELETE", householdIdRef.current, deviceIdRef.current);
+    cancelBillNotifications(actualId);
   }, []);
 
   const addProject = useCallback((p: Omit<Project, "id" | "createdAt">): string => {
@@ -2906,7 +2940,7 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
   }, []);
 
   const markBillPaid = useCallback(
-    (id: string, newAmount?: number, options?: { skipAddTransaction?: boolean }) => {
+    (id: string, newAmount?: number, options?: { skipAddTransaction?: boolean; paidDate?: string }) => {
       // Resolve virtual occurrence IDs (e.g. "bill-123_occ_1716148800000")
       let actualId = id;
       let occDueDate: string | null = null;
@@ -2921,6 +2955,7 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
       if (!bill) return;
 
       const finalAmount = newAmount !== undefined ? newAmount : bill.amount;
+      const finalPaidDate = options?.paidDate || new Date().toISOString().split("T")[0];
 
       if (bill.isRecurring && bill.frequency) {
         const baseDue = new Date(occDueDate ?? bill.dueDate);
@@ -2940,6 +2975,7 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
           dueDate: baseDue.toISOString(),
           amount: finalAmount,
           isPaid: true,
+          paidDate: finalPaidDate,
           isRecurring: false,
           frequency: undefined,
         };
@@ -2948,19 +2984,19 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
           paidRecord,
         ]);
       } else {
-        setBills((prev) => prev.map((b) => (b.id === actualId ? { ...b, isPaid: true, amount: finalAmount } : b)));
+        setBills((prev) => prev.map((b) => (b.id === actualId ? { ...b, isPaid: true, paidDate: finalPaidDate, amount: finalAmount } : b)));
       }
 
-      apiCall(`/api/bills/${actualId}/pay`, "POST", householdIdRef.current, deviceIdRef.current);
+      apiCall(`/api/bills/${actualId}/pay`, "POST", householdIdRef.current, deviceIdRef.current, { paidDate: finalPaidDate });
       cancelBillNotifications(actualId);
-      if (!options?.skipAddTransaction) {
+      if (!options?.skipAddTransaction && bill.addExpenseEntry) {
         addTransaction({
           title: bill.title,
           amount: finalAmount,
           type: "expense",
           category: bill.category,
           accountId: bill.accountId || accounts[0]?.id || "acc1",
-          date: new Date().toISOString(),
+          date: finalPaidDate,
           note: "Bill payment",
           source: "manual",
         });
@@ -3099,19 +3135,23 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
       await AsyncStorage.setItem(STORAGE_KEYS.accounts, JSON.stringify([]));
     }
     if (set.has("bills")) {
+      const toDelete = billsRef.current.filter((b) => {
+        const matchesAccount = !filters?.accountIds || (b.accountId && filters.accountIds.includes(b.accountId));
+        return matchesAccount;
+      });
+      billsRef.current = billsRef.current.filter((b) => !toDelete.some((d) => d.id === b.id));
       setBills((prev) => {
-        // Bills don't have transaction type, but if date range filters are set, we filter them out
-        // Just empty completely if no date range is set, or filter by date if they have a date/due date
-        const next = prev.filter((b) => {
-          // If bill matches filters, delete it
-          const matchesAccount = !filters?.accountIds || (b.accountId && filters.accountIds.includes(b.accountId));
-          // Note: bills don't have standard "date" field, so we just filter by account if specified, otherwise wipe
-          if (matchesAccount) return false;
-          return true;
-        });
-        AsyncStorage.setItem(STORAGE_KEYS.bills, JSON.stringify(next));
+        const next = prev.filter((b) => !toDelete.some((d) => d.id === b.id));
+        AsyncStorage.setItem(STORAGE_KEYS.bills, JSON.stringify(next)).catch(() => {});
         return next;
       });
+      if (!filters?.accountIds) {
+        apiCall("/api/bills", "DELETE", householdIdRef.current, deviceIdRef.current);
+      } else {
+        toDelete.forEach((b) => {
+          apiCall(`/api/bills/${b.id}`, "DELETE", householdIdRef.current, deviceIdRef.current);
+        });
+      }
     }
     if (set.has("budgets")) {
       setBudgets([]);
@@ -3150,7 +3190,7 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
           "X-Household-ID": householdIdRef.current,
           "X-Device-ID": deviceIdRef.current,
         },
-        body: JSON.stringify({ email: emailSync.email, appPassword: emailSync.appPassword, daysBack: 90 }),
+        body: JSON.stringify({ email: emailSync.email, appPassword: emailSync.appPassword, daysBack: 550 }),
       });
       const data = await res.json();
       if (!res.ok) {
@@ -3487,6 +3527,7 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
       }
       syncLockRef.current = true;
       setIsSyncing(true);
+      itemLastAttemptRef.current[itemId] = Date.now();
 
       try {
         // Build the account map first (before API call) so we can detect mismatches.
@@ -3909,6 +3950,18 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
       lastBillCheckRef.current = now;
       try { await setupNotificationsOnInit(billsRef.current); } catch { /* ignore */ }
       try { await detectBillPaymentsRef.current(); } catch { /* ignore */ }
+      // Trigger server-side notification check (tasks, bills, budgets, goals)
+      // Server validates state at send time — never sends stale notifications
+      try {
+        await fetch(`${getApiBase()}/api/notification-check`, {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json",
+            "X-Household-ID": householdIdRef.current,
+            "X-Device-ID": deviceIdRef.current,
+          },
+        });
+      } catch { /* ignore — server push is best-effort */ }
     };
 
     const doAutoSync = async () => {
@@ -3917,34 +3970,47 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
       if (!items || items.length === 0) return; // Wait until Plaid bank items are loaded from the database!
 
       const now = Date.now();
-      let lastTime = lastAutoSyncRef.current;
-      if (!lastTime || lastTime === 0) {
-        const itemTimes = items
-          .map((i) => (i.lastSynced ? new Date(i.lastSynced).getTime() : 0))
-          .filter((t) => !isNaN(t) && t > 0);
-        if (itemTimes.length > 0) {
-          lastTime = Math.max(...itemTimes);
-          lastAutoSyncRef.current = lastTime;
-          setLastAutoSyncTime(lastTime);
-        } else {
-          lastAutoSyncRef.current = now;
-          setLastAutoSyncTime(now);
-          AsyncStorage.setItem(STORAGE_KEYS.lastAutoSync, String(now)).catch(() => {});
-          return;
+      const FIFTEEN_MINUTES = 15 * 60 * 1000;
+      isAutoSyncingRef.current = true;
+      let anySuccess = false;
+
+      for (const item of items) {
+        // 1. Skip items that require user intervention to reconnect (e.g. 2FA expired, credentials changed)
+        if (item.needsRelogin) {
+          continue;
+        }
+
+        // 2. Check this specific bank's last successful sync time
+        const lastSyncMs = item.lastSynced ? new Date(item.lastSynced).getTime() : 0;
+        const isRecentlySynced = !isNaN(lastSyncMs) && lastSyncMs > 0 && now - lastSyncMs < THREE_HOURS;
+        if (isRecentlySynced) {
+          // This bank was already successfully synced less than 3 hours ago; leave it alone
+          continue;
+        }
+
+        // 3. Retry cooldown: if this bank was attempted recently (e.g. rate-limited or server error), wait 15 min
+        const lastAttemptMs = itemLastAttemptRef.current[item.itemId] || 0;
+        if (now - lastAttemptMs < FIFTEEN_MINUTES) {
+          continue;
+        }
+
+        // 4. This item is due for sync!
+        itemLastAttemptRef.current[item.itemId] = now;
+        try {
+          const res = await syncPlaidTransactionsRef.current(item.itemId);
+          if (res && !res.error) {
+            anySuccess = true;
+          }
+        } catch {
+          /* ignore error, cooldown prevents rapid re-runs */
         }
       }
 
-      // Enforce strict 3-hour minimum interval: do NOT sync if less than 3 hours have passed!
-      if (now - lastTime < THREE_HOURS) {
-        return;
-      }
-
-      isAutoSyncingRef.current = true;
-      lastAutoSyncRef.current = now;
-      setLastAutoSyncTime(now);
-      AsyncStorage.setItem(STORAGE_KEYS.lastAutoSync, String(now)).catch(() => {});
-      for (const item of items) {
-        try { await syncPlaidTransactionsRef.current(item.itemId); } catch { /* ignore */ }
+      if (anySuccess) {
+        const syncNowTs = Date.now();
+        lastAutoSyncRef.current = syncNowTs;
+        setLastAutoSyncTime(syncNowTs);
+        AsyncStorage.setItem(STORAGE_KEYS.lastAutoSync, String(syncNowTs)).catch(() => {});
       }
       isAutoSyncingRef.current = false;
     };
@@ -3979,7 +4045,16 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
             }
           }),
         fetch(`${base}/api/bills`, { headers: hdrs })
-          .then(async (r) => { if (r.ok) merge(setBills, await r.json()); }),
+          .then(async (r) => {
+            if (r.ok) {
+              const remoteBills: Bill[] = await r.json();
+              if (Array.isArray(remoteBills)) {
+                setBills(remoteBills);
+                billsRef.current = remoteBills;
+                AsyncStorage.setItem(STORAGE_KEYS.bills, JSON.stringify(remoteBills)).catch(() => {});
+              }
+            }
+          }),
         fetch(`${base}/api/budgets`, { headers: hdrs })
           .then(async (r) => { if (r.ok) merge(setBudgets, await r.json()); }),
         fetch(`${base}/api/goals`, { headers: hdrs })
@@ -3991,11 +4066,29 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
       ]).catch(() => {});
     };
 
-    const onForeground = () => {
+    const onForeground = async () => {
       checkBills();
       doAutoSync();
       pullAllFromDb();
       syncPresentedNotifications();
+      // Consume background notification actions and apply to state
+      try {
+        const pendingActions = await consumePendingNotifActions();
+        for (const action of pendingActions) {
+          if (action.action === 'complete') {
+            if (action.entityType === 'task') {
+              setTasks((prev) => prev.map((t) => t.id === action.entityId ? { ...t, isCompleted: true, updatedAt: new Date().toISOString() } : t));
+              cancelTaskReminder(action.entityId);
+              cancelTaskDueNotification(action.entityId);
+            } else if (action.entityType === 'bill') {
+              setBills((prev) => prev.map((b) => b.id === action.entityId ? { ...b, isPaid: true, updatedAt: new Date().toISOString() } : b));
+              cancelBillNotifications(action.entityId);
+            }
+          }
+        }
+      } catch {}
+      // Run reconciler to clean up stale notifications and schedule missing ones
+      reconcileNotifications(tasksRef.current, billsRef.current).catch(() => {});
     };
 
     const sub = AppState.addEventListener("change", (state) => {
@@ -4065,8 +4158,8 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
       const match = billReviewMatchesRef.current.find((m) => m.id === matchId);
       if (!match) return;
 
-      // Mark the bill as paid, updating recurring bill amount to transactionAmount
-      markBillPaid(match.billId, match.transactionAmount, { skipAddTransaction: true });
+      // Mark the bill as paid, updating recurring bill amount to transactionAmount and recording the exact transaction date
+      markBillPaid(match.billId, match.transactionAmount, { skipAddTransaction: true, paidDate: match.transactionDate });
 
       // Update match status to approved
       setBillReviewMatches((prev) =>
@@ -4124,97 +4217,187 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
         return d;
       };
 
-      const categoriesMatch = (billCategory: string, txCategory: string) => {
-        if (!billCategory || !txCategory) return false;
-        const b = billCategory.toLowerCase().trim();
-        const t = txCategory.toLowerCase().trim();
-        if (b === t || b.includes(t) || t.includes(b)) return true;
+      // Category Domain Mapping for strict domain separation
+      const CATEGORY_DOMAINS: Record<string, string[]> = {
+        housing: [
+          "house", "housing", "rent", "mortgage", "condo", "condo maintenance",
+          "maintenance", "apartment", "property", "hoa"
+        ],
+        utilities: [
+          "bills & utilities", "bills", "utilities", "electricity", "hydro", "water",
+          "gas", "power", "energy", "internet", "wifi", "mobile", "phone",
+          "telecom", "cellular", "broadband", "cable", "sewage & garbage"
+        ],
+        insurance: [
+          "insurance", "life insurance", "auto insurance", "home insurance",
+          "health insurance", "car insurance", "disability insurance", "travel insurance"
+        ],
+        education_childcare: [
+          "education", "tuition", "school", "daycare", "childcare", "kids care",
+          "family care", "camp", "books", "courses", "activities"
+        ],
+        loans_debt: [
+          "loan & debts", "loans & debts", "loan", "debt", "credit card", "car loan",
+          "student loan", "line of credit"
+        ],
+        subscriptions: [
+          "entertainment", "subscriptions", "streaming", "music", "movies", "tv", "games"
+        ],
+        taxes: [
+          "taxes", "tax", "property tax", "income tax", "municipal tax", "school tax"
+        ],
+        food_dining: [
+          "drink & dine", "food & grocery", "restaurant", "cafe", "fast food", "bar",
+          "delivery", "groceries", "snacks", "bakery", "meat & seafood"
+        ],
+        transport: [
+          "transport", "gas", "parking", "public transit", "ride share", "auto"
+        ],
+        shopping: [
+          "shopping", "personal care", "clothing", "electronics", "salon", "spa"
+        ],
+      };
 
-        // Utility / Telecom / Bill umbrella
-        const isUtil = (c: string) =>
-          /utilit|bill|electric|hydro|water|power|gas|internet|wifi|phone|mobile|telecom|cellular|broadband|energy/i.test(c);
-        if (isUtil(b) && isUtil(t)) return true;
-
-        // Housing / Rent umbrella
-        const isHousing = (c: string) =>
-          /house|home|rent|mortgage|lease|condo|apartment|maintenance/i.test(c);
-        if (isHousing(b) && isHousing(t)) return true;
-
-        // Insurance umbrella
-        const isInsurance = (c: string) => /insur/i.test(c);
-        if (isInsurance(b) && isInsurance(t)) return true;
-
-        // Subscriptions / Entertainment umbrella
-        const isSub = (c: string) =>
-          /entertain|stream|subscript|music|movie|game|tv/i.test(c);
-        if (isSub(b) && isSub(t)) return true;
-
-        // Check against DEFAULT_CAT_DEFS hierarchy
-        for (const def of DEFAULT_CAT_DEFS) {
-          const parentMatchesB = def.name.toLowerCase() === b || b.includes(def.name.toLowerCase());
-          const parentMatchesT = def.name.toLowerCase() === t || t.includes(def.name.toLowerCase());
-          if (def.subs) {
-            const hasSubB = def.subs.some((sub) => b.includes(sub.toLowerCase()));
-            const hasSubT = def.subs.some((sub) => t.includes(sub.toLowerCase()));
-            if ((parentMatchesB && hasSubT) || (parentMatchesT && hasSubB) || (hasSubB && hasSubT)) {
-              return true;
-            }
+      const getCategoryDomain = (catName: string): string | null => {
+        if (!catName) return null;
+        const lower = catName.toLowerCase().trim();
+        for (const [domain, keywords] of Object.entries(CATEGORY_DOMAINS)) {
+          for (const kw of keywords) {
+            if (lower === kw) return domain;
+            // Use word boundary to avoid matching "rent" inside "Saint-Laurent" or "gas" in "Vegas"
+            const regex = new RegExp(`\\b${kw.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}\\b`, "i");
+            if (regex.test(lower)) return domain;
           }
         }
+        return null;
+      };
+
+      // STRICT Category Compatibility Check
+      // First check: the transaction category MUST be compatible with the bill's category.
+      const areCategoriesCompatible = (billCategory: string, txCategory: string, billTitle?: string): boolean => {
+        const bCat = (billCategory || "").toLowerCase().trim();
+        const tCat = (txCategory || "").toLowerCase().trim();
+
+        // 1. Direct equality
+        if (bCat && tCat && bCat === tCat) return true;
+
+        // 2. Identify domains
+        const bDomain = getCategoryDomain(bCat) || (billTitle ? getCategoryDomain(billTitle) : null);
+        const tDomain = getCategoryDomain(tCat);
+
+        // 3. Contradictory check:
+        // A transaction in food/dining, shopping, or personal care can NEVER match a bill in housing, utilities, insurance, or loans!
+        const nonBillTxDomains = new Set(["food_dining", "shopping"]);
+        const fixedBillDomains = new Set(["housing", "utilities", "insurance", "education_childcare", "loans_debt", "taxes"]);
+
+        if (tDomain && nonBillTxDomains.has(tDomain) && bDomain && fixedBillDomains.has(bDomain)) {
+          return false;
+        }
+
+        // If both categories have identified domains, they MUST match
+        if (bDomain && tDomain) {
+          return bDomain === tDomain;
+        }
+
+        // 4. Fallback to DEFAULT_CAT_DEFS parent/sub check (with exact equality on name)
+        for (const def of DEFAULT_CAT_DEFS) {
+          const parentMatchesB = def.name.toLowerCase() === bCat;
+          const parentMatchesT = def.name.toLowerCase() === tCat;
+          const hasSubB = def.subs?.some((sub) => sub.toLowerCase() === bCat);
+          const hasSubT = def.subs?.some((sub) => sub.toLowerCase() === tCat);
+
+          if ((parentMatchesB && hasSubT) || (parentMatchesT && hasSubB) || (hasSubB && hasSubT)) {
+            return true;
+          }
+        }
+
+        // 5. If bill category is "Others" or "Misc Expenses" or empty, allowed for non-food/non-shopping txs
+        if (bCat === "others" || bCat === "misc expenses" || bCat === "") {
+          return tDomain !== "food_dining" && tDomain !== "shopping";
+        }
+
         return false;
       };
 
-      const titlesMatch = (billTitle: string, txTitle: string, txMerchant?: string, txNote?: string) => {
+      // Strict Title / Merchant Token Matcher (word boundaries, length >= 3, no stop words)
+      const areTitlesCompatible = (billTitle: string, txTitle: string, txMerchant?: string, txNote?: string): boolean => {
         if (!billTitle) return false;
         const bLower = billTitle.toLowerCase().trim();
         const tLower = (txTitle || "").toLowerCase().trim();
         const mLower = (txMerchant || "").toLowerCase().trim();
         const nLower = (txNote || "").toLowerCase().trim();
 
-        if (tLower && (tLower.includes(bLower) || bLower.includes(tLower))) return true;
-        if (mLower && (mLower.includes(bLower) || bLower.includes(mLower))) return true;
-        if (nLower && (nLower.includes(bLower) || bLower.includes(nLower))) return true;
+        // Exact whole-phrase match with word boundaries
+        const escapedB = bLower.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+        const bRegex = new RegExp(`\\b${escapedB}\\b`, "i");
+        if (bRegex.test(tLower) || bRegex.test(mLower) || bRegex.test(nLower)) return true;
 
         const stopWords = new Set([
-          "the", "and", "for", "bill", "payment", "fee", "sub", "subscription",
-          "monthly", "inc", "ltd", "llc", "corp", "co", "com", "due", "online"
+          "the", "and", "for", "bill", "bills", "payment", "payments", "fee", "fees",
+          "sub", "subscription", "monthly", "inc", "ltd", "llc", "corp", "co", "com",
+          "due", "online", "auto", "direct", "debit", "withdrawal", "preauth", "pad"
         ]);
+
         const tokenize = (s: string) =>
           s
             .toLowerCase()
             .replace(/[^a-z0-9]/g, " ")
             .split(/\s+/)
-            .filter((w) => w.length >= 2 && !stopWords.has(w));
+            .filter((w) => w.length >= 3 && !stopWords.has(w));
 
         const bTokens = tokenize(billTitle);
+        if (bTokens.length === 0) return false;
+
         const targetTokens = new Set([
           ...tokenize(txTitle || ""),
           ...tokenize(txMerchant || ""),
           ...tokenize(txNote || ""),
         ]);
+
         return bTokens.some((tok) => targetTokens.has(tok));
       };
 
-      const doesCategoryRelate = (bill: Bill, t: Transaction) => {
-        return (
-          categoriesMatch(bill.category, t.category) ||
-          categoriesMatch(bill.title, t.category) ||
-          categoriesMatch(bill.category, t.title)
-        );
-      };
+      // Clean up any stale or invalid review matches from previous buggy logic
+      const validReviews = currentReviews.filter((r) => {
+        const b = currentBills.find((bill) => bill.id === r.billId);
+        if (!b || b.isPaid) return false;
+        // Verify category compatibility
+        const catOk = areCategoriesCompatible(b.category || b.title, r.transactionCategory, b.title);
+        if (!catOk) return false;
+        // Verify reasonable amount variance
+        const maxVar = Math.max(15, b.amount * 0.20);
+        if (Math.abs(r.difference) > maxVar) return false;
+        if (r.transactionAmount < b.amount * 0.5 || r.transactionAmount > b.amount * 1.5) return false;
+        return true;
+      });
 
-      const doesTitleRelate = (bill: Bill, t: Transaction) => {
-        return (
-          titlesMatch(bill.title, t.title, t.merchant, t.note) ||
-          categoriesMatch(bill.title, t.category) ||
-          categoriesMatch(bill.title, t.title)
+      if (validReviews.length !== currentReviews.length) {
+        currentReviews.length = 0;
+        currentReviews.push(...validReviews);
+        billReviewMatchesRef.current = validReviews;
+        setBillReviewMatches(validReviews);
+        AsyncStorage.setItem(STORAGE_KEYS.billReviewMatches, JSON.stringify(validReviews)).catch(() => {});
+
+        // Clean up invalid review alerts from the alerts list
+        setAlerts((prev) =>
+          prev.filter((a) => {
+            if (a.type === "bill") {
+              const mentionsBogus =
+                a.body?.includes("-$524.27") ||
+                (a.body?.includes("Patisserie Dolci Piu") && a.body?.includes("Mortgage"));
+              if (mentionsBogus) return false;
+              if (a.stableKey?.startsWith("review_")) {
+                return validReviews.some((vr) => vr.id === a.stableKey);
+              }
+            }
+            return true;
+          })
         );
-      };
+      }
 
       for (const bill of currentBills) {
         if (bill.isPaid) continue;
         const due = getLocalDateMidnight(bill.dueDate);
-
         const cycleKey = `${bill.id}|${bill.dueDate.slice(0, 10)}`;
 
         // 1. Exact amount match within +- 4 days
@@ -4222,9 +4405,13 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
           if (t.type !== "expense") return false;
           const td = getLocalDateMidnight(t.date);
           if (Math.abs(td.getTime() - due.getTime()) > FOUR_DAYS_MS) return false;
-          const amountMatches = Math.abs(t.amount - bill.amount) < 0.01;
-          const related = doesCategoryRelate(bill, t) || doesTitleRelate(bill, t);
-          return amountMatches && related;
+          if (Math.abs(t.amount - bill.amount) >= 0.02) return false;
+
+          // FIRST check: category compatibility
+          const catOk = areCategoriesCompatible(bill.category, t.category, bill.title);
+          // If category matches, or if title has a strong matching token
+          const titleOk = areTitlesCompatible(bill.title, t.title, t.merchant, t.note);
+          return catOk || titleOk;
         });
 
         if (exactMatch) {
@@ -4247,13 +4434,35 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
           continue;
         }
 
-        // 2. Resemblance Match (both category AND title match, but amount differs/increased)
+        // 2. Resemblance Match:
+        // FIRST: Category MUST match!
+        // SECOND: Amount MUST be reasonably close (within max 20% or $15, never absurd difference)!
+        // THIRD: Title / Merchant MUST have a genuine matching token!
         const candidateTxs = currentTxs.filter((t) => {
           if (t.type !== "expense") return false;
           const td = getLocalDateMidnight(t.date);
           if (Math.abs(td.getTime() - due.getTime()) > FOUR_DAYS_MS) return false;
-          if (Math.abs(t.amount - bill.amount) < 0.01) return false;
-          return doesCategoryRelate(bill, t) && doesTitleRelate(bill, t);
+
+          // 1. FIRST CHECK: Category MUST be compatible
+          const catOk = areCategoriesCompatible(bill.category, t.category, bill.title);
+          if (!catOk) return false;
+
+          // 2. SECOND CHECK: Amount must be in realistic proximity
+          const diff = Math.abs(t.amount - bill.amount);
+          if (diff < 0.02) return false; // exact handled above
+
+          // Maximum allowed variance: 20% of bill amount (or max $15 for small bills)
+          const maxVariance = Math.max(15, bill.amount * 0.20);
+          if (diff > maxVariance) return false;
+
+          // Transaction amount must be between 50% and 150% of the bill amount
+          if (t.amount < bill.amount * 0.5 || t.amount > bill.amount * 1.5) return false;
+
+          // 3. THIRD CHECK: Title / Merchant MUST match
+          const titleOk = areTitlesCompatible(bill.title, t.title, t.merchant, t.note);
+          if (!titleOk) return false;
+
+          return true;
         });
 
         for (const cand of candidateTxs) {
@@ -4696,6 +4905,190 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
     } catch {}
   }, []);
 
+  const refreshAllAccountsAndTransactions = useCallback(
+    async (options?: { force?: boolean; showPopup?: boolean }): Promise<SyncSummaryResult> => {
+      const summary: SyncSummaryResult = {
+        totalImported: 0,
+        accountsChecked: 0,
+        items: [],
+        needsAttention: false,
+        allUpToDate: true,
+        timestamp: new Date().toISOString(),
+      };
+
+      const hId = householdIdRef.current;
+      const dId = deviceIdRef.current;
+
+      // 0. Ensure freshest list of Plaid items from server if available
+      if (hId) {
+        try {
+          const itemsRes = await fetch(`${getApiBase()}/api/plaid/items`, {
+            headers: { "X-Household-ID": hId, "X-Device-ID": dId },
+            signal: createTimeoutSignal(8000),
+          });
+          if (itemsRes.ok) {
+            const serverItems: PlaidItem[] = await itemsRes.json();
+            if (Array.isArray(serverItems) && serverItems.length > 0) {
+              setPlaidSync({ items: serverItems });
+              plaidSyncRef.current = { items: serverItems };
+            }
+          }
+        } catch {}
+      }
+
+      const items = plaidSyncRef.current.items || [];
+      summary.accountsChecked = items.length;
+
+      // 1. Sync all connected Plaid accounts sequentially
+      for (const item of items) {
+        try {
+          const res = await syncPlaidTransactions(item.itemId, options?.force);
+          const hasRelogin =
+            item.needsRelogin ||
+            /login.required|item.login|ITEM_LOGIN_REQUIRED|reconnect/i.test(res.error || "");
+          const status: AccountSyncStatus = {
+            itemId: item.itemId,
+            bankName: item.bankName || "Bank Account",
+            imported: res.imported || 0,
+            error: res.error,
+            needsRelogin: hasRelogin,
+          };
+          summary.items.push(status);
+          summary.totalImported += res.imported || 0;
+          if (res.error) {
+            summary.allUpToDate = false;
+            if (hasRelogin || !res.error.includes("already in progress")) {
+              summary.needsAttention = true;
+            }
+          }
+        } catch (err: any) {
+          summary.allUpToDate = false;
+          summary.needsAttention = true;
+          summary.items.push({
+            itemId: item.itemId,
+            bankName: item.bankName || "Bank Account",
+            imported: 0,
+            error: err?.message || "Sync failed",
+            needsRelogin: false,
+          });
+        }
+      }
+
+      // 2. Sync email transactions if connected
+      if (emailSyncRef.current.isConnected && emailSyncRef.current.syncTransactions) {
+        try {
+          const emailRes = await syncEmailTransactions();
+          summary.emailImported = emailRes.imported || 0;
+          summary.totalImported += emailRes.imported || 0;
+          if (emailRes.error) {
+            summary.emailError = emailRes.error;
+            summary.allUpToDate = false;
+          }
+        } catch (err: any) {
+          summary.emailError = err?.message || "Email sync failed";
+          summary.allUpToDate = false;
+        }
+      }
+
+      // 3. Always pull latest transactions from server to sync DB state
+      await refreshTransactionsFromServer();
+
+      // 4. Fetch latest accounts from server so balances and newly created accounts match
+      if (hId) {
+        try {
+          const acctRes = await fetch(`${getApiBase()}/api/accounts`, {
+            headers: { "X-Household-ID": hId, "X-Device-ID": dId },
+            signal: createTimeoutSignal(8000),
+          });
+          if (acctRes.ok) {
+            const serverAccts: Account[] = await acctRes.json();
+            if (Array.isArray(serverAccts) && serverAccts.length > 0) {
+              setAccounts((prev) => {
+                const byId = new Map(prev.map((a) => [a.id, a]));
+                serverAccts.forEach((a) => byId.set(a.id, { ...byId.get(a.id), ...a }));
+                const updated = Array.from(byId.values());
+                AsyncStorage.setItem(STORAGE_KEYS.accounts, JSON.stringify(updated)).catch(() => {});
+                return updated;
+              });
+            }
+          }
+        } catch {}
+      }
+
+      // 5. Run bill payment detection
+      await detectBillPayments?.();
+
+      // 6. Present popup if requested
+      if (options?.showPopup) {
+        const reloginItems = summary.items.filter((i) => i.needsRelogin);
+        const otherErrorItems = summary.items.filter((i) => !i.needsRelogin && i.error);
+
+        if (reloginItems.length > 0) {
+          Haptics.notificationAsync(Haptics.NotificationFeedbackType.Warning).catch(() => {});
+          const names = reloginItems.map((i) => i.bankName).join(", ");
+          const msg =
+            reloginItems.length === 1
+              ? `${names} requires reconnection to sync recent transactions.\n\nPlease open the Accounts tab to reconnect.`
+              : `The following accounts require reconnection:\n• ${reloginItems.map((i) => i.bankName).join("\n• ")}\n\nPlease open the Accounts tab to reconnect.`;
+          const extra =
+            summary.totalImported > 0
+              ? `\n\nOther accounts are up to date (${summary.totalImported} new transaction${summary.totalImported === 1 ? "" : "s"} imported).`
+              : "";
+
+          Alert.alert("⚠️ Account Needs Attention", `${msg}${extra}`, [
+            { text: "Dismiss", style: "cancel" },
+            {
+              text: "Go to Accounts",
+              onPress: () => router.push("/(tabs)/accounts" as any),
+            },
+          ]);
+        } else if (otherErrorItems.length > 0 || summary.emailError) {
+          Haptics.notificationAsync(Haptics.NotificationFeedbackType.Warning).catch(() => {});
+          const lines: string[] = otherErrorItems.map((i) => `• ${i.bankName}: ${i.error}`);
+          if (summary.emailError) lines.push(`• Email: ${summary.emailError}`);
+          const extra =
+            summary.totalImported > 0
+              ? `\n\nOther accounts synced: ${summary.totalImported} new transaction${summary.totalImported === 1 ? "" : "s"} imported.`
+              : "";
+
+          Alert.alert(
+            "Sync Warning",
+            `Could not sync some accounts:\n${lines.join("\n")}${extra}`,
+            [{ text: "OK" }]
+          );
+        } else {
+          Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success).catch(() => {});
+          if (summary.totalImported > 0) {
+            const bankLines = summary.items
+              .filter((i) => i.imported > 0)
+              .map((i) => `• ${i.bankName}: ${i.imported} new`);
+            if (summary.emailImported && summary.emailImported > 0) {
+              bankLines.push(`• Email: ${summary.emailImported} new`);
+            }
+            const detail = bankLines.length > 0 ? `\n\n${bankLines.join("\n")}` : "";
+
+            Alert.alert(
+              "Sync Complete",
+              `All accounts are up to date.\nImported ${summary.totalImported} new transaction${summary.totalImported === 1 ? "" : "s"}.${detail}`,
+              [{ text: "OK" }]
+            );
+          } else {
+            const count = summary.accountsChecked;
+            const msg =
+              count > 0
+                ? `All ${count} connected account${count === 1 ? " is" : "s are"} up to date.\nNo new transactions found.`
+                : "Transactions and balances are up to date.\nNo new transactions found.";
+
+            Alert.alert("All Up to Date", msg, [{ text: "OK" }]);
+          }
+        }
+      }
+
+      return summary;
+    },
+    [syncPlaidTransactions, syncEmailTransactions, refreshTransactionsFromServer, detectBillPayments]
+  );
+
   // ── Computed values ───────────────────────────────────────────────────────
   const now = new Date();
   // Use plain YYYY-MM-DD so string comparison works with stored transaction dates.
@@ -4740,6 +5133,7 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
         alerts, addAlert, markAlertRead, markAllAlertsRead, clearAllAlerts, deleteAlert,
         billReviewMatches, approveBillReviewMatch, dismissBillReviewMatch, detectBillPayments,
         refreshTransactionsFromServer,
+        refreshAllAccountsAndTransactions,
         lastAutoSyncTime,
       }}
     >

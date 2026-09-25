@@ -33,7 +33,7 @@ function getImapConfig(email: string): { host: string; port: number; isGmail: bo
 }
 
 router.post("/email/sync", async (req, res) => {
-  const { email, appPassword, daysBack = 90 } = req.body as SyncRequest;
+  const { email, appPassword, daysBack = 550 } = req.body as SyncRequest;
 
   if (!email || !appPassword) {
     res.status(400).json({ error: "email and appPassword are required" });

@@ -3,7 +3,8 @@ import * as Haptics from "expo-haptics";
 import React from "react";
 import { StyleSheet, Text, TouchableOpacity, View } from "react-native";
 
-import { Transaction, getShortBankName, useApp } from "@/context/AppContext";
+import TransactionAvatar from "@/components/TransactionAvatar";
+import { Transaction, formatTxCleanTitle, getShortBankName, useApp } from "@/context/AppContext";
 import { useColors } from "@/hooks/useColors";
 import { useTheme } from "@/context/ThemeContext";
 
@@ -80,9 +81,18 @@ export default function TransactionItem({ transaction, onPress }: Props) {
       }}
       activeOpacity={0.75}
     >
+      <TransactionAvatar
+        title={transaction.title}
+        merchant={transaction.merchant}
+        category={transaction.category}
+        type={transaction.type}
+        size={42}
+        iconSize={20}
+        style={{ marginRight: 12 }}
+      />
       <View style={styles.leftCol}>
-        <Text style={[styles.title, { color: isDark ? "#ffffff" : "#111111" }]} numberOfLines={2}>
-          {transaction.title}
+        <Text style={[styles.title, { color: isDark ? "#ffffff" : "#111111" }]} numberOfLines={1}>
+          {formatTxCleanTitle(transaction.title, transaction.merchant)}
         </Text>
         <View style={styles.metaRow}>
           <Text style={[styles.dateText, { color: colors.mutedForeground }]}>
@@ -133,12 +143,13 @@ export default function TransactionItem({ transaction, onPress }: Props) {
 const styles = StyleSheet.create({
   container: {
     flexDirection: "row",
-    alignItems: "flex-start",
+    alignItems: "center",
     justifyContent: "space-between",
-    padding: 16,
+    paddingVertical: 12,
+    paddingHorizontal: 14,
     marginHorizontal: 16,
     marginVertical: 4,
-    borderRadius: 12,
+    borderRadius: 14,
     borderWidth: 1,
     shadowOffset: { width: 0, height: 1 },
     shadowOpacity: 0.1,

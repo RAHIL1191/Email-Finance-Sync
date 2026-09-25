@@ -12,10 +12,11 @@ import {
 } from "react-native";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 
-import { Account, Bill, Transaction } from "@/context/AppContext";
+import { Account, Bill, Transaction, formatTxCleanTitle } from "@/context/AppContext";
 import { useColors } from "@/hooks/useColors";
 import { parseLocalDate, localYM, toLocalYMD } from "@/hooks/useLocalDate";
 import TransactionDetailModal from "@/components/TransactionDetailModal";
+import TransactionAvatar from "@/components/TransactionAvatar";
 
 const FULL_MONTHS = [
   "January", "February", "March", "April", "May", "June",
@@ -183,7 +184,7 @@ export default function MonthDetailModal({
     const upcomingExpAndBills: ListItem[] = [
       ...futureExpenses.map((t) => ({
         id: t.id,
-        title: t.title,
+        title: formatTxCleanTitle(t.title, t.merchant),
         amount: t.amount,
         type: "expense" as const,
         category: t.category,
@@ -219,7 +220,7 @@ export default function MonthDetailModal({
 
   const txToItem = (t: Transaction): ListItem => ({
     id: t.id,
-    title: t.title,
+    title: formatTxCleanTitle(t.title, t.merchant),
     amount: t.amount,
     type: t.type,
     category: t.category,
@@ -492,14 +493,14 @@ export default function MonthDetailModal({
                           },
                         ]}
                       >
-                        <View
-                          style={[
-                            styles.listIcon,
-                            { backgroundColor: color + "22" },
-                          ]}
-                        >
-                          <Feather name={icon as any} size={18} color={color} />
-                        </View>
+                        <TransactionAvatar
+                          title={item.title}
+                          category={item.category}
+                          type={item.type}
+                          size={40}
+                          iconSize={19}
+                          style={{ marginRight: 12 }}
+                        />
                         <View style={styles.listInfo}>
                           <Text
                             style={[styles.listTitle, { color: colors.foreground }]}

@@ -12,8 +12,9 @@ import {
 } from "react-native";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 
-import { CATEGORY_COLORS, CATEGORY_ICONS } from "./TransactionItem";
-import { Account, Transaction } from "@/context/AppContext";
+import { Account, Transaction, formatTxCleanTitle } from "@/context/AppContext";
+import { CATEGORY_COLORS, CATEGORY_ICONS } from "@/components/TransactionItem";
+import TransactionAvatar from "./TransactionAvatar";
 import { useColors } from "@/hooks/useColors";
 
 interface Props {
@@ -278,15 +279,16 @@ export default function SimilarTransactionsModal({
                       )}
                     </View>
 
-                    {/* Category icon */}
-                    <View
-                      style={[
-                        s.catIconBadge,
-                        { backgroundColor: catColor + "18" },
-                      ]}
-                    >
-                      <Feather name={catIcon} size={15} color={catColor} />
-                    </View>
+                    {/* Glowing Category / Brand Avatar */}
+                    <TransactionAvatar
+                      title={tx.title}
+                      merchant={tx.merchant}
+                      category={tx.category}
+                      type={tx.type}
+                      size={36}
+                      iconSize={17}
+                      style={{ marginRight: 10 }}
+                    />
 
                     {/* Center Info */}
                     <View style={s.txInfo}>
@@ -294,7 +296,7 @@ export default function SimilarTransactionsModal({
                         style={[s.txTitle, { color: colors.foreground }]}
                         numberOfLines={1}
                       >
-                        {tx.title}
+                        {formatTxCleanTitle(tx.title, tx.merchant)}
                       </Text>
 
                       <View style={s.txSubRow}>

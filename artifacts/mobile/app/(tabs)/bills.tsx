@@ -231,22 +231,23 @@ function addFreq(date: Date, freq: string): Date {
   return d;
 }
 
-function occurrenceLimit(freq: string): Date {
-  const limit = new Date();
-  if (freq === "daily" || freq === "weekly" || freq === "biweekly") {
-    limit.setMonth(limit.getMonth() + 3);       // 3 months for high-frequency
-  } else {
-    limit.setFullYear(limit.getFullYear() + 1);  // 1 year for others
+function occurrenceLimit(freq: string, endDate?: string): Date {
+  if (endDate) {
+    return parseLocalDate(endDate);
   }
+  const limit = new Date();
+  limit.setFullYear(limit.getFullYear() + 1);
   return limit;
 }
 
 function generateOccurrences(bill: Bill): Bill[] {
   if (!bill.isRecurring || !bill.frequency) return [];
   const result: Bill[] = [];
-  const limit = occurrenceLimit(bill.frequency);
+  const limit = occurrenceLimit(bill.frequency, bill.endDate);
+  const endLimit = bill.endDate ? parseLocalDate(bill.endDate) : null;
   let next = addFreq(parseLocalDate(bill.dueDate), bill.frequency);
   while (next <= limit) {
+    if (endLimit && next > endLimit) break;
     result.push({
       ...bill,
       id: `${bill.id}_occ_${next.getTime()}`,

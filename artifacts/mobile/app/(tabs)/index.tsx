@@ -4,6 +4,7 @@ import { router } from "expo-router";
 import React, { useEffect, useMemo, useState } from "react";
 import {
   ActivityIndicator,
+  Alert,
   FlatList,
   Image,
   Modal,
@@ -20,66 +21,110 @@ import {
 import { KeyboardAvoidingView } from "react-native-keyboard-controller";
 import { Circle, G, Svg } from "react-native-svg";
 import { SafeAreaView } from "react-native-safe-area-context";
+import { LinearGradient as ExpoLinearGradient } from "expo-linear-gradient";
 
-import { computeBalance, useApp } from "@/context/AppContext";
+import { computeBalance, formatTxCleanTitle, useApp } from "@/context/AppContext";
+import type { SyncSummaryResult } from "@/context/AppContext";
 import { useDrawer } from "@/context/DrawerContext";
 import { useTheme } from "@/context/ThemeContext";
 import { useColors } from "@/hooks/useColors";
 import { parseLocalDate } from "@/hooks/useLocalDate";
 import { CatHeaderIllustration, CatBannerIllustration } from "@/components/CatIllustration";
 import PendingRefundsWidget from "@/components/PendingRefundsWidget";
+import SyncStatusModal from "@/components/SyncStatusModal";
+import PlaidLinkModal from "@/components/PlaidLinkModal";
+import TransactionAvatar from "@/components/TransactionAvatar";
 // ─── Donut Chart Component ───────────────────────────────────────────────────
 function DonutChart({
   segments,
-  size = 110,
-  stroke = 14,
-  centerAmount = "$0",
+  size = 130,
+  stroke = 15,
+  centerAmount = "$0.00",
+  centerSubtitle = "This Month",
 }: {
   segments: { value: number; color: string }[];
   size?: number;
   stroke?: number;
   centerAmount?: string;
+  centerSubtitle?: string;
 }) {
   const colors = useColors();
   const r = (size - stroke) / 2;
   const cx = size / 2;
   const circ = 2 * Math.PI * r;
-  const total = segments.reduce((s, seg) => s + seg.value, 0) || 1;
+  const total = segments.reduce((s, seg) => s + Math.max(seg.value, 0), 0);
   let offset = 0;
 
   return (
     <View style={{ width: size, height: size, alignItems: "center", justifyContent: "center" }}>
       <Svg width={size} height={size}>
         <G rotation="-90" origin={`${cx},${cx}`}>
-          {total === 0 ? (
-            <Circle cx={cx} cy={cx} r={r} fill="none" stroke={colors.border} strokeWidth={stroke} />
+          {total <= 0 ? (
+            <Circle
+              cx={cx}
+              cy={cx}
+              r={r}
+              fill="none"
+              stroke={colors.border}
+              strokeWidth={stroke}
+            />
           ) : (
             segments.map((seg, i) => {
-              const dash = (seg.value / total) * circ;
+              if (seg.value <= 0) return null;
+              const fraction = seg.value / total;
+              const dash = fraction * circ;
               const gap = circ - dash;
-              const el = (
+              const currentOffset = offset;
+              offset += dash;
+
+              return (
                 <Circle
                   key={i}
                   cx={cx}
                   cy={cx}
                   r={r}
                   fill="none"
-                  stroke={seg.value > 0 ? seg.color : "transparent"}
+                  stroke={seg.color}
                   strokeWidth={stroke}
                   strokeDasharray={`${dash} ${gap}`}
-                  strokeDashoffset={-offset}
-                  strokeLinecap="round"
+                  strokeDashoffset={-currentOffset}
+                  strokeLinecap="butt"
                 />
               );
-              offset += dash;
-              return el;
             })
           )}
         </G>
       </Svg>
-      <View style={[StyleSheet.absoluteFillObject, { alignItems: "center", justifyContent: "center" }]} pointerEvents="none">
-        <Text style={{ fontSize: 13, fontFamily: "Inter_700Bold", color: colors.foreground }}>{centerAmount}</Text>
-        <Text style={{ fontSize: 10, fontFamily: "Inter_400Regular", color: colors.mutedForeground }}>Total</Text>
+      <View
+        style={[
+          StyleSheet.absoluteFillObject,
+          { alignItems: "center", justifyContent: "center", paddingHorizontal: 6 },
+        ]}
+        pointerEvents="none"
+      >
+        <Text
+          style={{
+            fontSize: centerAmount.length > 9 ? 12 : 13.5,
+            fontFamily: "Inter_700Bold",
+            color: colors.foreground,
+            letterSpacing: -0.2,
+            textAlign: "center",
+          }}
+          numberOfLines={1}
+          adjustsFontSizeToFit
+        >
+          {centerAmount}
+        </Text>
+        <Text
+          style={{
+            fontSize: 10,
+            fontFamily: "Inter_400Regular",
+            color: colors.mutedForeground,
+            marginTop: 2,
+          }}
+        >
+          {centerSubtitle}
+        </Text>
       </View>
     </View>
   );
@@ -88,19 +133,25 @@ function DonutChart({
 // ─── Category Color Helper ────────────────────────────────────────────────────
 function getCategoryColor(categoryName: string, colors: any): string {
   const lower = categoryName.toLowerCase();
-  if (lower.includes("food") || lower.includes("dining") || lower.includes("restaurant") || lower.includes("grocer")) {
-    return colors.catFood;
+  if (lower.includes("shop") || lower.includes("store") || lower.includes("clothing")) {
+    return "#6366F1"; // Indigo (matching mockup Shopping)
   }
   if (lower.includes("transport") || lower.includes("auto") || lower.includes("ride") || lower.includes("gas") || lower.includes("car")) {
-    return colors.catTransport;
+    return "#8B5CF6"; // Lavender / Violet (matching mockup Transport)
   }
-  if (lower.includes("shop") || lower.includes("store") || lower.includes("clothing")) {
-    return colors.catShopping;
+  if (lower.includes("food") || lower.includes("dining") || lower.includes("restaurant") || lower.includes("cafe")) {
+    return "#F43F5E"; // Coral / Rose / Pink (matching mockup Food)
   }
   if (lower.includes("entertain") || lower.includes("movie") || lower.includes("stream") || lower.includes("subscrip")) {
-    return colors.catEntertainment;
+    return "#F59E0B"; // Amber / Orange (matching mockup Entertainment)
   }
-  return colors.catOthers;
+  if (lower.includes("grocer") || lower.includes("market")) {
+    return "#10B981"; // Emerald
+  }
+  if (lower.includes("utilit") || lower.includes("bill")) {
+    return "#06B6D4"; // Cyan
+  }
+  return colors.catOthers || "#8B5CF6";
 }
 
 // ─── Main HomeScreen Component ──────────────────────────────────────────────
@@ -125,9 +176,13 @@ export default function HomeScreen() {
     dismissBillReviewMatch,
     detectBillPayments,
     refreshTransactionsFromServer,
+    refreshAllAccountsAndTransactions,
   } = useApp();
 
   const [refreshing, setRefreshing] = useState(false);
+  const [syncResult, setSyncResult] = useState<SyncSummaryResult | null>(null);
+  const [showSyncModal, setShowSyncModal] = useState(false);
+  const [relinkTarget, setRelinkTarget] = useState<{ itemId: string; bankName: string } | null>(null);
 
   useEffect(() => {
     detectBillPayments?.();
@@ -156,12 +211,23 @@ export default function HomeScreen() {
 
   const handleRefresh = async () => {
     setRefreshing(true);
-    await refreshTransactionsFromServer?.();
-    if (emailSync.isConnected && emailSync.syncTransactions) {
-      await syncEmailTransactions();
+    try {
+      const res = await refreshAllAccountsAndTransactions();
+      setSyncResult(res);
+      setShowSyncModal(true);
+      if (res.needsAttention) {
+        Haptics.notificationAsync(Haptics.NotificationFeedbackType.Warning);
+      } else {
+        Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
+      }
+    } catch (err: any) {
+      Alert.alert(
+        "Sync Error",
+        err?.message || "Failed to refresh transactions. Please check your network connection."
+      );
+    } finally {
+      setRefreshing(false);
     }
-    await detectBillPayments?.();
-    setRefreshing(false);
   };
 
   const unreadAlertsCount = useMemo(() => alerts.filter((a) => !a.isRead).length, [alerts]);
@@ -245,7 +311,10 @@ export default function HomeScreen() {
 
       return {
         id: t.id,
-        title: t.title || t.merchant || "Transaction",
+        rawTitle: t.title,
+        merchant: t.merchant,
+        type: t.type,
+        title: formatTxCleanTitle(t.title, t.merchant),
         subtitle: `${t.category || "General"} • ${mask}`,
         amount: `${t.type === "expense" ? "-" : "+"}$${t.amount.toFixed(2)}`,
         date: dateStr,
@@ -309,6 +378,19 @@ export default function HomeScreen() {
         </View>
 
         <View style={styles.headerRight}>
+          {/* Search Icon */}
+          <TouchableOpacity
+            style={[styles.iconBtn, { backgroundColor: colors.card, borderColor: colors.border }]}
+            onPress={() => {
+              Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
+              router.push("/search");
+            }}
+            hitSlop={8}
+            accessibilityLabel="Search transactions"
+          >
+            <Feather name="search" size={19} color={colors.foreground} />
+          </TouchableOpacity>
+
           {/* Notifications Icon with Red Dot */}
           <TouchableOpacity
             style={[styles.iconBtn, { backgroundColor: colors.card, borderColor: colors.border }]}
@@ -334,133 +416,255 @@ export default function HomeScreen() {
         contentContainerStyle={styles.scrollContent}
         refreshControl={<RefreshControl refreshing={refreshing} onRefresh={handleRefresh} tintColor={colors.primary} />}
       >
-        {/* ── 0. Total Balance Stacked Card Widget ── */}
-        <View style={styles.stackedCardWrapper}>
-          {/* Stacked Background Layers */}
-          <View style={[styles.stackedLayerBack2, { backgroundColor: colors.primary + "33" }]} />
-          <View style={[styles.stackedLayerBack1, { backgroundColor: colors.primary + "66" }]} />
+        {/* ── 0. Total Net Worth Hero Widget (Polished Matte Obsidian) ── */}
+        <View style={styles.heroCardContainer}>
+          <ExpoLinearGradient
+            colors={
+              colorScheme === "dark"
+                ? ["#1F2430", "#151820", "#0D0F14"]
+                : ["#1E2533", "#151B25", "#0C1017"]
+            }
+            start={{ x: 0, y: 0 }}
+            end={{ x: 1, y: 1 }}
+            style={styles.heroCardGradient}
+          >
+            {/* Subtle top edge specular highlight line */}
+            <View style={styles.heroCardSheenLine} />
 
-          {/* Main Card */}
-          <View style={[styles.totalBalanceCard, { backgroundColor: "#4C1D95" }]}>
-            {/* Card Header: Wallet Icon & Title + Controls */}
-            <View style={styles.balanceCardHeader}>
-              <View style={styles.walletTitleRow}>
-                <View style={styles.walletIconBadge}>
-                  <Feather name="briefcase" size={16} color="#FFFFFF" />
-                </View>
-                <Text style={styles.balanceCardLabel}>Total Balance</Text>
+            {/* Header: Label + Status Dot + Quick Controls */}
+            <View style={styles.heroHeaderRow}>
+              <View style={styles.heroPillBadge}>
+                <View style={styles.heroPillDot} />
+                <Text style={styles.heroPillText}>TOTAL NET WORTH</Text>
               </View>
 
-              <View style={{ flexDirection: "row", alignItems: "center", gap: 8 }}>
+              <View style={styles.heroActionGroup}>
                 {/* Refresh/Sync button */}
                 <TouchableOpacity
-                  style={styles.cardActionBtn}
+                  style={styles.heroActionBtn}
                   onPress={handleRefresh}
                   hitSlop={8}
+                  activeOpacity={0.7}
                 >
-                  <Feather name="repeat" size={15} color="#FFFFFF" />
+                  <Feather name="repeat" size={13} color="rgba(255,255,255,0.85)" />
                 </TouchableOpacity>
 
                 {/* Hide/Show Balance toggle */}
                 <TouchableOpacity
-                  style={styles.cardActionBtn}
+                  style={styles.heroActionBtn}
                   onPress={() => {
                     Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
                     setHideBalance(!hideBalance);
                   }}
                   hitSlop={8}
+                  activeOpacity={0.7}
                 >
-                  <Feather name={hideBalance ? "eye-off" : "eye"} size={15} color="#FFFFFF" />
+                  <Feather
+                    name={hideBalance ? "eye-off" : "eye"}
+                    size={13}
+                    color="rgba(255,255,255,0.85)"
+                  />
                 </TouchableOpacity>
               </View>
             </View>
 
             {/* Main Balance Display */}
-            <View style={styles.balanceAmountRow}>
-              <Text style={styles.balanceMainText}>
+            <View style={styles.heroAmountRow}>
+              <Text style={styles.heroCurrencySymbol}>$</Text>
+              <Text style={styles.heroMainAmountText}>
                 {hideBalance
-                  ? "$••••••••"
-                  : `${totalBalance < 0 ? "-" : ""}$${Math.round(Math.abs(totalBalance)).toLocaleString("en-US")}`}
+                  ? "••••••••"
+                  : Math.abs(Math.round(totalBalance)).toLocaleString("en-US")}
               </Text>
+              {!hideBalance && (
+                <Text style={styles.heroDecimalText}>
+                  .{(Math.abs(totalBalance) % 1).toFixed(2).slice(2)}
+                </Text>
+              )}
             </View>
 
             {/* Comparison vs Last Month Footer */}
-            <View style={styles.balanceFooterRow}>
-              <View style={styles.comparisonBadge}>
+            <View style={styles.heroFooterRow}>
+              <View
+                style={[
+                  styles.heroTrendCapsule,
+                  {
+                    backgroundColor:
+                      netChange >= 0
+                        ? "rgba(52, 211, 153, 0.16)"
+                        : "rgba(248, 113, 113, 0.16)",
+                    borderColor:
+                      netChange >= 0
+                        ? "rgba(52, 211, 153, 0.28)"
+                        : "rgba(248, 113, 113, 0.28)",
+                  },
+                ]}
+              >
                 <Feather
-                  name={netChange >= 0 ? "arrow-up" : "arrow-down"}
+                  name={netChange >= 0 ? "trending-up" : "trending-down"}
                   size={12}
                   color={netChange >= 0 ? "#34D399" : "#F87171"}
                 />
                 <Text
                   style={[
-                    styles.comparisonPctText,
+                    styles.heroTrendPctText,
                     { color: netChange >= 0 ? "#34D399" : "#F87171" },
                   ]}
                 >
-                  {netChange >= 0 ? "+" : ""}{balancePctChange.toFixed(1)}%
+                  {netChange >= 0 ? "+" : ""}
+                  {balancePctChange.toFixed(1)}%
                 </Text>
-                <Text style={styles.comparisonSubText}>vs last month</Text>
+                <Text style={styles.heroTrendLabel}>vs last month</Text>
               </View>
 
-              <View style={styles.diffPill}>
-                <Text style={styles.diffPillText}>
-                  {netChange >= 0 ? "+" : "-"}${Math.abs(netChange).toLocaleString("en-US", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
+              <View style={styles.heroDeltaPill}>
+                <Text style={styles.heroDeltaText}>
+                  {netChange >= 0 ? "+" : "-"}$
+                  {Math.abs(netChange).toLocaleString("en-US", {
+                    minimumFractionDigits: 2,
+                    maximumFractionDigits: 2,
+                  })}
                 </Text>
               </View>
             </View>
-          </View>
+          </ExpoLinearGradient>
         </View>
 
-        {/* ── 1. Top Financial Overview Widget ── */}
-        <View style={[styles.widgetCard, { backgroundColor: colors.card, borderColor: colors.border }]}>
-          <View style={styles.topWidgetRow}>
-            {/* Expense Card */}
-            <View style={[styles.statBox, { backgroundColor: colors.expenseBg }]}>
-              <View style={styles.statPill}>
-                <Feather name="arrow-down" size={10} color={colors.expense} />
-                <Text style={[styles.statPillText, { color: colors.expense }]}>Expenses</Text>
+        {/* ── Quick Actions Row (4 Matte Squircles) ── */}
+        <View style={styles.quickActionsBar}>
+          <TouchableOpacity
+            style={styles.quickActionItem}
+            onPress={() => router.push("/transactions")}
+            activeOpacity={0.7}
+          >
+            <View style={[styles.quickActionSquircle, { backgroundColor: colors.card, borderColor: colors.border }]}>
+              <Feather name="plus" size={19} color={colors.primary} />
+            </View>
+            <Text style={[styles.quickActionLabel, { color: colors.foreground }]}>Add Tx</Text>
+          </TouchableOpacity>
+
+          <TouchableOpacity
+            style={styles.quickActionItem}
+            onPress={() => router.push("/insights")}
+            activeOpacity={0.7}
+          >
+            <View style={[styles.quickActionSquircle, { backgroundColor: colors.card, borderColor: colors.border }]}>
+              <Feather name="pie-chart" size={18} color="#818CF8" />
+            </View>
+            <Text style={[styles.quickActionLabel, { color: colors.foreground }]}>Analytics</Text>
+          </TouchableOpacity>
+
+          <TouchableOpacity
+            style={styles.quickActionItem}
+            onPress={() => router.push("/bills")}
+            activeOpacity={0.7}
+          >
+            <View style={[styles.quickActionSquircle, { backgroundColor: colors.card, borderColor: colors.border }]}>
+              <Feather name="calendar" size={18} color="#F59E0B" />
+            </View>
+            <Text style={[styles.quickActionLabel, { color: colors.foreground }]}>Bills</Text>
+          </TouchableOpacity>
+
+          <TouchableOpacity
+            style={styles.quickActionItem}
+            onPress={() => router.push("/accounts")}
+            activeOpacity={0.7}
+          >
+            <View style={[styles.quickActionSquircle, { backgroundColor: colors.card, borderColor: colors.border }]}>
+              <Feather name="credit-card" size={18} color="#10B981" />
+            </View>
+            <Text style={[styles.quickActionLabel, { color: colors.foreground }]}>Accounts</Text>
+          </TouchableOpacity>
+        </View>
+
+        {/* ── 1. Top Financial Overview Widget (Income & Expense Split) ── */}
+        <View style={styles.statsSplitRow}>
+          {/* Income Card */}
+          <View
+            style={[
+              styles.statMatteTile,
+              {
+                backgroundColor: colors.incomeBg,
+                borderColor: colors.income + "28",
+              },
+            ]}
+          >
+            <View style={styles.statTileHeader}>
+              <View
+                style={[
+                  styles.statMicroPill,
+                  { backgroundColor: colors.income + "20" },
+                ]}
+              >
+                <Feather name="arrow-up-right" size={11} color={colors.income} />
+                <Text style={[styles.statMicroPillText, { color: colors.income }]}>Income</Text>
               </View>
-              <Text style={[styles.statAmount, { color: colors.foreground }]}>
-                -${Math.abs(currentMonthExpenses).toLocaleString("en-US", { minimumFractionDigits: 0, maximumFractionDigits: 0 })}
-              </Text>
-              <Text style={[styles.statPeriod, { color: colors.mutedForeground }]}>This month</Text>
-              <View style={styles.changeBadgeRow}>
-                <Feather name="arrow-down" size={10} color={colors.expense} />
-                <Text style={[styles.changeText, { color: colors.expense }]}>12%</Text>
+              <View style={styles.statMicroTrendRow}>
+                <Text style={[styles.statMicroTrendText, { color: colors.income }]}>+8%</Text>
               </View>
             </View>
 
-            {/* Income Card */}
-            <View style={[styles.statBox, { backgroundColor: colors.incomeBg }]}>
-              <View style={styles.statPill}>
-                <Feather name="arrow-up" size={10} color={colors.income} />
-                <Text style={[styles.statPillText, { color: colors.income }]}>Income</Text>
+            <Text style={[styles.statAmountMain, { color: colors.foreground }]}>
+              ${Math.abs(currentMonthIncome).toLocaleString("en-US", {
+                minimumFractionDigits: 0,
+                maximumFractionDigits: 0,
+              })}
+            </Text>
+            <Text style={[styles.statPeriodLabel, { color: colors.mutedForeground }]}>
+              This month
+            </Text>
+          </View>
+
+          {/* Expense Card */}
+          <View
+            style={[
+              styles.statMatteTile,
+              {
+                backgroundColor: colors.expenseBg,
+                borderColor: colors.expense + "28",
+              },
+            ]}
+          >
+            <View style={styles.statTileHeader}>
+              <View
+                style={[
+                  styles.statMicroPill,
+                  { backgroundColor: colors.expense + "20" },
+                ]}
+              >
+                <Feather name="arrow-down-left" size={11} color={colors.expense} />
+                <Text style={[styles.statMicroPillText, { color: colors.expense }]}>Expenses</Text>
               </View>
-              <Text style={[styles.statAmount, { color: colors.foreground }]}>
-                ${Math.abs(currentMonthIncome).toLocaleString("en-US", { minimumFractionDigits: 0, maximumFractionDigits: 0 })}
-              </Text>
-              <Text style={[styles.statPeriod, { color: colors.mutedForeground }]}>This month</Text>
-              <View style={styles.changeBadgeRow}>
-                <Feather name="arrow-up" size={10} color={colors.income} />
-                <Text style={[styles.changeText, { color: colors.income }]}>8%</Text>
+              <View style={styles.statMicroTrendRow}>
+                <Text style={[styles.statMicroTrendText, { color: colors.expense }]}>-12%</Text>
               </View>
             </View>
 
-            {/* Cute Cat Graphic */}
-            <View style={styles.catGraphicContainer}>
-              <CatHeaderIllustration size={68} />
-            </View>
+            <Text style={[styles.statAmountMain, { color: colors.foreground }]}>
+              -${Math.abs(currentMonthExpenses).toLocaleString("en-US", {
+                minimumFractionDigits: 0,
+                maximumFractionDigits: 0,
+              })}
+            </Text>
+            <Text style={[styles.statPeriodLabel, { color: colors.mutedForeground }]}>
+              This month
+            </Text>
           </View>
         </View>
 
         {/* ── 2. Spending Overview Widget ── */}
         <View style={[styles.widgetCard, { backgroundColor: colors.card, borderColor: colors.border }]}>
           <View style={styles.sectionHeaderRow}>
-            <Text style={[styles.sectionTitle, { color: colors.foreground }]}>Spending overview</Text>
-            <TouchableOpacity style={{ flexDirection: "row", alignItems: "center", gap: 4 }}>
-              <Text style={[styles.sectionLink, { color: colors.mutedForeground }]}>This month</Text>
-              <Feather name="chevron-right" size={14} color={colors.mutedForeground} />
+            <Text style={[styles.sectionTitle, { color: colors.foreground }]}>Spending Overview</Text>
+            <TouchableOpacity
+              onPress={() => {
+                Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
+                router.push({ pathname: "/transactions", params: { tab: "SPENDING" } });
+              }}
+              style={{ flexDirection: "row", alignItems: "center", gap: 4 }}
+              hitSlop={10}
+            >
+              <Feather name="chevron-right" size={16} color={colors.mutedForeground} />
             </TouchableOpacity>
           </View>
 
@@ -468,25 +672,36 @@ export default function HomeScreen() {
             {/* Donut Chart */}
             <DonutChart
               segments={categoryBreakdown.map((c) => ({ value: c.amount, color: c.color }))}
-              size={110}
-              stroke={14}
-              centerAmount={`$${Math.round(currentMonthExpenses).toLocaleString()}`}
+              size={130}
+              stroke={15}
+              centerAmount={`$${Math.abs(currentMonthExpenses).toLocaleString("en-US", {
+                minimumFractionDigits: 2,
+                maximumFractionDigits: 2,
+              })}`}
+              centerSubtitle="This Month"
             />
 
             {/* Category Legend List */}
             <View style={styles.legendList}>
-              {categoryBreakdown.map((item, idx) => (
-                <View key={idx} style={styles.legendItem}>
-                  <View style={{ flexDirection: "row", alignItems: "center", gap: 6, flex: 1 }}>
-                    <View style={[styles.legendDot, { backgroundColor: item.color }]} />
-                    <Text style={[styles.legendName, { color: colors.foreground }]}>{item.name}</Text>
+              {categoryBreakdown.length === 0 ? (
+                <Text style={{ fontSize: 13, fontFamily: "Inter_400Regular", color: colors.mutedForeground }}>
+                  No expenses this month
+                </Text>
+              ) : (
+                categoryBreakdown.map((item, idx) => (
+                  <View key={idx} style={styles.legendItemRow}>
+                    <View style={{ flexDirection: "row", alignItems: "center", gap: 8, flex: 1, minWidth: 0 }}>
+                      <View style={[styles.legendDot, { backgroundColor: item.color }]} />
+                      <Text style={[styles.legendName, { color: colors.foreground }]} numberOfLines={1}>
+                        {item.name}
+                      </Text>
+                    </View>
+                    <Text style={[styles.legendPct, { color: colors.foreground }]}>
+                      {item.pct}%
+                    </Text>
                   </View>
-                  <Text style={[styles.legendPct, { color: colors.mutedForeground }]}>{item.pct}%</Text>
-                  <Text style={[styles.legendAmt, { color: colors.foreground }]}>
-                    ${item.amount.toLocaleString("en-US", { minimumFractionDigits: 0 })}
-                  </Text>
-                </View>
-              ))}
+                ))
+              )}
             </View>
           </View>
         </View>
@@ -494,41 +709,48 @@ export default function HomeScreen() {
         {/* ── 3. Recent Transactions Widget ── */}
         <View style={[styles.widgetCard, { backgroundColor: colors.card, borderColor: colors.border }]}>
           <View style={styles.sectionHeaderRow}>
-            <Text style={[styles.sectionTitle, { color: colors.foreground }]}>Recent transactions</Text>
-            <TouchableOpacity onPress={() => router.push("/transactions")} style={{ flexDirection: "row", alignItems: "center", gap: 4 }}>
+            <View style={{ flexDirection: "row", alignItems: "center", gap: 8 }}>
+              <View style={[styles.sectionIconBadge, { backgroundColor: "#818CF818" }]}>
+                <Feather name="activity" size={14} color="#818CF8" />
+              </View>
+              <Text style={[styles.sectionTitle, { color: colors.foreground }]}>Recent transactions</Text>
+            </View>
+            <TouchableOpacity onPress={() => router.push("/transactions")} style={{ flexDirection: "row", alignItems: "center", gap: 4 }} hitSlop={8}>
               <Text style={[styles.sectionLink, { color: colors.mutedForeground }]}>View all</Text>
               <Feather name="chevron-right" size={14} color={colors.mutedForeground} />
             </TouchableOpacity>
           </View>
 
-          <View style={{ gap: 14 }}>
-            {recentTransactionsList.map((item) => (
-              <View key={item.id} style={styles.listRow}>
-                <View style={[styles.iconCircle, { backgroundColor: getCategoryColor(item.category, colors) + "22" }]}>
-                  <Feather
-                    name={
-                      item.category.toLowerCase().includes("food")
-                        ? "coffee"
-                        : item.category.toLowerCase().includes("trans")
-                          ? "navigation"
-                          : "shopping-bag"
-                    }
-                    size={18}
-                    color={getCategoryColor(item.category, colors)}
+          <View style={styles.insetCardList}>
+            {recentTransactionsList.map((item, idx) => (
+              <React.Fragment key={item.id}>
+                {idx > 0 && <View style={[styles.rowDivider, { backgroundColor: colors.border }]} />}
+                <View style={styles.listRow}>
+                  <TransactionAvatar
+                    title={item.rawTitle || item.title}
+                    merchant={item.merchant}
+                    category={item.category}
+                    type={item.type}
+                    size={42}
+                    iconSize={20}
+                    style={{ marginRight: 12 }}
                   />
+                  <View style={{ flex: 1 }}>
+                    <Text style={[styles.rowTitle, { color: colors.foreground }]} numberOfLines={1}>
+                      {item.title}
+                    </Text>
+                    <Text style={[styles.rowSubtitle, { color: colors.mutedForeground }]}>{item.subtitle}</Text>
+                  </View>
+                  <View style={{ alignItems: "flex-end" }}>
+                    <Text style={[styles.rowAmount, { color: colors.foreground }]}>{item.amount}</Text>
+                    <Text style={[styles.rowDate, { color: colors.mutedForeground }]}>{item.date}</Text>
+                  </View>
                 </View>
-                <View style={{ flex: 1 }}>
-                  <Text style={[styles.rowTitle, { color: colors.foreground }]}>{item.title}</Text>
-                  <Text style={[styles.rowSubtitle, { color: colors.mutedForeground }]}>{item.subtitle}</Text>
-                </View>
-                <View style={{ alignItems: "flex-end" }}>
-                  <Text style={[styles.rowAmount, { color: colors.foreground }]}>{item.amount}</Text>
-                  <Text style={[styles.rowDate, { color: colors.mutedForeground }]}>{item.date}</Text>
-                </View>
-              </View>
+              </React.Fragment>
             ))}
           </View>
         </View>
+
 
         {/* ── Bills Under Review Widget (near Upcoming Bills) ── */}
         {pendingBillReviews.length > 0 && (
@@ -639,58 +861,95 @@ export default function HomeScreen() {
         {/* ── 4. Upcoming Bills Widget ── */}
         <View style={[styles.widgetCard, { backgroundColor: colors.card, borderColor: colors.border }]}>
           <View style={styles.sectionHeaderRow}>
-            <Text style={[styles.sectionTitle, { color: colors.foreground }]}>Upcoming bills</Text>
-            <TouchableOpacity onPress={() => router.push("/bills")} style={{ flexDirection: "row", alignItems: "center", gap: 4 }}>
+            <View style={{ flexDirection: "row", alignItems: "center", gap: 8 }}>
+              <View style={[styles.sectionIconBadge, { backgroundColor: "#F59E0B18" }]}>
+                <Feather name="calendar" size={14} color="#F59E0B" />
+              </View>
+              <Text style={[styles.sectionTitle, { color: colors.foreground }]}>Upcoming bills</Text>
+            </View>
+            <TouchableOpacity onPress={() => router.push("/bills")} style={{ flexDirection: "row", alignItems: "center", gap: 4 }} hitSlop={8}>
               <Text style={[styles.sectionLink, { color: colors.mutedForeground }]}>View all</Text>
               <Feather name="chevron-right" size={14} color={colors.mutedForeground} />
             </TouchableOpacity>
           </View>
 
-          <View style={{ gap: 14 }}>
-            {upcomingBillsList.map((item) => (
-              <View key={item.id} style={styles.listRow}>
-                <View
-                  style={[
-                    styles.iconCircle,
-                    {
-                      backgroundColor: item.title.toLowerCase().includes("netflix") ? "#E5091422" : "#1A56DB22",
-                    },
-                  ]}
-                >
-                  <Feather
-                    name={item.title.toLowerCase().includes("netflix") ? "tv" : "credit-card"}
-                    size={18}
-                    color={item.title.toLowerCase().includes("netflix") ? "#E50914" : "#1A56DB"}
-                  />
+          <View style={styles.insetCardList}>
+            {upcomingBillsList.map((item, idx) => (
+              <React.Fragment key={item.id}>
+                {idx > 0 && <View style={[styles.rowDivider, { backgroundColor: colors.border }]} />}
+                <View style={styles.listRow}>
+                  <View
+                    style={[
+                      styles.iconCircle,
+                      {
+                        backgroundColor: item.title.toLowerCase().includes("netflix") ? "#E509141F" : "#1A56DB1F",
+                      },
+                    ]}
+                  >
+                    <Feather
+                      name={item.title.toLowerCase().includes("netflix") ? "tv" : "credit-card"}
+                      size={18}
+                      color={item.title.toLowerCase().includes("netflix") ? "#E50914" : "#1A56DB"}
+                    />
+                  </View>
+                  <View style={{ flex: 1 }}>
+                    <Text style={[styles.rowTitle, { color: colors.foreground }]} numberOfLines={1}>
+                      {item.title}
+                    </Text>
+                    <Text style={[styles.rowSubtitle, { color: colors.mutedForeground }]}>{item.category}</Text>
+                  </View>
+                  <View style={{ alignItems: "flex-end" }}>
+                    <Text style={[styles.rowAmount, { color: colors.foreground }]}>{item.amount}</Text>
+                    <Text style={[styles.rowDate, { color: colors.mutedForeground }]}>{item.dueDate}</Text>
+                  </View>
                 </View>
-                <View style={{ flex: 1 }}>
-                  <Text style={[styles.rowTitle, { color: colors.foreground }]}>{item.title}</Text>
-                  <Text style={[styles.rowSubtitle, { color: colors.mutedForeground }]}>{item.category}</Text>
-                </View>
-                <View style={{ alignItems: "flex-end" }}>
-                  <Text style={[styles.rowAmount, { color: colors.foreground }]}>{item.amount}</Text>
-                  <Text style={[styles.rowDate, { color: colors.mutedForeground }]}>{item.dueDate}</Text>
-                </View>
-              </View>
+              </React.Fragment>
             ))}
           </View>
         </View>
 
-        {/* ── 5. Streak / Motivation Banner Widget ── */}
-        <View style={[styles.bannerCard, { backgroundColor: colors.incomeBg }]}>
-          <View style={[styles.bannerIconBadge, { backgroundColor: colors.income + "22" }]}>
+        {/* ── 5. Financial Health / Motivation Banner Widget ── */}
+        <View style={[styles.bannerCard, { backgroundColor: colors.incomeBg, borderColor: colors.income + "25" }]}>
+          <View style={[styles.bannerIconBadge, { backgroundColor: colors.income + "20" }]}>
             <Feather name="shield" size={18} color={colors.income} />
           </View>
           <View style={{ flex: 1 }}>
-            <Text style={[styles.bannerTitle, { color: colors.foreground }]}>Great job! 🎉</Text>
+            <Text style={[styles.bannerTitle, { color: colors.foreground }]}>Financial Health: On Track 🎉</Text>
             <Text style={[styles.bannerSubtitle, { color: colors.mutedForeground }]}>
-              You're on track. Keep it up!
+              All upcoming bills and transactions are balanced.
             </Text>
           </View>
           <CatBannerIllustration size={44} />
-          <Feather name="chevron-right" size={16} color={colors.mutedForeground} style={{ marginLeft: 4 }} />
         </View>
       </ScrollView>
+
+      <SyncStatusModal
+        visible={showSyncModal}
+        result={syncResult}
+        onClose={() => setShowSyncModal(false)}
+        onReconnect={(itemId, bankName) => {
+          setRelinkTarget({ itemId, bankName });
+        }}
+      />
+
+      {relinkTarget && (
+        <PlaidLinkModal
+          onClose={() => {
+            const item = relinkTarget;
+            setRelinkTarget(null);
+            if (item?.itemId) {
+              refreshAllAccountsAndTransactions()
+                .then((res) => {
+                  setSyncResult(res);
+                  setShowSyncModal(true);
+                })
+                .catch(() => {});
+            }
+          }}
+          relinkItemId={relinkTarget.itemId}
+          relinkBankName={relinkTarget.bankName}
+        />
+      )}
     </SafeAreaView>
   );
 }
@@ -752,155 +1011,223 @@ const styles = StyleSheet.create({
     paddingBottom: 100,
     gap: 16,
   },
-  stackedCardWrapper: {
-    position: "relative",
-    marginBottom: 4,
-  },
-  stackedLayerBack2: {
-    position: "absolute",
-    top: -8,
-    left: 14,
-    right: 14,
-    height: 30,
-    borderRadius: 20,
-  },
-  stackedLayerBack1: {
-    position: "absolute",
-    top: -4,
-    left: 7,
-    right: 7,
-    height: 30,
-    borderRadius: 20,
-  },
-  totalBalanceCard: {
-    borderRadius: 22,
-    padding: 18,
-    elevation: 6,
-    shadowColor: "#4C1D95",
+  // ── Hero Card (Matte Obsidian) ──
+  heroCardContainer: {
+    borderRadius: 24,
+    overflow: "hidden",
+    borderWidth: 1,
+    borderColor: "rgba(255, 255, 255, 0.12)",
+    elevation: 8,
+    shadowColor: "#000",
     shadowOffset: { width: 0, height: 6 },
     shadowOpacity: 0.35,
-    shadowRadius: 10,
+    shadowRadius: 14,
   },
-  balanceCardHeader: {
+  heroCardGradient: {
+    padding: 20,
+    position: "relative",
+  },
+  heroCardSheenLine: {
+    position: "absolute",
+    top: 0,
+    left: 20,
+    right: 20,
+    height: 1,
+    backgroundColor: "rgba(255, 255, 255, 0.18)",
+  },
+  heroHeaderRow: {
     flexDirection: "row",
     justifyContent: "space-between",
     alignItems: "center",
   },
-  walletTitleRow: {
+  heroPillBadge: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 6,
+    paddingHorizontal: 9,
+    paddingVertical: 4,
+    borderRadius: 999,
+    backgroundColor: "rgba(255, 255, 255, 0.1)",
+    borderWidth: 1,
+    borderColor: "rgba(255, 255, 255, 0.14)",
+  },
+  heroPillDot: {
+    width: 6,
+    height: 6,
+    borderRadius: 3,
+    backgroundColor: "#34D399",
+  },
+  heroPillText: {
+    fontSize: 10,
+    fontFamily: "Inter_700Bold",
+    letterSpacing: 0.8,
+    color: "rgba(255, 255, 255, 0.85)",
+  },
+  heroActionGroup: {
     flexDirection: "row",
     alignItems: "center",
     gap: 8,
   },
-  walletIconBadge: {
-    width: 32,
-    height: 32,
-    borderRadius: 10,
-    backgroundColor: "rgba(255, 255, 255, 0.2)",
-    alignItems: "center",
-    justifyContent: "center",
-  },
-  balanceCardLabel: {
-    fontSize: 13,
-    fontFamily: "Inter_500Medium",
-    color: "rgba(255, 255, 255, 0.85)",
-  },
-  cardActionBtn: {
+  heroActionBtn: {
     width: 32,
     height: 32,
     borderRadius: 16,
-    backgroundColor: "rgba(255, 255, 255, 0.18)",
+    backgroundColor: "rgba(255, 255, 255, 0.1)",
+    borderWidth: 1,
+    borderColor: "rgba(255, 255, 255, 0.14)",
     alignItems: "center",
     justifyContent: "center",
   },
-  balanceAmountRow: {
-    marginVertical: 12,
+  heroAmountRow: {
+    flexDirection: "row",
+    alignItems: "baseline",
+    marginVertical: 14,
   },
-  balanceMainText: {
-    fontSize: 28,
+  heroCurrencySymbol: {
+    fontSize: 22,
+    fontFamily: "Inter_600SemiBold",
+    color: "rgba(255, 255, 255, 0.7)",
+    marginRight: 2,
+  },
+  heroMainAmountText: {
+    fontSize: 34,
     fontFamily: "Inter_700Bold",
     color: "#FFFFFF",
-    letterSpacing: -0.5,
+    letterSpacing: -0.8,
   },
-  balanceFooterRow: {
+  heroDecimalText: {
+    fontSize: 20,
+    fontFamily: "Inter_500Medium",
+    color: "rgba(255, 255, 255, 0.65)",
+  },
+  heroFooterRow: {
     flexDirection: "row",
     justifyContent: "space-between",
     alignItems: "center",
-    marginTop: 2,
+    paddingTop: 4,
   },
-  comparisonBadge: {
+  heroTrendCapsule: {
     flexDirection: "row",
     alignItems: "center",
-    gap: 4,
+    gap: 5,
+    paddingHorizontal: 10,
+    paddingVertical: 5,
+    borderRadius: 999,
+    borderWidth: 1,
   },
-  comparisonPctText: {
-    fontSize: 13,
+  heroTrendPctText: {
+    fontSize: 12,
     fontFamily: "Inter_700Bold",
   },
-  comparisonSubText: {
-    fontSize: 12,
+  heroTrendLabel: {
+    fontSize: 11,
     fontFamily: "Inter_400Regular",
     color: "rgba(255, 255, 255, 0.7)",
-    marginLeft: 2,
   },
-  diffPill: {
-    paddingHorizontal: 12,
+  heroDeltaPill: {
+    paddingHorizontal: 10,
     paddingVertical: 5,
-    borderRadius: 14,
-    backgroundColor: "rgba(255, 255, 255, 0.18)",
+    borderRadius: 999,
+    backgroundColor: "rgba(255, 255, 255, 0.08)",
+    borderWidth: 1,
+    borderColor: "rgba(255, 255, 255, 0.12)",
   },
-  diffPillText: {
-    fontSize: 13,
+  heroDeltaText: {
+    fontSize: 12,
     fontFamily: "Inter_600SemiBold",
     color: "#FFFFFF",
   },
-  widgetCard: {
-    borderRadius: 20,
-    borderWidth: 1,
-    padding: 16,
-  },
-  topWidgetRow: {
+
+  // ── Quick Actions Bar ──
+  quickActionsBar: {
     flexDirection: "row",
-    gap: 10,
+    justifyContent: "space-between",
     alignItems: "center",
+    paddingHorizontal: 2,
+    marginTop: 2,
+    marginBottom: 2,
   },
-  statBox: {
+  quickActionItem: {
+    alignItems: "center",
+    gap: 6,
     flex: 1,
-    borderRadius: 14,
-    padding: 12,
-    gap: 4,
   },
-  statPill: {
-    flexDirection: "row",
+  quickActionSquircle: {
+    width: 52,
+    height: 52,
+    borderRadius: 16,
+    borderWidth: 1,
     alignItems: "center",
-    gap: 4,
+    justifyContent: "center",
+    shadowColor: "#000",
+    shadowOffset: { width: 0, height: 2 },
+    shadowOpacity: 0.04,
+    shadowRadius: 6,
+    elevation: 2,
   },
-  statPillText: {
-    fontSize: 12,
-    fontFamily: "Inter_500Medium",
-  },
-  statAmount: {
-    fontSize: 18,
-    fontFamily: "Inter_700Bold",
-    marginTop: 2,
-  },
-  statPeriod: {
-    fontSize: 11,
-    fontFamily: "Inter_400Regular",
-  },
-  changeBadgeRow: {
-    flexDirection: "row",
-    alignItems: "center",
-    gap: 2,
-    marginTop: 2,
-  },
-  changeText: {
+  quickActionLabel: {
     fontSize: 11,
     fontFamily: "Inter_600SemiBold",
   },
-  catGraphicContainer: {
-    width: 68,
+
+  // ── Financial Overview (Income vs Expense) ──
+  statsSplitRow: {
+    flexDirection: "row",
+    gap: 12,
+  },
+  statMatteTile: {
+    flex: 1,
+    borderRadius: 20,
+    padding: 14,
+    borderWidth: 1,
+    gap: 5,
+  },
+  statTileHeader: {
+    flexDirection: "row",
+    justifyContent: "space-between",
     alignItems: "center",
-    justifyContent: "center",
+  },
+  statMicroPill: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 4,
+    paddingHorizontal: 8,
+    paddingVertical: 3,
+    borderRadius: 999,
+  },
+  statMicroPillText: {
+    fontSize: 11,
+    fontFamily: "Inter_600SemiBold",
+  },
+  statMicroTrendRow: {
+    flexDirection: "row",
+    alignItems: "center",
+  },
+  statMicroTrendText: {
+    fontSize: 11,
+    fontFamily: "Inter_700Bold",
+  },
+  statAmountMain: {
+    fontSize: 19,
+    fontFamily: "Inter_700Bold",
+    marginTop: 4,
+    letterSpacing: -0.3,
+  },
+  statPeriodLabel: {
+    fontSize: 11,
+    fontFamily: "Inter_400Regular",
+  },
+
+  // ── Widgets & Inset Cards ──
+  widgetCard: {
+    borderRadius: 22,
+    borderWidth: 1,
+    padding: 16,
+    shadowColor: "#000",
+    shadowOffset: { width: 0, height: 2 },
+    shadowOpacity: 0.04,
+    shadowRadius: 8,
+    elevation: 2,
   },
   sectionHeaderRow: {
     flexDirection: "row",
@@ -908,8 +1235,15 @@ const styles = StyleSheet.create({
     alignItems: "center",
     marginBottom: 14,
   },
+  sectionIconBadge: {
+    width: 26,
+    height: 26,
+    borderRadius: 8,
+    alignItems: "center",
+    justifyContent: "center",
+  },
   sectionTitle: {
-    fontSize: 16,
+    fontSize: 15,
     fontFamily: "Inter_700Bold",
   },
   sectionLink: {
@@ -919,13 +1253,15 @@ const styles = StyleSheet.create({
   donutRow: {
     flexDirection: "row",
     alignItems: "center",
-    gap: 16,
+    gap: 20,
+    marginTop: 6,
   },
   legendList: {
     flex: 1,
-    gap: 8,
+    gap: 12,
+    justifyContent: "center",
   },
-  legendItem: {
+  legendItemRow: {
     flexDirection: "row",
     alignItems: "center",
     justifyContent: "space-between",
@@ -938,15 +1274,22 @@ const styles = StyleSheet.create({
   legendName: {
     fontSize: 13,
     fontFamily: "Inter_500Medium",
+    letterSpacing: -0.1,
   },
   legendPct: {
-    fontSize: 12,
-    fontFamily: "Inter_400Regular",
-    marginRight: 8,
-  },
-  legendAmt: {
     fontSize: 13,
     fontFamily: "Inter_600SemiBold",
+    letterSpacing: -0.1,
+  },
+
+  // ── List & Rows ──
+  insetCardList: {
+    gap: 0,
+  },
+  rowDivider: {
+    height: StyleSheet.hairlineWidth,
+    marginLeft: 54,
+    marginVertical: 10,
   },
   listRow: {
     flexDirection: "row",
@@ -954,9 +1297,9 @@ const styles = StyleSheet.create({
     gap: 12,
   },
   iconCircle: {
-    width: 40,
-    height: 40,
-    borderRadius: 20,
+    width: 42,
+    height: 42,
+    borderRadius: 14,
     alignItems: "center",
     justifyContent: "center",
   },
@@ -974,13 +1317,16 @@ const styles = StyleSheet.create({
     fontFamily: "Inter_700Bold",
   },
   rowDate: {
-    fontSize: 12,
+    fontSize: 11,
     fontFamily: "Inter_400Regular",
     marginTop: 2,
   },
+
+  // ── Banner Card ──
   bannerCard: {
     borderRadius: 20,
-    padding: 14,
+    borderWidth: 1,
+    padding: 15,
     flexDirection: "row",
     alignItems: "center",
     gap: 12,
@@ -993,14 +1339,16 @@ const styles = StyleSheet.create({
     justifyContent: "center",
   },
   bannerTitle: {
-    fontSize: 14,
+    fontSize: 13,
     fontFamily: "Inter_700Bold",
   },
   bannerSubtitle: {
-    fontSize: 12,
+    fontSize: 11,
     fontFamily: "Inter_400Regular",
     marginTop: 2,
   },
+
+  // ── Review Match Card ──
   reviewMatchCard: {
     borderRadius: 14,
     borderWidth: 1,
@@ -1085,3 +1433,4 @@ const styles = StyleSheet.create({
     color: "#FFFFFF",
   },
 });
+

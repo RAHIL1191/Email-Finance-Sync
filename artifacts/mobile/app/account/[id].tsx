@@ -1451,19 +1451,18 @@ export default function AccountDetailScreen() {
   // Load or initialize sync timestamp for this account
   useEffect(() => {
     if (!account?.id) return;
-    const storageKey = `@fintrack/card_last_sync_${account.id}`;
-    AsyncStorage.getItem(storageKey).then((saved) => {
-      if (saved) {
-        setAccountSyncTime(saved);
-      } else if (plaidItem?.lastSynced) {
-        setAccountSyncTime(plaidItem.lastSynced);
-      } else {
-        const initial = new Date(Date.now() - 2 * 60 * 1000).toISOString();
-        setAccountSyncTime(initial);
-        AsyncStorage.setItem(storageKey, initial);
-      }
-    });
-  }, [account?.id, plaidItem?.lastSynced]);
+    if (plaidItem) {
+      // For Plaid-connected accounts, Plaid item's lastSynced is authoritative
+      setAccountSyncTime(plaidItem.lastSynced ?? null);
+    } else {
+      const storageKey = `@fintrack/card_last_sync_${account.id}`;
+      AsyncStorage.getItem(storageKey).then((saved) => {
+        if (saved) {
+          setAccountSyncTime(saved);
+        }
+      });
+    }
+  }, [account?.id, plaidItem?.lastSynced, plaidItem]);
 
   if (!account) {
     return (
@@ -1548,34 +1547,27 @@ export default function AccountDetailScreen() {
     dueLabel = `Due ${d.toLocaleDateString("en-US", { month: "short", day: "numeric" })}`;
   }
 
-  // Dynamic relative sync time formatting - pick the freshest timestamp
+  // Dynamic relative sync time formatting - pick authoritative timestamp
   const effectiveSyncIso = useMemo(() => {
     if (isSyncing) return null;
-    const candidates: number[] = [];
-    if (accountSyncTime) {
-      const t = new Date(accountSyncTime).getTime();
-      if (!isNaN(t)) candidates.push(t);
+    if (plaidItem) {
+      return plaidItem.lastSynced ?? null;
     }
-    if (plaidItem?.lastSynced) {
-      const t = new Date(plaidItem.lastSynced).getTime();
-      if (!isNaN(t)) candidates.push(t);
-    }
-    if (lastAutoSyncTime && lastAutoSyncTime > 0) {
-      candidates.push(lastAutoSyncTime);
-    }
-    if (candidates.length === 0) return null;
-    return new Date(Math.max(...candidates)).toISOString();
-  }, [isSyncing, accountSyncTime, plaidItem?.lastSynced, lastAutoSyncTime]);
+    return accountSyncTime || null;
+  }, [isSyncing, accountSyncTime, plaidItem?.lastSynced, plaidItem]);
 
   const THREE_HOURS_MS = 3 * 60 * 60 * 1000;
 
   const nextSyncInfo = useMemo(() => {
     if (isSyncing) return { text: "Sync in progress…", isDue: false };
+    if (hasSyncError || plaidItem?.syncError) {
+      return { text: "Sync paused due to error", isDue: false };
+    }
     if (!effectiveSyncIso) {
-      return { text: "Next sync in 3 hrs", isDue: false };
+      return { text: "Auto-sync every 3 hrs", isDue: false };
     }
     const lastSyncMs = new Date(effectiveSyncIso).getTime();
-    if (isNaN(lastSyncMs)) return { text: "Next sync in 3 hrs", isDue: false };
+    if (isNaN(lastSyncMs)) return { text: "Auto-sync every 3 hrs", isDue: false };
 
     const nextSyncMs = lastSyncMs + THREE_HOURS_MS;
     const diffMs = nextSyncMs - nowMs;
@@ -1600,7 +1592,7 @@ export default function AccountDetailScreen() {
     }
 
     return { text: `Next sync ${timeRemainingStr}`, isDue: false };
-  }, [isSyncing, effectiveSyncIso, nowMs]);
+  }, [isSyncing, effectiveSyncIso, nowMs, hasSyncError, plaidItem?.syncError]);
 
   const isPlaidLinked = Boolean(plaidItem || account.plaidItemId);
 
@@ -1667,24 +1659,41 @@ export default function AccountDetailScreen() {
   const handleSyncNow = async () => {
     if (isSyncing) return;
     Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium);
-    const newTimestamp = new Date().toISOString();
-    setAccountSyncTime(newTimestamp);
-    setNowMs(Date.now());
-    if (account?.id) {
-      await AsyncStorage.setItem(`@fintrack/card_last_sync_${account.id}`, newTimestamp);
-    }
     const targetItemId = account?.plaidItemId || plaidItem?.itemId;
     try {
+      let syncResult: { imported: number; error?: string } | undefined;
       if (targetItemId) {
-        await syncPlaidTransactions(targetItemId, true);
+        syncResult = await syncPlaidTransactions(targetItemId, true);
       } else if (plaidSync?.items?.length) {
         for (const item of plaidSync.items) {
-          await syncPlaidTransactions(item.itemId, true);
+          const r = await syncPlaidTransactions(item.itemId, true);
+          if (r?.error) {
+            syncResult = r;
+          } else if (!syncResult) {
+            syncResult = r;
+          }
         }
       }
-    } catch {}
-    setSyncDoneBanner(true);
-    setTimeout(() => setSyncDoneBanner(false), 2500);
+
+      if (syncResult?.error) {
+        // Sync failed - do NOT advance sync timestamp or show success banner!
+        Haptics.notificationAsync(Haptics.NotificationFeedbackType.Warning);
+        return;
+      }
+
+      // Sync succeeded!
+      Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
+      const newTimestamp = new Date().toISOString();
+      setAccountSyncTime(newTimestamp);
+      setNowMs(Date.now());
+      if (account?.id) {
+        await AsyncStorage.setItem(`@fintrack/card_last_sync_${account.id}`, newTimestamp);
+      }
+      setSyncDoneBanner(true);
+      setTimeout(() => setSyncDoneBanner(false), 2500);
+    } catch {
+      Haptics.notificationAsync(Haptics.NotificationFeedbackType.Error);
+    }
   };
 
   const displaySubname = useMemo(() => {
@@ -2224,13 +2233,18 @@ export default function AccountDetailScreen() {
             const updatedItemId = relinkTargetItem?.itemId;
             setRelinkTargetItem(null);
             if (updatedItemId) {
-              syncPlaidTransactions(updatedItemId, true).catch(() => {});
-            }
-            const newTimestamp = new Date().toISOString();
-            setAccountSyncTime(newTimestamp);
-            setNowMs(Date.now());
-            if (account?.id) {
-              AsyncStorage.setItem(`@fintrack/card_last_sync_${account.id}`, newTimestamp).catch(() => {});
+              syncPlaidTransactions(updatedItemId, true)
+                .then((res) => {
+                  if (res && !res.error) {
+                    const newTimestamp = new Date().toISOString();
+                    setAccountSyncTime(newTimestamp);
+                    setNowMs(Date.now());
+                    if (account?.id) {
+                      AsyncStorage.setItem(`@fintrack/card_last_sync_${account.id}`, newTimestamp).catch(() => {});
+                    }
+                  }
+                })
+                .catch(() => {});
             }
           }}
           relinkItemId={relinkTargetItem.itemId}

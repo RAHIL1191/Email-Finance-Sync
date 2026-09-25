@@ -16,6 +16,7 @@ export const tasksTable = pgTable("tasks", {
   reminderEnabled: boolean("reminder_enabled").notNull().default(false),
   reminderDate: text("reminder_date"),
   reminderFrequency: text("reminder_frequency"), // once | daily | weekly | monthly
+  lastNotifState: text("last_notif_state"), // due_today | overdue | reminder | null
   createdAt: timestamp("created_at").defaultNow().notNull(),
   updatedAt: timestamp("updated_at").defaultNow().notNull(),
 });
@@ -35,6 +36,7 @@ export const insertTaskSchema = z.object({
   reminderEnabled: z.boolean().optional().default(false),
   reminderDate: z.string().nullable().optional(),
   reminderFrequency: z.enum(["once", "daily", "weekly", "monthly"]).nullable().optional(),
+  lastNotifState: z.string().nullable().optional(),
 });
 
 export const updateTaskSchema = insertTaskSchema

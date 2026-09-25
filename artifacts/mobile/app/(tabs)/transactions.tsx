@@ -1,8 +1,10 @@
 import { Feather } from "@expo/vector-icons";
 import DateTimePicker from "@react-native-community/datetimepicker";
 import * as Haptics from "expo-haptics";
+import { router, useLocalSearchParams } from "expo-router";
 import React, { useCallback, useEffect, useMemo, useState } from "react";
 import {
+  Alert,
   Dimensions,
   FlatList,
   Modal,
@@ -24,7 +26,11 @@ import TransactionFilterModal, { DEFAULT_TX_FILTER, TxFilterSettings } from "@/c
 import MonthDetailModal from "@/components/MonthDetailModal";
 import TransactionDetailModal from "@/components/TransactionDetailModal";
 import TransactionItem from "@/components/TransactionItem";
-import { Account, Bill, Category, Transaction, InvestmentTransaction, Holding, computeBalance, useApp } from "@/context/AppContext";
+import TransactionAvatar from "@/components/TransactionAvatar";
+import SyncStatusModal from "@/components/SyncStatusModal";
+import PlaidLinkModal from "@/components/PlaidLinkModal";
+import { Account, Bill, Category, Transaction, InvestmentTransaction, Holding, computeBalance, formatTxCleanTitle, useApp } from "@/context/AppContext";
+import type { SyncSummaryResult } from "@/context/AppContext";
 import { useDrawer } from "@/context/DrawerContext";
 import { useColors } from "@/hooks/useColors";
 import { parseLocalDate, localYM, toLocalYMD } from "@/hooks/useLocalDate";
@@ -1391,11 +1397,19 @@ function SpendingTab({
                         setSelectedTx(t);
                       }}
                     >
-                      <View style={[styles.spendItemIcon, { backgroundColor: vis.color + "20" }]}>
-                        <Feather name={vis.icon} size={18} color={vis.color} />
-                      </View>
+                      <TransactionAvatar
+                        title={t.title}
+                        merchant={t.merchant}
+                        category={t.category}
+                        type={t.type}
+                        size={40}
+                        iconSize={19}
+                        style={{ marginRight: 12 }}
+                      />
                       <View style={{ flex: 1 }}>
-                        <Text style={[styles.spendItemName, { color: colors.foreground }]}>{t.title}</Text>
+                        <Text style={[styles.spendItemName, { color: colors.foreground }]} numberOfLines={1}>
+                          {formatTxCleanTitle(t.title, t.merchant)}
+                        </Text>
                         <Text style={[styles.spendItemPct, { color: colors.mutedForeground }]}>{dateStr}</Text>
                         {acc && (
                           <Text style={[styles.spendItemPct, { color: colors.mutedForeground }]}>
@@ -1504,16 +1518,34 @@ const TX_FILTERS = ["All", "Expenses", "Income", "Transfer"] as const;
 type TxFilter = (typeof TX_FILTERS)[number];
 
 function TransactionsTab({ transactions, colors, showFilter, setShowFilter, filterSettings, setFilterSettings }: { transactions: Transaction[]; colors: any; showFilter: boolean; setShowFilter: (v: boolean) => void; filterSettings: TxFilterSettings; setFilterSettings: (s: TxFilterSettings) => void }) {
-  const { refreshTransactionsFromServer } = useApp();
+  const { refreshTransactionsFromServer, refreshAllAccountsAndTransactions } = useApp();
   const [filter, setFilter] = useState<TxFilter>("All");
   const [showAdd, setShowAdd] = useState(false);
   const [selectedTx, setSelectedTx] = useState<Transaction | null>(null);
   const [refreshing, setRefreshing] = useState(false);
+  const [syncResult, setSyncResult] = useState<SyncSummaryResult | null>(null);
+  const [showSyncModal, setShowSyncModal] = useState(false);
+  const [relinkTarget, setRelinkTarget] = useState<{ itemId: string; bankName: string } | null>(null);
 
   const handleRefresh = async () => {
     setRefreshing(true);
-    await refreshTransactionsFromServer?.();
-    setRefreshing(false);
+    try {
+      const res = await refreshAllAccountsAndTransactions();
+      setSyncResult(res);
+      setShowSyncModal(true);
+      if (res.needsAttention) {
+        Haptics.notificationAsync(Haptics.NotificationFeedbackType.Warning);
+      } else {
+        Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
+      }
+    } catch (err: any) {
+      Alert.alert(
+        "Sync Error",
+        err?.message || "Failed to refresh transactions. Please check your network connection."
+      );
+    } finally {
+      setRefreshing(false);
+    }
   };
 
   // transactions prop is already deduplicated + reviewed-only (from InsightsScreen visibleTxs)
@@ -1681,6 +1713,34 @@ function TransactionsTab({ transactions, colors, showFilter, setShowFilter, filt
         }}
         onClose={() => setShowFilter(false)}
       />
+
+      <SyncStatusModal
+        visible={showSyncModal}
+        result={syncResult}
+        onClose={() => setShowSyncModal(false)}
+        onReconnect={(itemId, bankName) => {
+          setRelinkTarget({ itemId, bankName });
+        }}
+      />
+
+      {relinkTarget && (
+        <PlaidLinkModal
+          onClose={() => {
+            const item = relinkTarget;
+            setRelinkTarget(null);
+            if (item?.itemId) {
+              refreshAllAccountsAndTransactions()
+                .then((res) => {
+                  setSyncResult(res);
+                  setShowSyncModal(true);
+                })
+                .catch(() => {});
+            }
+          }}
+          relinkItemId={relinkTarget.itemId}
+          relinkBankName={relinkTarget.bankName}
+        />
+      )}
     </View>
   );
 }
@@ -1735,9 +1795,18 @@ function ReviewTab({
         }
         renderItem={({ item }) => (
           <View style={[styles.reviewRow, { backgroundColor: colors.card, borderColor: colors.border }]}>
+            <TransactionAvatar
+              title={item.title}
+              merchant={item.merchant}
+              category={item.category}
+              type={item.type}
+              size={38}
+              iconSize={18}
+              style={{ marginRight: 10 }}
+            />
             <View style={{ flex: 1, gap: 2 }}>
               <Text style={[styles.reviewTitle, { color: colors.foreground }]} numberOfLines={1}>
-                {item.merchant || item.title}
+                {formatTxCleanTitle(item.title, item.merchant)}
               </Text>
               <Text style={[styles.reviewSub, { color: colors.mutedForeground }]} numberOfLines={1}>
                 {item.bank || "Email"} · {item.category} · {parseLocalDate(item.date).toLocaleDateString()}
@@ -2316,7 +2385,23 @@ export default function InsightsScreen() {
   const colors = useColors();
   const { openDrawer } = useDrawer();
   const { transactions, bills, accounts, addTransaction, reviewedTransactionIds, investmentTransactions, holdings, currentMonth, setCurrentMonth } = useApp();
-  const [activeTab, setActiveTab] = useState<Subtab>("CASH FLOW");
+  const params = useLocalSearchParams<{ tab?: string }>();
+  const [activeTab, setActiveTab] = useState<Subtab>(() => {
+    if (params.tab && typeof params.tab === "string") {
+      const upper = params.tab.toUpperCase();
+      if (SUBTABS.includes(upper as any)) return upper as Subtab;
+    }
+    return "CASH FLOW";
+  });
+
+  useEffect(() => {
+    if (params.tab && typeof params.tab === "string") {
+      const upper = params.tab.toUpperCase();
+      if (SUBTABS.includes(upper as any)) {
+        setActiveTab(upper as Subtab);
+      }
+    }
+  }, [params.tab]);
 
   const pendingReviewCount = useMemo(
     () => transactions.filter((t) => (t.fromEmail || t.source === "email") && !reviewedTransactionIds.includes(t.id)).length,
@@ -2391,6 +2476,17 @@ export default function InsightsScreen() {
         </TouchableOpacity>
         <Text style={[styles.headerTitle, { color: colors.foreground }]}>Insights</Text>
         <View style={styles.headerActions}>
+          <TouchableOpacity
+            style={styles.headerIcon}
+            onPress={() => {
+              Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
+              router.push("/search");
+            }}
+            hitSlop={8}
+            accessibilityLabel="Search transactions"
+          >
+            <Feather name="search" size={20} color={colors.primary} />
+          </TouchableOpacity>
           <TouchableOpacity
             style={styles.headerIcon}
             onPress={() => {
