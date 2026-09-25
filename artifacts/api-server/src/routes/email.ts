@@ -434,7 +434,7 @@ router.post("/email/send-report", async (req, res) => {
       await imapClient.connect();
       
       // 3. Append to INBOX
-      await imapClient.append("INBOX", rawMessage as any);
+      await imapClient.append("INBOX", rawMessage as Buffer);
       await imapClient.logout();
 
       req.log.info("Email report successfully self-delivered via IMAP append fallback");

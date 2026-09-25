@@ -156,17 +156,21 @@ router.post("/ai/chat", async (req, res) => {
 
     // Check if the model requested one or more tool calls
     if (message?.tool_calls && message.tool_calls.length > 0) {
-      req.log.info({ tool_calls: message.tool_calls.map((tc: any) => tc.function.name) }, "AI Agent executing tool calls");
+      req.log.info(
+        { tool_calls: message.tool_calls.map((tc) => (tc.type === "function" ? tc.function.name : "")) },
+        "AI Agent executing tool calls"
+      );
       
-      const secondMessages = [
-        { role: "system", content: systemContent } as any,
+      const secondMessages: any[] = [
+        { role: "system" as const, content: systemContent },
         ...messages,
         message, // Include assistant's tool call request
       ];
 
       for (const call of message.tool_calls) {
-        const { name, arguments: argsString } = (call as any).function;
-        let args: any = {};
+        if (call.type !== "function") continue;
+        const { name, arguments: argsString } = call.function;
+        let args: Record<string, any> = {};
         try {
           args = JSON.parse(argsString);
         } catch {}
