@@ -18,7 +18,11 @@ if (fs.existsSync(envPath)) {
   }
 }
 
-const DATABASE_URL = process.env.DATABASE_URL || 'postgresql://neondb_owner:npg_3t5CBrbWcxQe@ep-autumn-rice-aqzo5tfa-pooler.c-8.us-east-1.aws.neon.tech/neondb?sslmode=require&channel_binding=require';
+const DATABASE_URL = process.env.DATABASE_URL;
+if (!DATABASE_URL) {
+  console.error("Missing DATABASE_URL in environment or .env");
+  process.exit(1);
+}
 const PLAID_CLIENT_ID = process.env.PLAID_CLIENT_ID;
 const PLAID_SECRET = process.env.PLAID_SECRET;
 const PLAID_ENV = process.env.PLAID_ENV || "production";

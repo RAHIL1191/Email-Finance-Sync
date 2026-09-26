@@ -42,7 +42,8 @@ loadEnv(join(__dirname, "..", "artifacts", "api-server", ".env")); // when run f
 const SOURCE_DB_URL = process.env.SOURCE_DB_URL || "PASTE_SOURCE_DB_URL_HERE";
 const TARGET_DB_URL =
   process.env.TARGET_DB_URL ||
-  "postgresql://neondb_owner:npg_3t5CBrbWcxQe@ep-autumn-rice-aqzo5tfa-pooler.c-8.us-east-1.aws.neon.tech/neondb?sslmode=require&channel_binding=require";
+  process.env.DATABASE_URL ||
+  "";
 const HOUSEHOLD_ID = process.env.HOUSEHOLD_ID || "";
 const PLAID_CLIENT_ID = process.env.PLAID_CLIENT_ID || "";
 const PLAID_SECRET    = process.env.PLAID_SECRET    || "";
@@ -56,6 +57,10 @@ const PLAID_BASE = {
 
 if (SOURCE_DB_URL === "PASTE_SOURCE_DB_URL_HERE") {
   console.error("❌  Set SOURCE_DB_URL before running.");
+  process.exit(1);
+}
+if (!TARGET_DB_URL) {
+  console.error("❌  Set TARGET_DB_URL or DATABASE_URL before running.");
   process.exit(1);
 }
 if (!HOUSEHOLD_ID) {

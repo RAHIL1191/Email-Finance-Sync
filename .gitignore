@@ -36,8 +36,16 @@ npm-debug.log
 yarn-error.log
 testem.log
 /typings
+# Environment variables & secrets
 .env
-.env.local
+.env.*
+.env*.local
+*.env
+!.env.example
+*.pem
+*.key
+*.pfx
+*.p12
 
 # System Files
 .DS_Store
