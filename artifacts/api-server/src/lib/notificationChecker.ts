@@ -5,33 +5,76 @@ import { sendPushToHousehold } from "./pushNotifications.js";
 
 // ─── Helpers ──────────────────────────────────────────────────────────────────
 
-function toDateStr(d: Date): string {
-  return d.toISOString().slice(0, 10);
+// Date columns store plain "YYYY-MM-DD" strings representing the household's
+// LOCAL calendar day. Previously every "today" / period boundary was computed
+// in UTC (via toISOString()), which misfired alerts by up to a full day for
+// non-UTC households — e.g. 8pm EDT was already "tomorrow" on the server,
+// so a bill/task due locally today got an "overdue" push in the evening and
+// "due today" pushes landed hours early.
+//
+// All such logic now resolves in HOUSEHOLD_TIMEZONE (env-configurable; the
+// default covers the primary Montreal household). A per-household timezone
+// column is the correct long-term home for this once multi-household ships.
+const HOUSEHOLD_TZ = process.env.HOUSEHOLD_TIMEZONE || "America/Toronto";
+
+/** "YYYY-MM-DD" for a Date, in the household timezone. */
+function toDateStr(d: Date, tz: string = HOUSEHOLD_TZ): string {
+  // en-CA renders YYYY-MM-DD, matching our date columns exactly.
+  return new Intl.DateTimeFormat("en-CA", {
+    timeZone: tz,
+    year: "numeric",
+    month: "2-digit",
+    day: "2-digit",
+  }).format(d);
+}
+
+/** Local calendar parts for a Date (weekday follows Date#getDay: 0 = Sunday). */
+function localParts(d: Date, tz: string = HOUSEHOLD_TZ) {
+  const parts = new Intl.DateTimeFormat("en-US", {
+    timeZone: tz,
+    year: "numeric",
+    month: "numeric",
+    day: "numeric",
+    weekday: "short",
+  }).formatToParts(d);
+  const get = (t: string) => parts.find((p) => p.type === t)?.value ?? "";
+  return {
+    year: Number(get("year")),
+    monthIndex: Number(get("month")) - 1,
+    day: Number(get("day")),
+    weekday: ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"].indexOf(get("weekday")),
+  };
+}
+
+/** Sunday-anchored week start as "YYYY-MM-DD", in the household timezone. */
+function localWeekStartStr(d: Date = new Date(), tz: string = HOUSEHOLD_TZ): string {
+  const p = localParts(d, tz);
+  // Pure calendar arithmetic on extracted parts — timezone already resolved.
+  const anchor = new Date(Date.UTC(p.year, p.monthIndex, p.day));
+  anchor.setUTCDate(anchor.getUTCDate() - p.weekday);
+  return anchor.toISOString().slice(0, 10);
 }
 
 function getPeriodKey(period: string): string {
-  const now = new Date();
-  if (period === "monthly")
-    return `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, "0")}`;
-  if (period === "weekly") {
-    const d = new Date(now);
-    d.setHours(0, 0, 0, 0);
-    d.setDate(d.getDate() - d.getDay());
-    return `${d.getFullYear()}-W${toDateStr(d)}`;
-  }
-  return `${now.getFullYear()}`;
+  const p = localParts(new Date());
+  if (period === "monthly") return `${p.year}-${String(p.monthIndex + 1).padStart(2, "0")}`;
+  if (period === "weekly") return `${p.year}-W${localWeekStartStr()}`;
+  return `${p.year}`;
 }
 
-function getPeriodStart(period: string): Date {
-  const now = new Date();
-  if (period === "monthly") return new Date(now.getFullYear(), now.getMonth(), 1);
-  if (period === "weekly") {
-    const d = new Date(now);
-    d.setHours(0, 0, 0, 0);
-    d.setDate(d.getDate() - d.getDay());
-    return d;
-  }
-  return new Date(now.getFullYear(), 0, 1);
+/** Period start boundary as "YYYY-MM-DD" for string date-column comparisons. */
+function getPeriodStartStr(period: string): string {
+  const p = localParts(new Date());
+  if (period === "monthly") return `${p.year}-${String(p.monthIndex + 1).padStart(2, "0")}-01`;
+  if (period === "weekly") return localWeekStartStr();
+  return `${p.year}-01-01`;
+}
+
+/** Normalize a stored date column (accepts "YYYY-MM-DD" or full ISO strings). */
+function storedDateStr(value: unknown): string {
+  // IMPORTANT: never re-parse stored date-only values through `new Date()` —
+  // that reads them as UTC midnight and re-shifts the day in local time.
+  return String(value ?? "").slice(0, 10);
 }
 
 // ─── Task Notification Check ─────────────────────────────────────────────────
@@ -40,7 +83,7 @@ export async function runTaskNotificationCheck(): Promise<{ checked: number; not
   const todayStr = toDateStr(new Date());
   let notified = 0;
 
-  // Fetch all incomplete tasks with dueDate on or before today
+  // Fetch all incomplete tasks with dueDate on or before today (household-local)
   const tasks = await db
     .select()
     .from(tasksTable)
@@ -53,7 +96,7 @@ export async function runTaskNotificationCheck(): Promise<{ checked: number; not
 
   for (const task of tasks) {
     try {
-      const dueStr = toDateStr(new Date(task.dueDate));
+      const dueStr = storedDateStr(task.dueDate);
 
       let targetState: string;
       if (dueStr === todayStr) {
@@ -125,12 +168,15 @@ export async function runBudgetNotificationCheck(): Promise<{ checked: number; n
   for (const budget of budgets) {
     try {
       const periodKey = getPeriodKey(budget.period);
-      const periodStart = getPeriodStart(budget.period);
+      const periodStart = getPeriodStartStr(budget.period);
       const todayStr = toDateStr(new Date());
 
-      // Calculate spent amount for this budget's category in the current period
+      // Strict category matching: trimmed, case-insensitive exact equality.
+      // The previous LIKE '%category%' substring match absorbed unrelated
+      // categories (e.g. "Food" also matching "Fast Food" / "Seafood") and
+      // inflated spend totals, producing false 80%/exceeded alerts.
       const catFilter = budget.category
-        ? sql`LOWER(${transactionsTable.category}) LIKE LOWER(${"%" + budget.category + "%"})`
+        ? sql`LOWER(TRIM(${transactionsTable.category})) = LOWER(TRIM(${budget.category}))`
         : sql`1=1`;
 
       const [result] = await db
@@ -142,7 +188,7 @@ export async function runBudgetNotificationCheck(): Promise<{ checked: number; n
           and(
             eq(transactionsTable.householdId, budget.householdId),
             eq(transactionsTable.type, "expense"),
-            sql`${transactionsTable.date} >= ${toDateStr(periodStart)}`,
+            sql`${transactionsTable.date} >= ${periodStart}`,
             sql`${transactionsTable.date} <= ${todayStr}`,
             catFilter
           )
@@ -219,9 +265,7 @@ export async function runGoalNotificationCheck(): Promise<{ checked: number; not
   let notified = 0;
 
   const todayStr = toDateStr(new Date());
-  const sevenDaysOut = new Date();
-  sevenDaysOut.setDate(sevenDaysOut.getDate() + 7);
-  const sevenDaysStr = toDateStr(sevenDaysOut);
+  const sevenDaysStr = toDateStr(new Date(Date.now() + 7 * 24 * 60 * 60 * 1000));
 
   // Goals with a target date within the next 7 days that haven't reached their target
   const goals = await db
